@@ -331,9 +331,22 @@ function bankBlock(idx){
 
 
 /* ---------- exames e máscara ---------- */
+function examModality(ex){
+  if (["TC", "USG", "RM"].includes(ex.modalidade)) return ex.modalidade;
+  const text = fold([ex.name, ex.mask].join(" "));
+  if (/\b(usg|us|ultrassom|ultrassonografia|ultrassonografico|ecografia)\b/.test(text)) return "USG";
+  if (/\b(rm|ressonancia|ressonancia magnetica)\b/.test(text)) return "RM";
+  return "TC";
+}
+function examGroups(){
+  return ["TC", "USG", "RM"].flatMap(mod => [false, true].map(parecer => [
+    mod + (parecer ? " · Pareceres provisórios" : " · Laudos"),
+    EXAMS.filter(ex => examModality(ex) === mod && (ex.tipo === "parecer") === parecer)
+  ]));
+}
 function renderExams(){
   const wrap = $("exams"); wrap.textContent = ""; updMaskChip();
-  const groups = [["Pareceres provisórios", EXAMS.filter(e => e.tipo === "parecer")], ["Laudos", EXAMS.filter(e => e.tipo !== "parecer")]];
+  const groups = examGroups();
   for (const [label, list] of groups){
     if (!list.length) continue;
     const h = document.createElement("div"); h.className = "exam-group"; h.textContent = label; wrap.append(h);
@@ -471,7 +484,7 @@ function modelSheetHtml(ex){
     const { al, t } = splitAlign(raw);
     if (!parecer && i === 0) return P(fmt(fmtInline(stripTags(t)), FORMAT.title), al);
     if (!parecer && isHeading(t)) return BLANK + P(fmt(fmtInline(stripTags(t)), FORMAT.heading), al);
-    if (t === "[<>]") return P("<br>", al);
+    if (t === "[<>]") return P(esc(t), al);
     let m;
     if ((m = t.match(/^\[<(.*)>\]$/)) || (m = t.match(/^\[(.*)\]$/))) return P(fmtInline(m[1]), al);
     return P(fmtInline(t), al);
@@ -1520,7 +1533,7 @@ const BANK_GROUPS = [...new Set(BANK.map(e => e[0]))];
 function cleanMask(d){
   return { id:d.id, code:String(d.code || "").toUpperCase().slice(0,3) || "??", name:d.name || d.id, proto:d.proto || "",
     sexo:!!d.sexo, tipo:d.tipo === "parecer" ? "parecer" : "laudo", voz:Array.isArray(d.voz) ? d.voz : [], mask:String(d.mask || ""), groups:Array.isArray(d.groups) ? d.groups : [],
-    criadoEm:d.criadoEm || "" };
+    modalidade:["TC", "USG", "RM"].includes(d.modalidade) ? d.modalidade : "", criadoEm:d.criadoEm || "" };
 }
 let maskDocs = [];
 function applyMasks(docs){
@@ -1538,10 +1551,10 @@ function applyMasks(docs){
 let editing = null;   // id sendo editado, ou null para nova
 function renderMascList(){
   const l = $("mascList"); l.textContent = "";
-  const ordered = [...EXAMS.filter(e => e.tipo === "parecer"), ...EXAMS.filter(e => e.tipo !== "parecer")];
+  const ordered = examGroups().flatMap(([, list]) => list);
   let lastT = null;
   for (const ex of ordered){
-    const t = ex.tipo === "parecer" ? "Pareceres provisórios" : "Laudos";
+    const t = examModality(ex) + (ex.tipo === "parecer" ? " · Pareceres provisórios" : " · Laudos");
     if (t !== lastT){ const h = document.createElement("div"); h.className = "exam-group"; h.textContent = t; l.append(h); lastT = t; }
     const b = document.createElement("button"); b.type = "button"; b.dataset.id = ex.id;
     b.setAttribute("aria-pressed", editing === ex.id ? "true" : "false");
@@ -1565,6 +1578,7 @@ function loadMask(id){
   editing = id;
   const ex = EXAMS.find(e => e.id === id);
   $("mNome").value = ex ? ex.name : ""; $("mProto").value = ex ? ex.proto : "";
+  $("mModalidade").value = ex ? examModality(ex) : "TC";
   $("mVoz").value = ex ? (ex.voz || []).join(", ") : ""; $("mSexo").checked = ex ? !!ex.sexo : false; $("mParecer").checked = ex ? ex.tipo === "parecer" : false;
   $("mTexto").innerHTML = textToEditable(ex ? ex.mask : "TOMOGRAFIA COMPUTADORIZADA DE \nInformações Clínicas\n[<>]\nTécnica de exame\n\nAchados\n[<>]\nConclusão\n1. \nAchados adicionais");
   groupBoxes(ex ? (ex.groups || []) : []);
@@ -1597,7 +1611,7 @@ $("mSave").onclick = async () => {
   const old = maskDocs.find(d => d.id === id);
   try{
     await db.doc("mascaras/" + id).set({
-      name, code: autoCode(name),
+      name, code: autoCode(name), modalidade: $("mModalidade").value,
       proto: $("mProto").value.trim(), sexo: $("mSexo").checked, tipo: $("mParecer").checked ? "parecer" : "laudo",
       voz: $("mVoz").value.split(",").map(v => v.trim()).filter(Boolean),
       mask, groups, criadoEm: old?.criadoEm || new Date().toISOString()
@@ -1747,7 +1761,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && $("examCol
 
 
 /* ================= Campos [x] e listas {a|b} no texto dos achados ================= */
-const FIELD_RE = /\[[^\[\]<>\n]{1,40}\]|\{[^{}\n]*\|[^{}\n]*\}/g;
+const FIELD_RE = /\[<>\]|\[[^\[\]<>\n]{1,40}\]|\{[^{}\n]*\|[^{}\n]*\}/g;
 function nextField(){
   const nodes = sheetTextNodes(sheet), t = nodes.map(n => n.nodeValue).join("");
   const sel = getSelection(), rg = sel.rangeCount && sheet.contains(sel.anchorNode) ? sel.getRangeAt(0) : sheetRange;
@@ -1758,6 +1772,8 @@ function nextField(){
   if (!hit) return false;
   const r = rangeFromOffsets(sheet, hit.index, hit.index + hit[0].length); if (!r) return false;
   sheet.focus({ preventScroll: true }); sel.removeAllRanges(); sel.addRange(r);
+  sheetRange = r.cloneRange();
+  (r.startContainer.parentElement || sheet).scrollIntoView({ block: "nearest" });
   return true;
 }
 sheet.addEventListener("keydown", e => {
@@ -3434,7 +3450,7 @@ window.tutuSite.appReady = true;
   move("copiar", actions); $("copiar").textContent = "Copiar laudo";
   $("copiar").append(el("kbd", {}, "Ctrl ⇧ 1")); top.append(actions);
   const left = ui.left = el("aside", { id: "v2Left", "aria-label": "Máscaras e histórico" });
-  const leftToggle = button("Máscaras · Ctrl E", () => ui.toggleLeft(), { id: "leftToggle", "aria-expanded": "true", title: "Minimizar/restaurar máscaras · Ctrl+E" });
+  const leftToggle = button("Máscaras · Ctrl [", () => ui.toggleLeft(), { id: "leftToggle", "aria-expanded": "true", title: "Recolher/expandir máscaras · Ctrl+[", "aria-keyshortcuts": "Control+[" });
   const leftBody = el("div", { id: "leftBody" });
   left.append(leftToggle, leftBody);
   leftBody.append(el("input", { id: "maskSearch", type: "search", placeholder: "Buscar máscara…", "aria-label": "Buscar máscara" }));
@@ -3456,7 +3472,7 @@ window.tutuSite.appReady = true;
     ui.panels[name] = el("section", { id: "rightPanel" + i, role: "tabpanel", "aria-labelledby": b.id, class: "v2-panel" });
     ui.panels[name].hidden = i !== 0;
   });
-  right.append(button("Recolher · Ctrl ]", () => ui.toggleRight(), { id: "rightToggle", "aria-expanded": "true" }), rnav, ...Object.values(ui.panels));
+  right.append(button("Recolher · Ctrl ]", () => ui.toggleRight(), { id: "rightToggle", "aria-expanded": "true", title: "Recolher/expandir ferramentas · Ctrl+]", "aria-keyshortcuts": "Control+]" }), rnav, ...Object.values(ui.panels));
   const rev = ui.panels.Revisar, ia = ui.panels.IA, learned = ui.panels.Aprendido;
   ["revisar", "alertBox", "status"].forEach(id => move(id, rev)); rev.append(document.querySelector(".review"));
   rev.append($("verBtn").closest(".ver-wrap")); move("undoBtn", rev);
@@ -3480,7 +3496,7 @@ window.tutuSite.appReady = true;
   ui.calculator = key => { openModal("calcModal"); showCalc(key); };
   const footer = el("footer", { id: "v2Footer" });
   const voice = el("div", { id: "voicePill", role: "status", "aria-live": "polite" });
-  voice.append(el("span", { id: "voiceDot", "aria-hidden": "true" }, "●"), el("span", { id: "voiceLabel" }, "Voz · Alt S"), button("F1 · Ditar", () => ui.dictate(), { id: "voiceToggle" }));
+  voice.append(el("span", { id: "voiceDot", "aria-hidden": "true" }, "●"), el("span", { id: "voiceLabel" }, "Voz · Alt S"));
   const outline = el("div", { id: "activeOutline", "aria-hidden": "true" }); outline.hidden = true;
   const settings = $("setModal"); settings.classList.add("v2-settings"); settings.removeAttribute("aria-modal"); settings.setAttribute("role", "region");
   const settingsExtras = el("div", { class: "v2-settings-extras" });
@@ -3510,16 +3526,24 @@ window.tutuSite.appReady = true;
     app.classList.remove("right-mini"); store.set("v2RightMini", "0");
     Object.entries(ui.panels).forEach(([n, p]) => { p.hidden = n !== name; $(p.getAttribute("aria-labelledby")).setAttribute("aria-selected", String(n === name)); });
     $("rightToggle").setAttribute("aria-expanded", "true");
+    $("rightToggle").textContent = "Recolher · Ctrl ]";
   };
   ui.toggleLeft = () => { const mini = app.classList.toggle("left-mini"); store.set("v2LeftMini", mini ? "1" : "0"); leftToggle.setAttribute("aria-expanded", String(!mini)); };
-  ui.toggleRight = () => { const mini = app.classList.toggle("right-mini"); store.set("v2RightMini", mini ? "1" : "0"); $("rightToggle").setAttribute("aria-expanded", String(!mini)); };
+  ui.toggleRight = () => { const mini = app.classList.toggle("right-mini"); store.set("v2RightMini", mini ? "1" : "0"); $("rightToggle").setAttribute("aria-expanded", String(!mini)); $("rightToggle").textContent = (mini ? "Expandir" : "Recolher") + " · Ctrl ]"; };
   ui.compact = () => { app.classList.toggle("compact"); ui.settings(false); ui.positionPalette?.(); };
   ui.night = () => { const night = document.body.classList.toggle("sepia-night"); store.set("v2Night", night ? "1" : "0"); $("nightToggle").textContent = night ? "Sépia dia" : "Sépia noite"; $("nightToggle").setAttribute("aria-pressed", String(night)); $("themeButton").textContent = night ? "☀" : "☾"; };
   top.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
   if (store.get("v2Night") === "1") ui.night();
   if (store.get("v2LeftMini") === "1" || innerWidth < 760) ui.toggleLeft();
   if (store.get("v2RightMini") === "1" || innerWidth < 760) ui.toggleRight();
-  $("maskSearch").oninput = () => { document.querySelectorAll("#exams .exam").forEach(b => b.hidden = !TutuV2Core.score($("maskSearch").value, b.textContent)); };
+  $("maskSearch").oninput = () => {
+    document.querySelectorAll("#exams .exam").forEach(b => b.hidden = !TutuV2Core.score($("maskSearch").value, b.textContent));
+    document.querySelectorAll("#exams .exam-group").forEach(h => {
+      let visible = false;
+      for (let b = h.nextElementSibling; b && !b.classList.contains("exam-group"); b = b.nextElementSibling) if (!b.hidden) visible = true;
+      h.hidden = !visible;
+    });
+  };
   const render = renderExams;
   renderExams = () => { render(); $("maskSearch").oninput(); };
   // Os atalhos antigos de foco/plantão passam a usar as disposições da casca.
@@ -3654,10 +3678,13 @@ window.tutuSite.appReady = true;
     const nav = $("caseTabs"); nav.replaceChildren();
     for (const t of tabs) {
       const b = ui.button("", () => ui.switchTab(t.id), { role: "tab", "data-case": t.id,
-        "aria-selected": String(t.id === active), "aria-controls": "v2Center", title: fullName(t.exam || { name: t.examId }) + " · Ctrl+Tab", tabindex: t.id === active ? "0" : "-1" });
+        "aria-selected": String(t.id === active), "aria-controls": "v2Center", title: fullName(t.exam || { name: t.examId }) + " · Criado em " + (t.started && !isNaN(Date.parse(t.started)) ? new Date(t.started).toLocaleString("pt-BR") : "data não disponível") + " · Ctrl+Tab", tabindex: t.id === active ? "0" : "-1" });
       const dot = ui.el("i", { class: "case-rec", "aria-label": "Ditado neste caso" }); dot.hidden = ui.voiceCase !== t.id;
       b.append(dot, ui.el("span", {}, shortName(t.exam || { name: t.examId })));
-      nav.append(b);
+      const item = ui.el("div", { class: "case-tab" });
+      const del = ui.button("", () => ui.deleteTab(t.id), { class: "case-delete", title: "Excluir laudo", "aria-label": "Excluir laudo: " + shortName(t.exam || { name: t.examId }) });
+      del.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>';
+      item.append(b, del); nav.append(item);
     }
     nav.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
@@ -3709,6 +3736,20 @@ window.tutuSite.appReady = true;
     persist(); const index = tabs.findIndex(t => t.id === active); tabs.splice(index, 1);
     if (!tabs.length) { const ex = current; tabs.push({ id: newId(), examId: ex.id, exam: clone(ex), html: modelSheetHtml(ex), started: stamp(), versions: [] }); }
     load(tabs[Math.min(index, tabs.length - 1)]); persist();
+  };
+  ui.deleteTab = id => {
+    const index = tabs.findIndex(t => t.id === id);
+    if (restoring || index < 0 || !canSwitch()) return;
+    if (!confirm("Excluir este laudo e removê-lo do histórico? Esta ação não pode ser desfeita.")) return;
+    persist();
+    const wasActive = id === active;
+    tabs.splice(index, 1);
+    if (!tabs.length) tabs.push({ id: newId(), examId: current.id, exam: clone(current), html: modelSheetHtml(current), started: stamp(), versions: [] });
+    if (wasActive) load(tabs[Math.min(index, tabs.length - 1)]); else renderTabs();
+    writes = writes.catch(() => {}).then(() => tutuSite.db.doc("casos/" + id).delete()).catch(() => {
+      setStatus("Não foi possível excluir o laudo do histórico. Tente novamente pelo histórico.", "err");
+    });
+    persist();
   };
   const originalSelect = selectExam;
   selectExam = (id, focus, add) => {
@@ -3770,7 +3811,7 @@ window.tutuSite.appReady = true;
   const ui = window.tutuV2;
   ui.actions = {
     ditar: { label: "Ditar", run: () => ui.dictate() },
-    proximo: { label: "Próximo campo", run: () => { if (!nextField()) sectionNav(1); } },
+    proximo: { label: "Próximo campo", run: () => nextField() },
     normal: { label: "Normal", run: () => { laudoNormal(); ui.panel("Revisar"); } },
     copiar: { label: "Copiar", run: () => $("copiar").click() },
     gerar: { label: "IA", run: () => { ui.panel("IA"); $("gerar").click(); } },
@@ -3936,6 +3977,7 @@ window.tutuSite.appReady = true;
     };
     else if (e.ctrlKey && !e.altKey && k === "tab") action = () => ui.cycleTabs(e.shiftKey ? -1 : 1);
     else if (e.ctrlKey && !e.altKey && !e.shiftKey && k === "e") action = () => ui.toggleLeft();
+    else if (e.ctrlKey && !e.altKey && (k === "[" || e.code === "BracketLeft")) action = () => ui.toggleLeft();
     else if (e.ctrlKey && !e.altKey && (k === "]" || e.code === "BracketRight")) action = () => ui.toggleRight();
     else if (e.ctrlKey && !e.altKey && k === ",") action = () => ui.settings($("setModal").hidden);
     else if (e.ctrlKey && e.shiftKey && (e.code === "Digit1" || k === "1" || k === "!")) action = () => $("copiar").click();
