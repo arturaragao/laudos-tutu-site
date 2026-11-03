@@ -1,0 +1,8 @@
+{
+  "name": "Laudos Tutu",
+  "short_name": "Tutu",
+  "lang": "pt-BR",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone"
+}

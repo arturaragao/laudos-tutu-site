@@ -1,0 +1,463 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laudos Tutu</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Literata:opsz,wght@7..72,500;7..72,600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="app.css">
+
+<div class="app">
+  <div class="side-rail" id="sideRail"><button class="rail-btn" id="railBtn" type="button" aria-label="Mostrar a lista de exames" title="Exames"><svg viewBox="0 0 16 16"><path d="M6 3l5 5-5 5"/></svg><span>Exames</span></button></div>
+  <main class="grid" id="grid">
+    <section class="col" aria-label="Exame" id="examCol">
+      <div class="col-head"><span class="label">Exames</span><span class="spacer"></span>
+        <button class="btn ghost small" id="verMask" type="button">Ver máscara</button>
+        <button class="icon-btn" id="pinBtn" type="button" title="Recolher a lista para o lado" aria-label="Recolher a lista de exames"><svg viewBox="0 0 16 16"><path d="M10 3 5 8l5 5"/></svg></button>
+      </div>
+      <div class="exams" id="exams"></div>
+      <div class="side-foot">
+        <span>Banco de frases: <b>Notas TC (Notion)</b></span>
+        <span id="bankInfo"></span>
+        <span>Laudos de referência: <b>Notas Tomografia</b></span>
+        <span id="ntInfo"></span>
+        <button class="btn ghost small" id="ntUpd" type="button" title="Busca os laudos novos da página Notas Tomografia no Notion. Não gasta o seu limite do Claude.">Atualizar do Notion</button>
+      </div>
+    </section>
+    <div class="splitter v" id="splitSide" role="separator" aria-orientation="vertical" aria-label="Redimensionar a lista de exames" tabindex="0" title="Arraste para redimensionar · dois cliques para o padrão"></div>
+
+    <div class="work stack" id="work">
+    <section class="col" aria-label="Laudo" id="laudoCol">
+      <div class="col-head">
+        <span class="label">Laudo</span>
+        <span class="mask-chip" id="maskChip" role="status" aria-label="Máscara selecionada"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5.5L13 5v9.5H4z"/><path d="M9.5 1.5V5H13M6 8h5M6 10.5h5M6 13h3"/></svg><span id="maskChipTx"></span></span>
+        <select class="field" id="plantaoExam" aria-label="Máscara"></select>
+        <span class="spacer"></span>
+        <button class="btn ghost small" id="mascBtn" type="button">Máscaras</button>
+        <button class="btn ghost small" id="calcBtn" type="button">Calculadoras</button>
+        <button class="btn ghost small" id="histBtn" type="button">Histórico</button>
+        <button class="btn ghost small" id="vozBtn" type="button">Voz</button>
+        <button class="btn small" id="parar" type="button" hidden>Parar</button>
+      </div>
+
+      <div class="pane" id="paneLaudo">
+        <div class="tasy-bar" id="tasyBar" hidden role="status">
+          <span class="tx" id="tasyTx"></span>
+          <button class="btn small" id="tasyMasc" type="button">Usar máscara</button>
+          <button class="btn small" id="tasyInd" type="button">Inserir indicação</button>
+          <button class="btn small" id="tasyNovo" type="button">Novo exame com estes dados</button>
+          <button class="btn ghost small" id="tasyX" type="button" aria-label="Fechar aviso do Tasy">×</button>
+        </div>
+        <details id="compBox" hidden>
+          <summary>Comparar com exame anterior <span id="compFlag" class="meta"></span></summary>
+          <div class="comp-body">
+            <input class="field" id="compData" type="text" placeholder="Data do exame anterior (ex.: 12/03/2026)" autocomplete="off">
+            <textarea id="compTexto" placeholder="Cole aqui o laudo anterior, sem dados do paciente"></textarea>
+          </div>
+        </details>
+        <div class="row" hidden>
+          <input class="field" id="clinica" type="text" autocomplete="off">
+          <div class="seg" id="sexoSeg" role="group" aria-label="Sexo"><button type="button" data-v="M" aria-pressed="false">Masc</button><button type="button" data-v="F" aria-pressed="false">Fem</button></div>
+        </div>
+        <div class="fmt-bar" data-target="laudo" aria-label="Formatação">
+          <select class="fmt-sel" id="fontSel" aria-label="Fonte" title="Fonte do trecho selecionado"></select>
+          <select class="fmt-sel" id="sizeSel" aria-label="Tamanho" title="Tamanho do trecho selecionado"></select>
+          <span class="fmt-sep" aria-hidden="true"></span>
+          <button type="button" data-cmd="bold" title="Negrito (Ctrl+B)"><b>B</b></button>
+          <button type="button" data-cmd="underline" title="Sublinhado (Ctrl+U)"><u>U</u></button>
+          <button type="button" data-cmd="italic" title="Itálico (Ctrl+I)"><i>I</i></button>
+          <span class="fmt-sep" aria-hidden="true"></span>
+          <button type="button" data-cmd="justifyLeft" title="Alinhar à esquerda" aria-label="Alinhar à esquerda"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 6.5h8M2 10h12M2 13.5h8"/></svg></button>
+          <button type="button" data-cmd="justifyCenter" title="Centralizar" aria-label="Centralizar"><svg viewBox="0 0 16 16"><path d="M2 3h12M4 6.5h8M2 10h12M4 13.5h8"/></svg></button>
+          <button type="button" data-cmd="justifyFull" title="Justificar" aria-label="Justificar"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 6.5h12M2 10h12M2 13.5h12"/></svg></button>
+          <span class="fmt-sep" aria-hidden="true"></span>
+          <button type="button" data-cmd="insertOrderedList" title="Lista numerada" aria-label="Lista numerada"><svg viewBox="0 0 16 16"><path d="M6 3.5h8M6 8h8M6 12.5h8"/><text x="1" y="5.2">1</text><text x="1" y="9.7">2</text><text x="1" y="14.2">3</text></svg></button>
+          <button type="button" data-cmd="insertUnorderedList" title="Lista com marcadores" aria-label="Lista com marcadores"><svg viewBox="0 0 16 16"><path d="M6 3.5h8M6 8h8M6 12.5h8"/><circle cx="2.5" cy="3.5" r="1.1"/><circle cx="2.5" cy="8" r="1.1"/><circle cx="2.5" cy="12.5" r="1.1"/></svg></button>
+        </div>
+        <div class="rs-box" id="laudoBox"><div class="sheet-wrap"><div id="laudo" class="sheet" contenteditable="true" spellcheck="true" data-placeholder="O laudo aparece aqui em Arial 11, pronto para colar. Você pode editar direto na folha."></div></div><span class="rs-grip" data-box="laudoBox" role="separator" aria-orientation="horizontal" aria-label="Redimensionar a folha do laudo" tabindex="0" title="Arraste para mudar a altura · dois cliques para o padrão"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M14 5 5 14M14 9.5 9.5 14M14 13.5 13.5 14"/></svg></span></div>
+        <div class="vol-hint" id="volHint" aria-live="polite"></div>
+        <div class="corr-note" id="corrNote" aria-live="polite"></div>
+        <div class="bar"><button id="normalBtn" type="button" hidden></button>
+          <button class="btn primary" id="gerar" type="button" title="Corrige o laudo: ordem das frases, estilo e sugestões. As alterações ficam marcadas no próprio laudo.">Gerar laudo <span class="k">Ctrl+Enter</span></button>
+          <button class="btn primary" id="copiar" type="button" title="Copia o laudo e aceita todas as edições (Ctrl+C sem texto selecionado)">Copiar laudo</button>
+          <button class="btn novo" id="limpar" type="button" title="Salva o laudo atual no histórico e começa outro com o modelo da máscara"><svg viewBox="0 0 16 16" class="ico"><path d="M8 3v10M3 8h10"/></svg> Novo exame</button>
+          <button class="btn ghost" id="undoBtn" type="button" title="Voltar para a alteração anterior" aria-label="Voltar para a alteração anterior"><svg viewBox="0 0 16 16" class="ico"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.5 6.5h7a4 4 0 0 1 0 8h-2"/></svg></button>
+          <div class="ver-wrap">
+            <button class="btn ghost" id="verBtn" type="button" aria-expanded="false">Versões <span id="verCount" class="meta"></span></button>
+            <ul class="ver-menu" id="verMenu" hidden></ul>
+          </div>
+          <button class="btn ghost" id="revisar" type="button" title="Confere o laudo na hora, sem gastar tokens (lateralidade, medidas, campos vazios, contradições, conclusão). Depois você pode pedir a conferência do Claude.">Conferir</button>
+          <button class="btn ghost" id="sugConc" type="button" title="Escreve a conclusão a partir dos achados alterados, sem usar o Claude (diga &quot;sugerir conclusão&quot;). O Gerar laudo pode refinar.">Sugerir conclusão</button>
+          <span class="meta" id="count">0 palavras</span>
+          <div class="bar-right">
+          <select class="field tier-quick" id="tierQuick" aria-label="Modelo para gerar o laudo" title="Modelo usado ao gerar o laudo (também em Configurações)">
+            <option value="auto">Automático</option>
+            <option value="quick">Rápido</option>
+            <option value="default">Equilibrado</option>
+            <option value="complex">Máximo</option>
+          </select>
+          <input type="checkbox" id="recs" hidden>
+        </div>
+        </div>
+        <div class="legend"><span><i></i>editado pelo Claude</span><span><i class="lg-del"></i>apagado ou trocado: clique no vermelho para desfazer</span><button class="btn ghost small" id="undoAllBtn" type="button" title="Volta o laudo para como estava antes do último Gerar laudo (todas as alterações do Claude de uma vez)" style="padding:2px 8px">Desfazer tudo do Claude</button></div>
+        <div class="status" id="status" role="status"></div>
+        <div class="alerts" id="alertBox" hidden aria-live="polite"></div>
+        <div class="review" aria-label="Conferência do laudo">
+          <div class="review-head">
+            <span class="label" style="color:var(--text)">Conferência</span>
+            <span class="spacer"></span>
+          </div>
+          <div class="review-body" id="reviewBody"><p class="review-empty">Clique em Conferir: a página confere na hora, sem gastar tokens. Depois, se quiser, peça a conferência do Claude.</p></div>
+        </div>
+        <details class="claude-box" id="claudeBox">
+          <summary><span class="label" style="color:var(--text)">Claude</span> <span class="meta">dúvidas sobre o caso</span></summary>
+          <div class="claude-body">
+        <div class="chat" id="chat">
+              <div class="msg hint">Pergunte ao Claude sobre o caso atual: diagnóstico diferencial, classificação, conduta pelas diretrizes. Ele recebe os achados e o laudo que estão na tela.</div>
+            </div>
+            <textarea id="pergunta" placeholder="Ex.: Quais os diferenciais para essa lesão hepática? Qual o Bosniak desse cisto?"></textarea>
+            <div class="bar">
+              <button class="btn primary" id="enviar" type="button">Enviar <span class="k">Ctrl+Enter</span></button>
+              <span class="spacer"></span>
+              <button class="btn ghost" id="limparChat" type="button">Limpar conversa</button>
+            </div>
+          </div>
+        </details>
+        <div class="stylebox">
+          <div class="row">
+            <input class="field" id="ensinar" type="text" autocomplete="off" placeholder="Ensine seu estilo. Ex.: calcificações residuais não vão na conclusão (Enter salva)">
+            <button class="btn small" id="ensinarBtn" type="button">Salvar</button>
+          </div>
+          <div class="style-meta"><span id="styleReply" role="status"></span></div>
+          <details id="rulesBox"><summary>Regras salvas <span id="ruleCount"></span></summary><ul id="ruleList"></ul></details>
+        </div>
+      </div>
+    </section>
+    <div class="splitter h" id="splitWork" role="separator" aria-label="" tabindex="-1" hidden></div>
+    </div>
+  </main>
+
+  <footer class="sb">
+    <button class="btn ghost small" id="plantaoBtn" type="button" aria-pressed="false" style="padding:2px 8px">Modo plantão</button>
+    <button class="btn ghost small" id="setBtn" type="button" style="padding:2px 8px">Configurações</button>
+    <span>Ditado: <b>Alt+S</b></span>
+    <span>Gerar: <b>Ctrl+Enter</b></span>
+    <span>Laudo: <b id="fmtLabel">Arial 11 · sem espaçamento</b></span>
+    <span id="claudeState">Claude: conectando…</span>
+    <span>Uso hoje: <b id="useFoot">~0</b></span>
+  </footer>
+</div>
+
+<script type="application/json" id="voiceConfig">{}</script>
+
+<div class="modal" id="vozModal" hidden role="dialog" aria-modal="true" aria-labelledby="vozTitle">
+  <div class="modal-card voz-card">
+    <div class="col-head">
+      <span class="label" id="vozTitle">Comandos de voz</span>
+      <div class="tabs" role="tablist" style="margin-left:12px">
+        <button class="tab" role="tab" data-vt="frases" aria-selected="true">Autotextos</button>
+        <button class="tab" role="tab" data-vt="correcoes" aria-selected="false">Correções</button>
+        <button class="tab" role="tab" data-vt="macros" aria-selected="false">Macros</button>
+        <button class="tab" role="tab" data-vt="comandos" aria-selected="false">Comandos</button>
+      </div>
+      <span class="spacer"></span><button class="btn small" id="trainOpen" type="button">Treinar minha voz</button><button class="btn ghost small" id="vozX" type="button">Fechar</button>
+    </div>
+    <div class="voz-body">
+      <section data-vp="frases">
+        <p class="voz-help">Diga <b>"autotexto</b> + nome<b>"</b> durante o ditado e o texto entra no lugar. Ex.: "autotexto colecistectomia". Campos para completar: <b>[tamanho]</b>; lista de escolha: <b>{leve|moderada|acentuada}</b>. Diga "próximo campo" (ou aperte Tab) para ir de um campo ao outro e fale o valor.</p>
+        <div class="voz-form">
+          <input class="field" id="fNome" type="text" placeholder="Nome (o que você vai falar depois de &quot;autotexto&quot;)" autocomplete="off">
+          <textarea id="fTexto" placeholder="Texto que entra no laudo"></textarea>
+          <button class="btn primary small" id="fAdd" type="button">Adicionar autotexto</button>
+        </div>
+        <ul class="voz-list" id="fList"></ul>
+      </section>
+      <section data-vp="correcoes" hidden>
+        <p class="voz-help">Quando o ditado escrever o termo da esquerda, ele é trocado sozinho pelo da direita.</p>
+        <div class="voz-form row">
+          <input class="field" id="cDe" type="text" placeholder="O ditado escreve (ex.: hipo denso)" autocomplete="off">
+          <input class="field" id="cPara" type="text" placeholder="Corrigir para (ex.: hipodenso)" autocomplete="off">
+          <button class="btn primary small" id="cAdd" type="button">Adicionar</button>
+        </div>
+        <ul class="voz-list" id="cList"></ul>
+      </section>
+      <section data-vp="macros" hidden>
+        <p class="voz-help">Macro = vários achados de uma vez, em qualquer exame. Diga <b>"macro</b> + nome<b>"</b> durante o ditado.</p>
+        <div class="voz-form">
+          <input class="field" id="mcNome" type="text" placeholder="Nome (ex.: pós colecistectomia)" autocomplete="off">
+          <textarea id="mcTexto" placeholder="Achados que entram de uma vez (um por linha)"></textarea>
+          <button class="btn primary small" id="mcAdd" type="button">Adicionar macro</button>
+        </div>
+        <ul class="voz-list" id="mcList"></ul>
+      </section>
+      <section data-vp="comandos" hidden>
+        <p class="voz-help">Comandos ditos sozinhos, numa frase só. Crie apelidos para as ações que já existem. Trocar de máscara: diga "máscara" ou "exame" + nome (ex.: "máscara crânio").</p>
+        <div class="voz-form row">
+          <input class="field" id="kFala" type="text" placeholder="Quando eu disser… (ex.: gera)" autocomplete="off">
+          <select class="field" id="kAcao"></select>
+          <button class="btn primary small" id="kAdd" type="button">Adicionar</button>
+        </div>
+        <ul class="voz-list" id="kList"></ul>
+      </section>
+      <p class="voz-msg" id="vozMsg" role="status"></p>
+    </div>
+  </div>
+</div>
+
+<!-- Treino de voz -->
+<div class="modal" id="trainModal" hidden role="dialog" aria-modal="true" aria-labelledby="trainTitle">
+  <div class="modal-card wide">
+    <div class="col-head"><span class="label" id="trainTitle">Treinar minha voz</span><span class="spacer"></span><span class="meta" id="trainProg"></span><button class="btn ghost small" data-close="trainModal" type="button">Fechar</button></div>
+    <div class="calc-body">
+      <p class="voz-help" style="margin:0">Leia em voz alta cada frase <b>como você dita no dia a dia, falando a pontuação</b> ("vírgula", "ponto"), com a extensão ligada (Alt+S) e o cursor na caixa abaixo. As frases com as palavras que o reconhecimento mais erra com você aparecem primeiro, e as que você já leu ficam para o fim. Ao terminar a frase, espere um instante: a página compara o que o reconhecimento escreveu com o que você leu e aprende os erros que ele comete com a sua voz. Cada erro aprendido vira uma correção automática. 20 frases por sessão já ajudam bastante.</p>
+      <div class="train-sent" id="trainSent">—</div>
+      <textarea id="trainInput" spellcheck="false" placeholder="Clique aqui, ligue o ditado e leia a frase acima"></textarea>
+      <div class="train-diff" id="trainDiff" aria-live="polite"></div>
+      <p class="voz-help" id="trainRec" style="margin:0">Gravação do áudio: precisa da extensão 1.5. As gravações ficam só no seu computador e servem para treinar o reconhecimento na sua voz mais adiante.</p>
+      <div class="train-meter" title="Meta: 1 hora de gravações para treinar um reconhecedor na sua voz no futuro"><div id="trainRecBar"></div></div>
+      <div class="bar">
+        <button class="btn primary small" id="trainNext" type="button">Próxima frase</button>
+        <button class="btn small" id="trainSkip" type="button">Pular</button>
+        <span class="spacer"></span>
+        <button class="btn small" id="trainEnd" type="button">Terminar e aprender</button>
+      </div>
+      <div id="trainResult" hidden>
+        <span class="label">Erros encontrados com a sua voz</span>
+        <p class="voz-help" style="margin:4px 0 8px">Marque os que devem virar correção automática (o que o reconhecimento escreve → o que você disse).</p>
+        <ul class="voz-list" id="trainPairs"></ul>
+        <div class="bar"><button class="btn primary small" id="trainSave" type="button">Salvar correções marcadas</button><span class="voz-msg" id="trainMsg" role="status"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Configurações -->
+<div class="modal" id="setModal" hidden role="dialog" aria-modal="true" aria-labelledby="setTitle">
+  <div class="modal-card">
+    <div class="col-head"><span class="label" id="setTitle">Configurações</span><span class="spacer"></span><button class="btn ghost small" data-close="setModal" type="button">Fechar</button></div>
+    <div class="calc-body">
+      <span class="label">Layout da tela</span>
+      <div class="form-grid">
+        <label>Disposição<select class="field" id="setLayout"><option value="stack">Achados em cima, laudo embaixo</option><option value="side">Achados e laudo lado a lado</option></select></label>
+        <label>Largura da lista de exames <span class="meta" id="sideVal"></span><input type="range" id="setSide" min="180" max="460" step="10"></label>
+        <label>Tamanho dos achados <span class="meta" id="topVal"></span><input type="range" id="setTop" min="20" max="80" step="1"></label>
+        <label>Lista de exames<select class="field" id="setCollapse"><option value="0">Fixa na tela</option><option value="1">Recolhida ao lado</option></select></label>
+      </div>
+      <p class="voz-help" style="margin:-4px 0 0">Você também pode arrastar as divisórias entre as áreas. Dois cliques numa divisória voltam ao tamanho padrão.</p>
+      <div class="bar"><button class="btn small" id="layoutReset" type="button">Restaurar layout padrão</button></div>
+      <span class="label">Formatação padrão do laudo</span>
+      <div class="form-grid">
+        <label>Fonte<select class="field" id="setFont"></select></label>
+        <label>Tamanho<select class="field" id="setSize"></select></label>
+      </div>
+      <p class="voz-help" style="margin:-4px 0 0">É o formato em que o laudo aparece e é copiado. Ao clicar em Copiar laudo, todo o texto volta para este formato.</p>
+      <span class="label">Reconhecimento de voz</span>
+      <div class="bar"><button class="btn small" id="trainOpen2" type="button">Treinar minha voz</button><span class="voz-help" id="trainStat"></span></div>
+      <span class="label">Claude: velocidade e uso</span>
+      <div class="form-grid">
+        <label>Modelo para gerar o laudo<select class="field" id="setTier">
+          <option value="auto">Automático (padrão: Rápido em laudos curtos, Equilibrado nos longos)</option>
+          <option value="quick">Rápido (mais simples)</option>
+          <option value="default">Equilibrado (melhor qualidade)</option>
+          <option value="complex">Máximo (casos complexos, bem mais lento)</option></select></label>
+      </div>
+      
+      <label class="chk-line"><input type="checkbox" id="setCorr"> Corrigir o ditado com o Claude ao fazer uma pausa (só quando há palavra fora do vocabulário médico)</label>
+      <p class="voz-help" style="margin:-4px 0 0">Uso estimado hoje: <b id="useToday">0</b> tokens · <span id="useCalls">0</span> chamadas ao Claude.</p>
+      <span class="label">Backup</span>
+      <p class="voz-help" style="margin:-4px 0 0">Seus laudos, máscaras, autotextos, macros, correções, comandos e regras ficam salvos na página e continuam lá quando ela é atualizada. Para ter uma cópia fora dela, baixe um backup de vez em quando.</p>
+      <div class="bar">
+        <button class="btn small" id="bkDown" type="button">Baixar backup</button>
+        <label class="btn small" for="bkFile" style="cursor:pointer">Restaurar backup</label>
+        <input type="file" id="bkFile" accept=".json,application/json" hidden>
+        <span class="voz-msg" id="bkMsg" role="status"></span>
+      </div>
+      <span class="label">Aparência</span>
+      <div class="form-grid">
+        <label>Tamanho da folha do laudo <span class="meta" id="zoomVal"></span><input type="range" id="setZoom" min="80" max="170" step="5"></label>
+        <label>Tamanho da letra do ditado <span class="meta" id="dictVal"></span><input type="range" id="setDict" min="13" max="26" step="1"></label>
+        <label>Tema<select class="field" id="setTheme"><option value="escuro">Escuro (sala de laudo)</option><option value="claro">Claro</option></select></label>
+      </div>
+      <label class="chk-line"><input type="checkbox" id="setFoco"> Modo foco: só a folha do laudo, em tela cheia (volte aqui ou use o atalho para sair)</label>
+      <div>
+        <span class="label">Atalhos de teclado e botões do SpeechMike</span>
+        <p class="voz-help" style="margin:4px 0 8px">Clique em "Definir" e aperte a tecla ou combinação. Para o SpeechMike, configure no programa da Philips cada botão para enviar uma tecla (ex.: F9, F10) e associe aqui. Alt+S fica reservado para o microfone.</p>
+        <ul class="voz-list" id="keyList"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Editor de máscaras -->
+<div class="modal" id="mascModal" hidden role="dialog" aria-modal="true" aria-labelledby="mascTitle">
+  <div class="modal-card wide">
+    <div class="col-head"><span class="label" id="mascTitle">Máscaras</span><span class="spacer"></span><button class="btn ghost small" data-close="mascModal" type="button">Fechar</button></div>
+    <div class="split">
+      <div class="split-side">
+        <div id="mascList" class="pick-list"></div>
+        <button class="btn small" id="mascNew" type="button">+ Nova máscara</button>
+      </div>
+      <div class="split-main">
+        <div class="form-grid">
+          <label>Nome<input class="field" id="mNome" type="text" placeholder="TC de abdome total" autocomplete="off"></label>
+          <label>Protocolo<input class="field" id="mProto" type="text" placeholder="Com contraste" autocomplete="off"></label>
+          <label>Nomes falados (para "máscara …")<input class="field" id="mVoz" type="text" placeholder="abdome, abdome total" autocomplete="off"></label>
+        </div>
+        <label class="chk-line"><input type="checkbox" id="mSexo"> Tem frases que dependem do sexo (próstata / útero)</label>
+        <label class="chk-line"><input type="checkbox" id="mParecer"> Parecer provisório (texto corrido, sem seções). Use {data} para a data de hoje.</label>
+        <details class="groups"><summary>Seções do Notion usadas nesta máscara</summary><div id="mGroups" class="group-grid"></div></details>
+        <div class="mask-lab"><span>Texto da máscara</span>
+          <div class="fmt-bar" data-target="mTexto" aria-label="Formatação da máscara">
+            <button type="button" data-cmd="bold" title="Negrito (Ctrl+B)"><b>B</b></button>
+            <button type="button" data-cmd="underline" title="Sublinhado (Ctrl+U)"><u>U</u></button>
+            <button type="button" data-cmd="italic" title="Itálico (Ctrl+I)"><i>I</i></button>
+            <span class="fmt-sep" aria-hidden="true"></span>
+            <button type="button" data-cmd="justifyLeft" title="Alinhar à esquerda" aria-label="Alinhar à esquerda"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 6.5h8M2 10h12M2 13.5h8"/></svg></button>
+            <button type="button" data-cmd="justifyCenter" title="Centralizar" aria-label="Centralizar"><svg viewBox="0 0 16 16"><path d="M2 3h12M4 6.5h8M2 10h12M4 13.5h8"/></svg></button>
+            <button type="button" data-cmd="justifyFull" title="Justificar" aria-label="Justificar"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 6.5h12M2 10h12M2 13.5h12"/></svg></button>
+            <span class="fmt-sep" aria-hidden="true"></span>
+            <button type="button" data-cmd="insertOrderedList" title="Lista numerada" aria-label="Lista numerada"><svg viewBox="0 0 16 16"><path d="M6 3.5h8M6 8h8M6 12.5h8"/><text x="1" y="5.2">1</text><text x="1" y="9.7">2</text><text x="1" y="14.2">3</text></svg></button>
+            <button type="button" data-cmd="insertUnorderedList" title="Lista com marcadores" aria-label="Lista com marcadores"><svg viewBox="0 0 16 16"><path d="M6 3.5h8M6 8h8M6 12.5h8"/><circle cx="2.5" cy="3.5" r="1.1"/><circle cx="2.5" cy="8" r="1.1"/><circle cx="2.5" cy="12.5" r="1.1"/></svg></button>
+          </div>
+          <div id="mTexto" class="mask-edit" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Texto da máscara"></div>
+        </div>
+        <p class="voz-help">Dois cliques numa máscara da lista para selecioná-la e começar a laudar. Primeira linha: título do exame. Use os títulos de seção Informações Clínicas, Técnica de exame, Achados, Conclusão e Achados adicionais. <b>[&lt;frase&gt;]</b> = frase normal padrão · <b>[frase]</b> = frase opcional (ex.: por sexo) · <b>[&lt;&gt;]</b> = campo a preencher · <b>1.</b> embaixo de Conclusão.</p>
+        <div class="bar">
+          <button class="btn primary" id="mSave" type="button">Salvar máscara</button>
+          <button class="btn" id="mDel" type="button" hidden>Excluir</button>
+          <span class="spacer"></span>
+          <span class="voz-msg" id="mMsg" role="status"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Calculadoras -->
+<div class="modal" id="calcModal" hidden role="dialog" aria-modal="true" aria-labelledby="calcTitle">
+  <div class="modal-card wide">
+    <div class="col-head">
+      <span class="label" id="calcTitle">Calculadoras</span>
+      <div class="tabs" role="tablist" id="calcTabs" style="margin-left:12px;flex-wrap:wrap"></div>
+      <span class="spacer"></span><button class="btn ghost small" data-close="calcModal" type="button">Fechar</button>
+    </div>
+    <div class="calc-body">
+      <p class="calc-hint">Para mudar a ordem: arraste as abas com o mouse, ou selecione uma aba e use <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>Alt</kbd>+<kbd>→</kbd>.</p>
+      <section data-cp="wash">
+        <div class="form-grid">
+          <label>Lado<select class="field" id="wLado"><option value="direita">Direita</option><option value="esquerda">Esquerda</option></select></label>
+          <label>Tamanho (cm)<input class="field" id="wTam" type="text" inputmode="decimal" placeholder="1,8"></label>
+          <label>Sem contraste (UH)<input class="field" id="wPre" type="text" inputmode="decimal" placeholder="25"></label>
+          <label>Fase portal (UH)<input class="field" id="wPort" type="text" inputmode="decimal" placeholder="80"></label>
+          <label>Tardia 15 min (UH)<input class="field" id="wTard" type="text" inputmode="decimal" placeholder="40"></label>
+        </div>
+        <p class="voz-help">Adenoma: ≤ 10 UH sem contraste, ou washout absoluto ≥ 60%, ou relativo ≥ 40%.</p>
+      </section>
+      <section data-cp="fle" hidden>
+        <div class="form-grid">
+          <label>Tipo<select class="field" id="fTipo"><option value="solido">Sólido</option><option value="vf">Vidro fosco puro</option><option value="ps">Parcialmente sólido</option></select></label>
+          <label>Número<select class="field" id="fNum"><option value="unico">Único</option><option value="multi">Múltiplos</option></select></label>
+          <label>Diâmetro médio (mm)<input class="field" id="fTam" type="text" inputmode="decimal" placeholder="7"></label>
+          <label id="fSolLab">Componente sólido (mm)<input class="field" id="fSol" type="text" inputmode="decimal" placeholder="4"></label>
+          <label id="fRiscoLab">Risco do paciente<select class="field" id="fRisco"><option value="baixo">Baixo</option><option value="alto">Alto</option></select></label>
+        </div>
+        <p class="voz-help">Nódulos incidentais em pacientes ≥ 35 anos, sem câncer conhecido ou imunossupressão (Fleischner 2017). Com vários nódulos, use o mais suspeito.</p>
+      </section>
+      <section data-cp="renal" hidden>
+        <div class="form-grid">
+          <label>Lado<select class="field" id="rLado"><option value="direito">Direito</option><option value="esquerdo">Esquerdo</option></select></label>
+          <label>R · maior diâmetro (cm)<input class="field" id="rR" type="text" inputmode="decimal" placeholder="3,5"></label>
+          <label>E · exofítico<select class="field" id="rE"><option value="1">≥ 50% exofítico (1)</option><option value="2">&lt; 50% exofítico (2)</option><option value="3">Totalmente endofítico (3)</option></select></label>
+          <label>N · distância ao sistema coletor/seio (mm)<input class="field" id="rN" type="text" inputmode="decimal" placeholder="5"></label>
+          <label>A · posição<select class="field" id="rA"><option value="a">Anterior (a)</option><option value="p">Posterior (p)</option><option value="x">Nem anterior nem posterior (x)</option></select></label>
+          <label>L · linhas polares<select class="field" id="rL"><option value="1">Inteiramente acima/abaixo da linha polar (1)</option><option value="2">Cruza a linha polar (2)</option><option value="3">&gt; 50% além da linha polar, cruza a linha média axial ou entre as linhas polares (3)</option></select></label>
+          <label class="chk-line" style="flex-direction:row;align-self:end"><input type="checkbox" id="rH"> Hilar (toca artéria ou veia renal principal)</label>
+        </div>
+        <p class="voz-help">R.E.N.A.L. (Kutikov &amp; Uzzo, 2009): 4–6 baixa · 7–9 moderada · 10–12 alta complexidade.</p>
+      </section>
+      <section data-cp="esteatose" hidden>
+        <div class="form-grid">
+          <label>Fígado sem contraste (UH)<input class="field" id="eF" type="text" inputmode="decimal" placeholder="35"></label>
+          <label>Baço sem contraste (UH)<input class="field" id="eB" type="text" inputmode="decimal" placeholder="50"></label>
+        </div>
+        <p class="voz-help">Só vale na fase sem contraste. Fígado &lt; 40 UH ou fígado − baço &lt; −10 UH: esteatose moderada a acentuada. Relação fígado/baço &lt; 1,0: sugere esteatose.</p>
+      </section>
+      <section data-cp="osso" hidden>
+        <div class="form-grid">
+          <label>Atenuação trabecular de L1 (UH)<input class="field" id="oL1" type="text" inputmode="decimal" placeholder="95"></label>
+        </div>
+        <p class="voz-help">Rastreamento oportunístico (ROI no osso trabecular de L1, em plano axial): ≤ 100 UH sugere osteoporose; 101–160 UH, intermediário; &gt; 160 UH, densidade provavelmente normal. Não substitui a densitometria.</p>
+      </section>
+      <section data-cp="aorta" hidden>
+        <div class="form-grid">
+          <label>Diâmetro máximo (cm)<input class="field" id="aD" type="text" inputmode="decimal" placeholder="4,2"></label>
+          <label>Segmento<select class="field" id="aSeg"><option value="infrarrenal">Infrarrenal</option><option value="justarrenal">Justarrenal</option><option value="suprarrenal">Suprarrenal</option></select></label>
+          <label>Sexo<select class="field" id="aSexo"><option value="M">Masculino</option><option value="F">Feminino</option></select></label>
+        </div>
+        <p class="voz-help">Aneurisma de aorta abdominal: ≥ 3,0 cm. Seguimento conforme a Society for Vascular Surgery (2018).</p>
+      </section>
+      <section data-cp="tep" hidden>
+        <div class="form-grid">
+          <label>Ventrículo direito (mm)<input class="field" id="tVD" type="text" inputmode="decimal" placeholder="48"></label>
+          <label>Ventrículo esquerdo (mm)<input class="field" id="tVE" type="text" inputmode="decimal" placeholder="40"></label>
+        </div>
+        <p class="voz-help">Diâmetros transversais máximos no plano axial (ou 4 câmaras). Relação VD/VE ≥ 1,0 sugere sobrecarga do ventrículo direito.</p>
+      </section>
+      <section data-cp="abc" hidden>
+        <div class="form-grid">
+          <label>Localização<input class="field" id="hLoc" type="text" placeholder="nucleocapsular à direita" autocomplete="off"></label>
+          <label>A (cm)<input class="field" id="hA" type="text" inputmode="decimal" placeholder="4,0"></label>
+          <label>B (cm)<input class="field" id="hB" type="text" inputmode="decimal" placeholder="3,0"></label>
+          <label>C · altura (cm)<input class="field" id="hC" type="text" inputmode="decimal" placeholder="3,5"></label>
+        </div>
+        <p class="voz-help">Volume de hematoma intraparenquimatoso pelo método ABC/2 (A × B × C ÷ 2, em cm → mL).</p>
+      </section>
+      <div class="calc-out">
+        <span class="label">Frase para o laudo</span>
+        <p id="calcOut">Preencha os campos.</p>
+        <div class="bar"><button class="btn primary small" id="calcIns" type="button">Inserir nos achados</button><span class="voz-msg" id="calcMsg" role="status"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Histórico -->
+<div class="modal" id="histModal" hidden role="dialog" aria-modal="true" aria-labelledby="histTitle">
+  <div class="modal-card wide">
+    <div class="col-head"><span class="label" id="histTitle">Histórico de laudos</span><span class="spacer"></span><button class="btn ghost small" data-close="histModal" type="button">Fechar</button></div>
+    <div class="split">
+      <div class="split-side">
+        <div id="histDays" class="pick-list"></div>
+      </div>
+      <div class="split-main">
+        <input class="field" id="histBusca" type="search" placeholder="Buscar no dia (ex.: apendicite)" autocomplete="off">
+        <ul id="histList" class="voz-list"></ul>
+        <div class="sheet hist-view" id="histView" hidden></div>
+        <div class="bar" id="histBar" hidden>
+          <button class="btn primary small" id="histCopy" type="button">Copiar</button>
+          <button class="btn small" id="histOpen" type="button">Retomar este laudo</button>
+          <span class="voz-msg" id="histMsg" role="status"></span>
+        </div>
+        <details class="hist-achados" id="histAchBox" hidden><summary>Achados ditados</summary><pre id="histAch"></pre></details>
+        <p class="voz-help">Tudo o que você escreve é salvo sozinho, a cada poucos segundos, com as versões de cada laudo. Um laudo novo começa em "Novo exame" ou ao trocar de máscara com texto na tela. Guardado por 30 dias.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal-card">
+    <div class="col-head"><span class="label" id="modalTitle">Máscara</span><span class="spacer"></span><button class="btn ghost small" id="modalX" type="button">Fechar</button></div>
+    <div class="modal-body"><div class="sheet" id="maskSheet"></div></div>
+    <div class="modal-foot">
+      <span class="note">Cinza itálico: frase opcional. Cinza claro: campo a preencher.</span>
+      <button class="btn" id="modalClose" type="button">Fechar</button>
+      <button class="btn primary" id="modalUse" type="button">Laudar este exame</button>
+    </div>
+  </div>
+</div>
+
+
+
+<script src="plataforma.js" charset="utf-8"></script>
