@@ -389,6 +389,20 @@
   #selbar svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
   #qfix select{background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:3px 4px;font-size:12px}
 
+    /* Painel de corrigir/autotexto/estilo: abre junto da seleção, compacto */
+  #selbar button:focus-visible{outline:1.5px solid var(--accent);outline-offset:-1px}
+  #qfix{position:fixed;z-index:21;display:flex;flex-direction:column;gap:6px;padding:7px 8px;width:max-content;max-width:min(380px,calc(100vw - 16px));background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.3);font-size:13px}
+  #qfix[hidden]{display:none}
+  #qfix .qf-row{display:flex;align-items:center;gap:6px}
+  #qfix .qf-lab{color:var(--muted);font-size:12px;white-space:nowrap}
+  #qfix input{flex:1 1 150px;min-width:110px;width:210px;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:5px;padding:4px 6px;font:inherit}
+  #qfix input:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+  #qfix .qf-sug{display:flex;flex-direction:column;gap:1px;border-top:1px solid var(--line);padding-top:5px}
+  #qfix .qf-sug[hidden]{display:none}
+  #qfix .qf-cap{font-size:10.5px;color:var(--muted);padding:0 4px 2px}
+  #qfix .qf-sug button{all:unset;cursor:pointer;padding:3px 6px;border-radius:4px;font-size:13px;color:var(--text)}
+  #qfix .qf-sug button:hover,#qfix .qf-sug button[aria-selected="true"]{background:var(--panel-2);box-shadow:inset 2px 0 var(--accent)}
+
 /* Tutu v2 · sépia/pastéis. Sobreposição exclusiva do site. */
 body.tutu-v2 {
   --ground:#efe7da; --panel:#f6f0e6; --panel-2:#eee5d6; --paper:#fcf8f0;
@@ -433,7 +447,11 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 .tutu-v2 #caseTabs button[aria-selected="true"] { background:var(--paper); border-color:var(--line); border-bottom-color:var(--paper); font-weight:600; }
 .case-rec { width:7px; height:7px; border-radius:50%; background:#d0605b; flex-shrink:0; }
 .v2-top-actions { display:flex; align-items:center; gap:9px; margin-left:auto; white-space:nowrap; }
-#saveState { font-size:11px; color:var(--muted); }
+#saveState { font-size:11px; color:var(--muted); min-width:84px; text-align:right; white-space:nowrap; transition:none; animation:none; }
+#syncState { font-size:11px; color:var(--muted); min-width:92px; text-align:right; white-space:nowrap; transition:none; animation:none; }
+#syncState[data-state="semchave"], #syncState[data-state="erro"] { color:var(--crit); }
+#syncSec input, #syncSec button { margin:4px 6px 4px 0; }
+#histTopBtn { font-size:12px; flex-shrink:0; white-space:nowrap; }
 #copiar { display:flex; gap:8px; align-items:center; }
 #copiar kbd { color:inherit; background:transparent; border-color:currentColor; font-size:10px; }
 #v2Left { grid-area:left; border-right:1px solid var(--line); padding:12px; overflow:auto; display:flex; flex-direction:column; gap:10px; }
@@ -452,7 +470,6 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 @media screen { .tutu-v2 #laudo, .tutu-v2 #laudo p, .tutu-v2 #laudo div, .tutu-v2 #laudo li { font-size:var(--screen-size,11pt)!important; } }
 .tutu-v2 #laudo p, .tutu-v2 #laudo div { margin:0; line-height:normal; }
 .tutu-v2 #laudoBox .rs-grip { display:block; }
-#activeOutline { position:fixed; border:1px solid var(--focus); background:transparent; pointer-events:none; border-radius:3px; z-index:5; }
 .tutu-v2 #laudo .chg, .tutu-v2 #laudo ins { background:var(--p-green); color:var(--changed); text-decoration:none; border-bottom:1px solid #6f9e6a; }
 .tutu-v2 #laudo del.rm, .tutu-v2 #laudo .rmline { background:var(--p-red); color:var(--crit); text-decoration:line-through; }
 #v2Right { grid-area:right; padding:12px; border-left:1px solid var(--line); overflow:auto; display:flex; flex-direction:column; gap:10px; }
@@ -537,10 +554,8 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
   #tutuApp:not(.compact):not(.right-mini) .v2-panel:not([hidden]) { display:flex; }
   #tutuApp:not(.compact):not(.right-mini) #rightTabs { flex-direction:row; }
 }
-@media print { body.tutu-v2 { overflow:visible; } .tutu-v2 #laudo { font:11pt Arial!important; color:#000; background:#fff; box-shadow:none; } #v2Top,#v2Left,#v2Right,#v2Footer,#voicePill,#activeOutline,#commandPalette { display:none!important; } }
+@media print { body.tutu-v2 { overflow:visible; } .tutu-v2 #laudo { font:11pt Arial!important; color:#000; background:#fff; box-shadow:none; } #v2Top,#v2Left,#v2Right,#v2Footer,#voicePill,#commandPalette { display:none!important; } }
 
-/* A ação de exclusão é irmã da aba, para manter botões independentes. */
-.case-tab { display:flex; align-items:end; flex-shrink:0; }
-.tutu-v2 #caseTabs .case-delete { width:24px; max-width:24px; height:30px; padding:4px; align-items:center; justify-content:center; border-radius:6px; color:var(--muted); }
-.tutu-v2 #caseTabs .case-delete:hover { color:var(--crit); background:var(--p-red); }
-.tutu-v2 #caseTabs .case-tab > [role="tab"] { max-width:180px; }
+/* Ctrl+K: continuações da frase no topo da paleta */
+.tutu-v2 #commandResults button.cmd-cont { align-items:flex-start; }
+#commandResults button.cmd-cont span { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; font-size:12.5px; line-height:1.35; }

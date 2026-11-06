@@ -1,10 +1,20 @@
-/* Capacidades locais do site. Nenhum banco ou segredo é distribuído no build. */
+/* Capacidades locais do site. Os bancos de frases só são lidos de bancos/*.js quando o site roda no próprio PC (127.0.0.1/localhost);
+   o build publicável (--publico) não os inclui. */
 (() => {
   "use strict";
   const COLS = ["mascaras", "frases", "correcoes", "comandos", "macros", "regras", "exemplos", "dicionario", "casos", "historico", "treino", "config", "bancoNT"];
   const BANKS = ["bank_tc", "bank_nt", "bank_tc_meta", "bank_nt_meta"];
   const listeners = new Set();
   const clone = value => value === undefined ? undefined : structuredClone(value);
+  // Sincronização (109-v2-sync.js): cada escrita local deixa um carimbo em "_meta/<col>/<id>" (data + apagado = tombstone).
+  // Chaves que começam com "_" nunca entram em coleção nem em backup. Config de máquina não sincroniza.
+  const LOCAL_CFG = /^(abas-v2|vocab-v3|local-.*)$/;
+  const syncable = (col, id) => col !== "bancoNT" && !(col === "config" && LOCAL_CFG.test(id));
+  let lastStamp = 0;
+  const nowIso = () => { let t = Date.now(); if (t <= lastStamp) t = lastStamp + 1; lastStamp = t; return new Date(t).toISOString(); };
+  const hooks = [];
+  const changed = (col, id) => { if (syncable(col, id)) for (const f of hooks) { try{ f(col, id); }catch(e){} } };
+  const stampPut = (store, col, id) => { if (syncable(col, id)) store.put({ atualizado: nowIso(), apagado: false }, "_meta/" + col + "/" + id); };
   const ready = new Promise((resolve, reject) => {
     const req = indexedDB.open("laudos-tutu-site", 1);
     req.onupgradeneeded = () => req.result.createObjectStore("documentos");
@@ -86,13 +96,13 @@
       if (!id || extra !== undefined) throw new Error("Identificador local inválido.");
       const write = async (value, merge, update = false) => {
         await transaction("readwrite", store => {
-          if (!merge){ store.put(clone(value), path); return; }
+          if (!merge){ store.put(clone(value), path); stampPut(store, col, id); return; }
           store.get(path).onsuccess = e => {
             if (update && e.target.result === undefined){ e.target.transaction.abort(); return; }
-            store.put({ ...e.target.result, ...clone(value) }, path);
+            store.put({ ...e.target.result, ...clone(value) }, path); stampPut(store, col, id);
           };
         });
-        await notify(col);
+        await notify(col); changed(col, id);
       };
       return {
         async get(){
@@ -102,7 +112,13 @@
         },
         set: (value, options) => write(value, options?.merge),
         update: value => write(value, true, true),
-        async delete(){ await transaction("readwrite", store => { store.delete(path); }); await notify(col); }
+        async delete(){
+          await transaction("readwrite", store => {
+            store.delete(path);
+            if (syncable(col, id)) store.put({ atualizado: nowIso(), apagado: true }, "_meta/" + col + "/" + id);
+          });
+          await notify(col); changed(col, id);
+        }
       };
     }
   };
@@ -177,8 +193,16 @@
   }
   async function importBackup(backup){
     const writes = validateBackup(backup); // Valida tudo antes de iniciar uma única transação atômica.
-    await transaction("readwrite", store => { for (const [key, value] of writes) store.put(clone(value), key); });
+    const cols = new Set();
+    await transaction("readwrite", store => {
+      for (const [key, value] of writes){
+        store.put(clone(value), key);
+        const [col, id] = key.split("/");
+        if (col !== "_bancos" && syncable(col, id)){ store.put({ atualizado: nowIso(), apagado: false }, "_meta/" + key); cols.add(col + "/" + id); }
+      }
+    });
     await notify();
+    for (const k of cols) changed(...k.split("/"));
     return writes.filter(([key]) => !key.startsWith("_bancos/")).length;
   }
   async function exportBackup(){
@@ -187,18 +211,218 @@
     for (const [key, value] of await readAll()){
       const [col, id] = key.split("/");
       if (col === "_bancos") bancos[id] = value;
+      else if (col.startsWith("_")) continue;   // _meta, _sync, _gh, _cfg: nunca no backup (a chave do GitHub fica de fora)
       else { checkCol(col); dados[col].push({ id, data: value }); }
     }
     return { app: "Laudos", versao: 2, dados, bancos };
   }
-  window.tutuSite = { ready, db, importBackup, exportBackup };
+  // Mescla entradas de banco [grupo, seção, título, texto] sem repetir frases (grupo/seção/título + texto sem acento).
+  // As entradas já existentes não mudam; de cada entrada nova entram só as frases que faltam (como entrada própria).
+  const foldLine = v => String(v).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  function mergeBank(base, extra){
+    const out = (base || []).map(e => e.slice()), seen = new Set();
+    let added = 0, dup = 0;
+    const keyOf = e => e[0] + "|" + e[1] + "|" + e[2];
+    for (const e of out) for (const line of e[3].split("\n")) seen.add(keyOf(e) + "|" + foldLine(line));
+    for (const e of extra || []){
+      if (!Array.isArray(e) || e.length < 4) continue;
+      const fresh = [];
+      for (const raw of String(e[3]).split("\n")){
+        const line = raw.trim(); if (!line) continue;
+        const sk = keyOf(e) + "|" + foldLine(line);
+        if (seen.has(sk)){ dup++; continue; }
+        seen.add(sk); added++; fresh.push(line);
+      }
+      if (fresh.length) out.push([e[0], e[1], e[2], fresh.join("\n"), ...e.slice(4)]);
+    }
+    return { entries: out, added, dup };
+  }
+  async function saveBankNT(entries, meta){
+    await transaction("readwrite", store => { store.put(clone(entries), "_bancos/bank_nt"); store.put(clone(meta), "_bancos/bank_nt_meta"); });
+  }
+  // ---- armazenamento auxiliar da sincronização (chaves "_..." do IndexedDB; nunca em coleção nem em backup) ----
+  const kvGet = async key => { let v; await transaction("readonly", s => { s.get(key).onsuccess = e => v = e.target.result; }); return v; };
+  const kvSet = async (key, value) => { await transaction("readwrite", s => { s.put(clone(value), key); }); };
+  const kvDel = async key => { await transaction("readwrite", s => { s.delete(key); }); };
+  const rangeOf = prefix => IDBKeyRange.bound(prefix, prefix + "￿");
+  // {id: {has, data, atualizado|null, apagado}} das coleções sincronizáveis; atualizado null = nunca carimbado.
+  async function listCol(col){
+    let dk, dv, mk, mv;
+    await transaction("readonly", store => {
+      store.getAllKeys(rangeOf(col + "/")).onsuccess = e => dk = e.target.result;
+      store.getAll(rangeOf(col + "/")).onsuccess = e => dv = e.target.result;
+      store.getAllKeys(rangeOf("_meta/" + col + "/")).onsuccess = e => mk = e.target.result;
+      store.getAll(rangeOf("_meta/" + col + "/")).onsuccess = e => mv = e.target.result;
+    });
+    const out = {};
+    dk.forEach((k, i) => { const id = k.slice(col.length + 1); if (syncable(col, id)) out[id] = { has: true, data: dv[i], atualizado: null, apagado: false }; });
+    mk.forEach((k, i) => {
+      const id = k.slice(col.length + 7); if (!syncable(col, id)) return;
+      const o = out[id] || (out[id] = { has: false, data: undefined });
+      o.atualizado = mv[i].atualizado; o.apagado = !!mv[i].apagado;
+      if (o.apagado && o.has) { o.has = false; o.data = undefined; }
+    });
+    for (const id of Object.keys(out)) if (!out[id].has && !out[id].apagado) delete out[id];
+    return out;
+  }
+  // Grava o que veio do GitHub sem disparar a fila de envio. `expect` = carimbo local visto na leitura: se mudou
+  // no meio do ciclo (o médico editou), o item é ignorado e o próximo ciclo resolve.
+  async function applyRemote(col, items){   // devolve quantos itens foram ignorados por edição simultânea
+    if (!items.length) return 0;
+    let ignorados = 0;
+    await transaction("readwrite", store => {
+      for (const it of items){
+        const mk = "_meta/" + col + "/" + it.id;
+        store.get(mk).onsuccess = e => {
+          const cur = e.target.result;
+          if ((cur ? cur.atualizado : null) !== it.expect){ ignorados++; return; }
+          if (it.apagado) store.delete(col + "/" + it.id); else store.put(clone(it.data), col + "/" + it.id);
+          store.put({ atualizado: it.atualizado, apagado: !!it.apagado }, mk);
+        };
+      }
+    });
+    await notify(col);
+    return ignorados;
+  }
+  async function setMetas(col, items){   // carimba docs antigos (sem carimbo) que subiram agora
+    await transaction("readwrite", store => {
+      for (const it of items){
+        const mk = "_meta/" + col + "/" + it.id;
+        store.get(mk).onsuccess = e => { if (!e.target.result) store.put({ atualizado: it.atualizado, apagado: false }, mk); };
+      }
+    });
+  }
+  const sync = { onChange: f => { hooks.push(f); }, syncable, nowIso, kvGet, kvSet, kvDel, listCol, applyRemote, setMetas, notify,
+    COLS: COLS.filter(c => c !== "bancoNT") };
+
+  // ---- cliente da API REST do GitHub (repo privado de dados) ----
+  const GH_REPO = "arturaragao/laudos-tutu-dados", GH_API = "https://api.github.com";
+  const gh = { repo: GH_REPO, token: "" };
+  const ghErr = (msg, status, extra) => Object.assign(new Error(msg), { status, ...extra });
+  const b64 = s => { const b = new TextEncoder().encode(s); let bin = ""; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(bin); };
+  const unb64 = s => new TextDecoder().decode(Uint8Array.from(atob(String(s).replace(/\s/g, "")), c => c.charCodeAt(0)));
+  async function ghFetch(path, { method = "GET", body, raw = false } = {}){
+    if (!gh.token) throw ghErr("Sem chave do GitHub.", 0, { semChave: true });
+    try{
+      return await fetch(GH_API + "/repos/" + GH_REPO + path, { method, cache: "no-store",
+        headers: { Authorization: "Bearer " + gh.token, Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28", ...(body ? { "Content-Type": "application/json" } : {}) },
+        body: body ? JSON.stringify(body) : undefined });
+    }catch(e){ throw ghErr("Sem rede.", 0, { offline: true }); }
+  }
+  function ghFalha(res){
+    const limite = res.status === 429 || (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0");
+    return ghErr("GitHub respondeu " + res.status, res.status, { limite, auth: (res.status === 401 || res.status === 403) && !limite, conflito: res.status === 409 || res.status === 422 });
+  }
+  gh.list = async dir => {
+    const res = await ghFetch("/contents/" + dir + "?ref=main");
+    if (res.status === 404) return [];
+    if (!res.ok) throw ghFalha(res);
+    const j = await res.json();
+    return Array.isArray(j) ? j.map(f => ({ name: f.name, sha: f.sha })) : [];
+  };
+  gh.getJson = async path => {   // arquivos > 1 MB: o contents vem sem conteúdo; o blob (até 100 MB) vem cru
+    const res = await ghFetch("/contents/" + path + "?ref=main");
+    if (res.status === 404) return null;
+    if (!res.ok) throw ghFalha(res);
+    const j = await res.json();
+    let text;
+    if (j.encoding === "base64" && j.content) text = unb64(j.content);
+    else {
+      const r2 = await ghFetch("/git/blobs/" + j.sha, { raw: true });
+      if (!r2.ok) throw ghFalha(r2);
+      text = await r2.text();
+    }
+    return { sha: j.sha, json: JSON.parse(text) };
+  };
+  gh.putJson = async (path, obj, sha, message) => {
+    const res = await ghFetch("/contents/" + path, { method: "PUT", body: { message, content: b64(JSON.stringify(obj)), branch: "main", ...(sha ? { sha } : {}) } });
+    if (!res.ok) throw ghFalha(res);
+    return (await res.json()).content.sha;
+  };
+  gh.dispararNotion = async () => {
+    const res = await ghFetch("/actions/workflows/notion.yml/dispatches", { method: "POST", body: { ref: "main" } });
+    if (!res.ok) throw ghFalha(res);
+  };
+
+  // ---- bancos de frases do repo de dados (cache no IndexedDB; só baixa o que mudou) ----
+  async function bancosRefresh(){
+    const idx = await gh.getJson("bancos/indice.json");
+    if (!idx) return false;
+    const lista = Array.isArray(idx.json.bancos) ? idx.json.bancos : [];
+    let mudou = false;
+    for (const b of lista){
+      const c = await kvGet("_gh/banco/" + b.slug);
+      if (c && c.atualizado === b.atualizado) continue;
+      const f = await gh.getJson("bancos/" + b.slug + ".json");
+      if (!f) continue;
+      await kvSet("_gh/banco/" + b.slug, { atualizado: b.atualizado, doc: f.json }); mudou = true;
+    }
+    const antigo = await kvGet("_gh/indice");
+    const slugs = lista.map(b => b.slug);
+    if (!antigo || antigo.slugs.join() !== slugs.join()) mudou = true;
+    await kvSet("_gh/indice", { slugs, atualizado: idx.json.atualizado || "", quando: new Date().toISOString() });
+    return mudou;
+  }
+  const brData = iso => { const d = new Date(iso); return isNaN(d) ? "sem data" : d.toLocaleDateString("pt-BR"); };
+  // {tc, nt}: cada lado = {frases, atualizado} ou null. notas-tomografia = NT; as demais (TC, USG, RM, RX) = TC.
+  async function lerBancosGh(){
+    const out = { tc: null, nt: null }, idx = await kvGet("_gh/indice");
+    if (!idx) return out;
+    for (const slug of idx.slugs){
+      const c = await kvGet("_gh/banco/" + slug);
+      if (!c || !Array.isArray(c.doc?.frases)) continue;
+      const lado = slug === "notas-tomografia" ? "nt" : "tc";
+      const o = out[lado] || (out[lado] = { frases: [], atualizado: "" });
+      o.frases.push(...c.doc.frases.filter(e => Array.isArray(e) && e.length >= 4));
+      if (!o.atualizado || (slug === "notas-tc" || slug === "notas-tomografia")) o.atualizado = c.atualizado || o.atualizado;
+    }
+    return out;
+  }
+
+  // ---- chave do GitHub: IndexedDB local + extensão (chrome.storage.sync entrega nos outros PCs) ----
+  const chaveHooks = [];
+  document.addEventListener("laudos-chave", async e => {
+    let t = ""; try{ t = String(JSON.parse(e.detail).token || ""); }catch(_){ return; }
+    if (!t || t === gh.token) return;
+    gh.token = t; await kvSet("_cfg/token", t).catch(() => {});
+    for (const f of chaveHooks) { try{ f(t); }catch(_){} }
+  });
+  const pedirChave = () => document.dispatchEvent(new CustomEvent("laudos-chave-pedir"));
+  async function setToken(t){
+    t = String(t || "").trim(); gh.token = t;
+    if (t) await kvSet("_cfg/token", t); else await kvDel("_cfg/token");
+    document.dispatchEvent(new CustomEvent("laudos-chave-salvar", { detail: JSON.stringify({ token: t }) }));
+  }
+  window.tutuSite = { ready, db, importBackup, exportBackup, mergeBank, saveBankNT, sync, gh, setToken, pedirChave,
+    onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
+  // Fonte: repo de dados (cache local) > bancos/*.js (reserva, só no PC) + o que foi importado/guardado no IndexedDB.
+  const loadScript = src => new Promise(resolve => {
+    const tag = document.createElement("script"); tag.src = src; tag.charset = "utf-8";
+    tag.onload = tag.onerror = () => resolve();
+    document.head.append(tag);
+  });
   (async () => {
+    gh.token = (await kvGet("_cfg/token").catch(() => "")) || "";
+    if (!gh.token){ pedirChave(); const iv = setInterval(pedirChave, 400); setTimeout(() => clearInterval(iv), 4000); }
+    let g = await lerBancosGh();
+    if (gh.token && !g.tc && !g.nt){   // primeira vez neste PC: espera os bancos (até 20 s) para o app já nascer completo
+      try{ await Promise.race([bancosRefresh(), new Promise((_, no) => setTimeout(no, 20000))]); g = await lerBancosGh(); }catch(e){}
+    }
     const backup = await exportBackup();
-    window.BANK_TC = backup.bancos.bank_tc;
-    window.BANK_NT = backup.bancos.bank_nt;
-    window.BANK_TC_DATE = backup.bancos.bank_tc_meta.data || "sem backup importado";
-    window.BANK_NT_META = { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...backup.bancos.bank_nt_meta };
+    if ((!g.tc || !g.nt) && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname)){
+      await loadScript("bancos/bank_tc.js"); await loadScript("bancos/bank_nt.js");
+    }
+    const fileTC = window.BANK_TC || [], fileNT = window.BANK_NT || [], b = backup.bancos;
+    const fileMeta = window.BANK_NT_META || {}, fileDate = window.BANK_TC_DATE;
+    window.BANK_TC = mergeBank(g.tc ? g.tc.frases : fileTC, b.bank_tc).entries;
+    window.BANK_NT = mergeBank(g.nt ? g.nt.frases : fileNT, b.bank_nt).entries;
+    window.BANK_TC_DATE = g.tc ? brData(g.tc.atualizado) : (b.bank_tc_meta.data || fileDate || "sem backup importado");
+    window.BANK_NT_META = g.nt
+      ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
+      : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
+    window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
     const script = document.createElement("script"); script.src = "app.js"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });

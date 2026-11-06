@@ -331,22 +331,9 @@ function bankBlock(idx){
 
 
 /* ---------- exames e máscara ---------- */
-function examModality(ex){
-  if (["TC", "USG", "RM"].includes(ex.modalidade)) return ex.modalidade;
-  const text = fold([ex.name, ex.mask].join(" "));
-  if (/\b(usg|us|ultrassom|ultrassonografia|ultrassonografico|ecografia)\b/.test(text)) return "USG";
-  if (/\b(rm|ressonancia|ressonancia magnetica)\b/.test(text)) return "RM";
-  return "TC";
-}
-function examGroups(){
-  return ["TC", "USG", "RM"].flatMap(mod => [false, true].map(parecer => [
-    mod + (parecer ? " · Pareceres provisórios" : " · Laudos"),
-    EXAMS.filter(ex => examModality(ex) === mod && (ex.tipo === "parecer") === parecer)
-  ]));
-}
 function renderExams(){
   const wrap = $("exams"); wrap.textContent = ""; updMaskChip();
-  const groups = examGroups();
+  const groups = [["Pareceres provisórios", EXAMS.filter(e => e.tipo === "parecer")], ["Laudos", EXAMS.filter(e => e.tipo !== "parecer")]];
   for (const [label, list] of groups){
     if (!list.length) continue;
     const h = document.createElement("div"); h.className = "exam-group"; h.textContent = label; wrap.append(h);
@@ -478,17 +465,29 @@ function focusSheet(clinic){
   else if (sheet.lastElementChild) r = rangeAtEnd(sheet.lastElementChild);
   if (r){ s.removeAllRanges(); s.addRange(r); }
 }
+/* linhas da máscara; as vazias viram parágrafo vazio (menos no início e no fim) */
+function maskLines(ex){
+  const lines = maskOf(ex).split("\n").map(l => l.trim());
+  while (lines.length && !lines[0]) lines.shift();
+  while (lines.length && !lines[lines.length - 1]) lines.pop();
+  return lines;
+}
+/* BLANK antes de título só se a linha anterior não for já um parágrafo vazio da máscara */
 function modelSheetHtml(ex){
   const parecer = ex.tipo === "parecer";
-  return maskOf(ex).split("\n").map(l => l.trim()).filter(Boolean).map((raw, i) => {
-    const { al, t } = splitAlign(raw);
-    if (!parecer && i === 0) return P(fmt(fmtInline(stripTags(t)), FORMAT.title), al);
-    if (!parecer && isHeading(t)) return BLANK + P(fmt(fmtInline(stripTags(t)), FORMAT.heading), al);
-    if (t === "[<>]") return P(esc(t), al);
-    let m;
-    if ((m = t.match(/^\[<(.*)>\]$/)) || (m = t.match(/^\[(.*)\]$/))) return P(fmtInline(m[1]), al);
-    return P(fmtInline(t), al);
-  }).join("");
+  let out = "", vazio = false, first = true;
+  for (const raw of maskLines(ex)){
+    if (!raw){ out += BLANK; vazio = true; continue; }
+    const { al, t } = splitAlign(raw), head = !parecer && !first && isHeading(t);
+    if (!parecer && first) out += P(fmt(fmtInline(stripTags(t)), FORMAT.title), al);
+    else if (head) out += (vazio ? "" : BLANK) + P(fmt(fmtInline(stripTags(t)), FORMAT.heading), al);
+    else if (t === "[<>]") out += P("<br>", al);
+    else { let m;
+      if ((m = t.match(/^\[<(.*)>\]$/)) || (m = t.match(/^\[(.*)\]$/))) out += P(fmtInline(m[1]), al);
+      else out += P(fmtInline(t), al); }
+    first = false; vazio = false;
+  }
+  return out;
 }
 function resetSheetState(){
   lastGenerated = ""; checkedHash = ""; versions = []; verPtr = -1; $("verCount").textContent = ""; $("alertBox").hidden = true;
@@ -698,19 +697,19 @@ function acceptAllEdits(){
 function lockSheet(on){ sheet.contentEditable = on ? "false" : "true"; }
 
 function maskHtml(ex){
-  const lines = maskOf(ex).split("\n").map(l => l.trim()).filter(Boolean);
   const parecer = ex.tipo === "parecer";
-  let out = "";
-  lines.forEach((raw,i) => {
-    const { al, t } = splitAlign(raw);
-    if (!parecer && i === 0){ out += P(fmt(fmtInline(stripTags(t)), FORMAT.title), al); return; }
-    if (!parecer && isHeading(t)){ out += BLANK + P(fmt(fmtInline(stripTags(t)), FORMAT.heading), al); return; }
-    if (t === "[<>]"){ out += P(`<span class="fill">[campo a preencher]</span>`, al); return; }
-    let m;
-    if ((m = t.match(/^\[<(.*)>\]$/))){ out += P(fmtInline(m[1]), al); return; }
-    if ((m = t.match(/^\[(.*)\]$/))){ out += P(`<span class="opt">${fmtInline(m[1])} (opcional)</span>`, al); return; }
-    out += P(fmtInline(t), al);
-  });
+  let out = "", vazio = false, first = true;
+  for (const raw of maskLines(ex)){
+    if (!raw){ out += BLANK; vazio = true; continue; }
+    const { al, t } = splitAlign(raw); let m;
+    if (!parecer && first) out += P(fmt(fmtInline(stripTags(t)), FORMAT.title), al);
+    else if (!parecer && isHeading(t)) out += (vazio ? "" : BLANK) + P(fmt(fmtInline(stripTags(t)), FORMAT.heading), al);
+    else if (t === "[<>]") out += P(`<span class="fill">[campo a preencher]</span>`, al);
+    else if ((m = t.match(/^\[<(.*)>\]$/))) out += P(fmtInline(m[1]), al);
+    else if ((m = t.match(/^\[(.*)\]$/))) out += P(`<span class="opt">${fmtInline(m[1])} (opcional)</span>`, al);
+    else out += P(fmtInline(t), al);
+    first = false; vazio = false;
+  }
   return out;
 }
 function openMask(){
@@ -808,11 +807,32 @@ let dictOk = new Set();   // palavras/trechos que o médico confirmou como corre
 function vocabExame(){
   const seen = new Set(), out = [];
   const add = t => { for (const w of String(t).split(/[^A-Za-zÀ-ú-]+/)) { const k = fold(w); if (w.length >= 5 && !seen.has(k) && !STOP.has(k)){ seen.add(k); out.push(w.toLowerCase()); } } };
-  try{ add(stripTags(maskAll())); }catch(e){}
+  // termos que o médico já corrigiu vêm primeiro (valem mais e nunca são cortados pelo limite); depois os da máscara
   for (const c of correcoes) add(c.para);
+  try{ add(stripTags(maskAll())); }catch(e){}
   return out.slice(0, 150);
 }
+/* o termo certo de cada correção salva entra na hora no vocabulário geral (escolha entre as alternativas, junção "sub galeal" -> "subgaleal") */
+function vocabCorrecoes(){
+  try{
+    if (typeof VOCAB === "undefined") return;
+    const tem = new Set(VOCAB);
+    for (const c of correcoes) for (const w of String(c.para || "").toLowerCase().split(/[^a-zà-úç-]+/)) if (w.length >= 5 && !tem.has(w)){ tem.add(w); VOCAB.unshift(w); }
+    if (typeof KNOWN !== "undefined") for (const c of correcoes) for (const w of fold(String(c.para || "")).split(/[^a-z]+/)) if (w.length >= 3) KNOWN.add(w);
+  }catch(e){}
+}
+/* nomes próprios que nunca aparecem em minúscula no banco/máscaras (Hounsfield, Willis...): o ditado mantém a maiúscula no meio da frase */
+let capBase = null;
+function maiusculasMeio(){
+  const scan = (t, caps, low) => { for (const s of String(t).split(/[.!?:;\n]+/)) { const ws = s.split(/[^\p{L}]+/u).filter(Boolean); for (let i = 1; i < ws.length; i++){ const w = ws[i];
+    if (/^\p{Lu}\p{Ll}{3,}$/u.test(w)) caps.add(fold(w)); else if (/^\p{Ll}/u.test(w)) low.add(fold(w)); } } };
+  if (!capBase){ capBase = { caps: new Set(), low: new Set() }; try{ for (const e of BANK) scan(e[3], capBase.caps, capBase.low); }catch(e){} }
+  const caps = new Set(capBase.caps), low = new Set(capBase.low);
+  try{ scan(stripTags(maskAll()), caps, low); }catch(e){}
+  return [...caps].filter(w => !low.has(w)).slice(0, 300);
+}
 function publishVoice(){
+  vocabCorrecoes();
   const cfg = {
     commands: [...BUILTIN_CMDS, ...comandos.map(c => ({ fala:c.fala, acao:c.acao })),
       ...EXAMS.flatMap(e => (e.voz || []).filter(v => /^parecer\b/i.test(v)).map(v => ({ fala:v, acao:"exame:" + e.id })))],
@@ -820,6 +840,7 @@ function publishVoice(){
     frases: frases.map(f => ({ nome:f.nome, texto:f.texto })),
     vocab: window.__VOCAB || [],
     vocabExame: vocabExame(),
+    maiusculas: maiusculasMeio(),
     correcoes: [...correcoes.map(c => ({ de:c.de, para:c.para, ...(Array.isArray(c.ctx) && c.ctx.length ? { ctx:c.ctx } : {}) })),
       ...frases.flatMap(f => [{ de:"autotexto " + f.nome, para:String(f.texto) }, { de:"auto texto " + f.nome, para:String(f.texto) }]),
       ...macros.flatMap(m => { const t = String(m.texto); const a = "macro " + m.nome, b = "macro " + fold(m.nome); return a === b ? [{ de:a, para:t }] : [{ de:a, para:t }, { de:b, para:t }]; })]
@@ -871,7 +892,8 @@ async function addFrase(nome, texto, id){
 }
 /* ctx (opcional): palavras vizinhas onde a troca vale (correção de palavra que também existe); sem ctx vale em qualquer lugar */
 async function addCorrecao(de, para, id, ctx){
-  de = String(de || "").trim(); para = String(para || "").trim();
+  // "de" é o trecho errado inteiro, sem pontuação nas pontas (a extensão também aplica a regra a variantes próximas: junto, com hífen, uma letra diferente)
+  de = String(de || "").replace(/\s+/g, " ").replace(/^[\s.,;:!?"]+|[\s.,;:!?"]+$/g, ""); para = String(para || "").trim();
   if (!db || !de || !para) return false;
   const old = id ? correcoes.find(c => c.id === id) : correcoes.find(c => vnorm(c.de) === vnorm(de));
   const cx = Array.isArray(ctx) ? ctx : (id && old && Array.isArray(old.ctx) ? old.ctx : null);
@@ -1533,7 +1555,7 @@ const BANK_GROUPS = [...new Set(BANK.map(e => e[0]))];
 function cleanMask(d){
   return { id:d.id, code:String(d.code || "").toUpperCase().slice(0,3) || "??", name:d.name || d.id, proto:d.proto || "",
     sexo:!!d.sexo, tipo:d.tipo === "parecer" ? "parecer" : "laudo", voz:Array.isArray(d.voz) ? d.voz : [], mask:String(d.mask || ""), groups:Array.isArray(d.groups) ? d.groups : [],
-    modalidade:["TC", "USG", "RM"].includes(d.modalidade) ? d.modalidade : "", criadoEm:d.criadoEm || "" };
+    criadoEm:d.criadoEm || "" };
 }
 let maskDocs = [];
 function applyMasks(docs){
@@ -1551,10 +1573,10 @@ function applyMasks(docs){
 let editing = null;   // id sendo editado, ou null para nova
 function renderMascList(){
   const l = $("mascList"); l.textContent = "";
-  const ordered = examGroups().flatMap(([, list]) => list);
+  const ordered = [...EXAMS.filter(e => e.tipo === "parecer"), ...EXAMS.filter(e => e.tipo !== "parecer")];
   let lastT = null;
   for (const ex of ordered){
-    const t = examModality(ex) + (ex.tipo === "parecer" ? " · Pareceres provisórios" : " · Laudos");
+    const t = ex.tipo === "parecer" ? "Pareceres provisórios" : "Laudos";
     if (t !== lastT){ const h = document.createElement("div"); h.className = "exam-group"; h.textContent = t; l.append(h); lastT = t; }
     const b = document.createElement("button"); b.type = "button"; b.dataset.id = ex.id;
     b.setAttribute("aria-pressed", editing === ex.id ? "true" : "false");
@@ -1578,7 +1600,6 @@ function loadMask(id){
   editing = id;
   const ex = EXAMS.find(e => e.id === id);
   $("mNome").value = ex ? ex.name : ""; $("mProto").value = ex ? ex.proto : "";
-  $("mModalidade").value = ex ? examModality(ex) : "TC";
   $("mVoz").value = ex ? (ex.voz || []).join(", ") : ""; $("mSexo").checked = ex ? !!ex.sexo : false; $("mParecer").checked = ex ? ex.tipo === "parecer" : false;
   $("mTexto").innerHTML = textToEditable(ex ? ex.mask : "TOMOGRAFIA COMPUTADORIZADA DE \nInformações Clínicas\n[<>]\nTécnica de exame\n\nAchados\n[<>]\nConclusão\n1. \nAchados adicionais");
   groupBoxes(ex ? (ex.groups || []) : []);
@@ -1611,7 +1632,7 @@ $("mSave").onclick = async () => {
   const old = maskDocs.find(d => d.id === id);
   try{
     await db.doc("mascaras/" + id).set({
-      name, code: autoCode(name), modalidade: $("mModalidade").value,
+      name, code: autoCode(name),
       proto: $("mProto").value.trim(), sexo: $("mSexo").checked, tipo: $("mParecer").checked ? "parecer" : "laudo",
       voz: $("mVoz").value.split(",").map(v => v.trim()).filter(Boolean),
       mask, groups, criadoEm: old?.criadoEm || new Date().toISOString()
@@ -1761,7 +1782,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && $("examCol
 
 
 /* ================= Campos [x] e listas {a|b} no texto dos achados ================= */
-const FIELD_RE = /\[<>\]|\[[^\[\]<>\n]{1,40}\]|\{[^{}\n]*\|[^{}\n]*\}/g;
+const FIELD_RE = /\[[^\[\]<>\n]{1,40}\]|\{[^{}\n]*\|[^{}\n]*\}/g;
 function nextField(){
   const nodes = sheetTextNodes(sheet), t = nodes.map(n => n.nodeValue).join("");
   const sel = getSelection(), rg = sel.rangeCount && sheet.contains(sel.anchorNode) ? sel.getRangeAt(0) : sheetRange;
@@ -1772,8 +1793,6 @@ function nextField(){
   if (!hit) return false;
   const r = rangeFromOffsets(sheet, hit.index, hit.index + hit[0].length); if (!r) return false;
   sheet.focus({ preventScroll: true }); sel.removeAllRanges(); sel.addRange(r);
-  sheetRange = r.cloneRange();
-  (r.startContainer.parentElement || sheet).scrollIntoView({ block: "nearest" });
   return true;
 }
 sheet.addEventListener("keydown", e => {
@@ -3283,12 +3302,13 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
     style: '<svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12M3.8 3.8l8.4 8.4M12.2 3.8l-8.4 8.4"/></svg>'
   };
   const bar = document.createElement("div"); bar.id = "selbar"; bar.hidden = true;
-  bar.innerHTML = `<button type="button" data-m="fix" title="Corrigir esta palavra e adicionar às correções" aria-label="Corrigir palavra">${ICON.fix}</button><button type="button" data-m="auto" title="Criar autotexto com o trecho selecionado" aria-label="Criar autotexto">${ICON.auto}</button><button type="button" class="cl" data-m="style" title="Ensinar um estilo de escrita ao Claude" aria-label="Ensinar estilo">${ICON.style}</button>`;
+  bar.innerHTML = `<button type="button" tabindex="-1" data-m="fix" title="Corrigir esta palavra e adicionar às correções" aria-label="Corrigir palavra">${ICON.fix}</button><button type="button" tabindex="-1" data-m="auto" title="Criar autotexto com o trecho selecionado" aria-label="Criar autotexto">${ICON.auto}</button><button type="button" tabindex="-1" class="cl" data-m="style" title="Ensinar um estilo de escrita ao Claude" aria-label="Ensinar estilo">${ICON.style}</button>`;
   const box = document.createElement("div"); box.id = "qfix"; box.hidden = true;
-  box.innerHTML = '<span class="qf-lab" id="qfLab"></span><select id="qfSc" hidden aria-label="Vale para"><option value="todos">Todos os exames</option><option value="este">Só este exame</option></select><input type="text" id="qfIn" autocomplete="off" spellcheck="false"><button class="btn primary small" id="qfOk" type="button">Salvar</button><button class="icon-btn" id="qfX" type="button" aria-label="Fechar" title="Fechar (Esc)">×</button>';
+  box.innerHTML = '<div class="qf-row"><span class="qf-lab" id="qfLab"></span><select id="qfSc" hidden aria-label="Vale para"><option value="todos">Todos os exames</option><option value="este">Só este exame</option></select><input type="text" id="qfIn" autocomplete="off" spellcheck="false"><button class="btn primary small" id="qfOk" type="button">Salvar</button><button class="icon-btn" id="qfX" type="button" aria-label="Fechar" title="Fechar (Esc)">×</button></div><div class="qf-sug" id="qfSug" role="listbox" aria-label="Sugestões do banco de laudos" hidden></div>';
   document.body.append(bar, box);
   const inp = box.querySelector("#qfIn"), lab = box.querySelector("#qfLab"), sc = box.querySelector("#qfSc");
-  let rng = null, orig = "", full = "", mode = "";
+  const sugBox = box.querySelector("#qfSug");
+  let rng = null, orig = "", full = "", mode = "", sugs = [], sugAt = -1;
   const hideBar = () => { bar.hidden = true; };
   const hideAll = () => { bar.hidden = true; box.hidden = true; rng = null; };
   const place = (el, rc) => {
@@ -3310,25 +3330,63 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
     box.hidden = true;
     place(bar, r.getBoundingClientRect());
   }
+  // Palavras parecidas (grafia e som) tiradas dos bancos de laudos; sem IA.
+  function renderSug(){
+    sugs = []; sugAt = -1; sugBox.textContent = "";
+    if (mode === "fix"){
+      try{ sugs = ((window.tutuV2 && window.tutuV2.suggest) ? window.tutuV2.suggest(orig) : []).filter(x => x !== orig).slice(0, 5); }catch(e){ sugs = []; }
+    }
+    sugBox.hidden = !sugs.length;
+    if (!sugs.length) return;
+    const cap = document.createElement("span"); cap.className = "qf-cap"; cap.textContent = "Do seu banco de laudos · ↑↓ e Enter"; sugBox.append(cap);
+    sugs.forEach((t, i) => {
+      const b = document.createElement("button"); b.type = "button"; b.setAttribute("role", "option"); b.dataset.i = i; b.textContent = t;
+      b.onclick = () => choose(i); sugBox.append(b);
+    });
+  }
+  function markSug(){
+    [...sugBox.querySelectorAll("button")].forEach((b, i) => { b.setAttribute("aria-selected", String(i === sugAt)); if (i === sugAt) b.scrollIntoView({ block: "nearest" }); });
+  }
+  function choose(i){ if (sugs[i] == null) return; inp.value = sugs[i]; apply(); }
   function open(m){
     if (!rng) return;
     mode = m; const rc = rng.getBoundingClientRect();
     hideBar(); sc.hidden = m !== "style";
-    if (m === "fix"){ lab.textContent = "Corrigir para"; inp.value = orig; inp.placeholder = ""; inp.style.width = "190px"; box.querySelector("#qfOk").textContent = "Salvar"; }
-    else if (m === "auto"){ lab.textContent = "Autotexto:"; inp.value = ""; inp.placeholder = "nome (ex.: apendicectomia)"; inp.style.width = "210px"; box.querySelector("#qfOk").textContent = "Salvar"; }
-    else { lab.textContent = "Estilo"; inp.value = ""; inp.placeholder = "Ex.: escrever sempre assim… / nunca usar…"; inp.style.width = "300px"; box.querySelector("#qfOk").textContent = "Salvar"; }
+    if (m === "fix"){ lab.textContent = "Corrigir para"; inp.value = orig; inp.placeholder = ""; }
+    else if (m === "auto"){ lab.textContent = "Autotexto:"; inp.value = ""; inp.placeholder = "nome (ex.: apendicectomia)"; }
+    else { lab.textContent = "Estilo"; inp.value = ""; inp.placeholder = "Ex.: escrever sempre assim… / nunca usar…"; }
+    renderSug();
     place(box, rc); inp.focus(); inp.select();
   }
+  const barBtns = () => [...bar.querySelectorAll("button")].filter(b => !b.hidden);
+  function backToSheet(){
+    sheet.focus({ preventScroll: true });
+    if (rng){ const sel = getSelection(); sel.removeAllRanges(); sel.addRange(rng.cloneRange()); }
+  }
+  // Teclado: com texto selecionado, seta para baixo entra na barra; setas navegam; Enter aciona; Esc volta à seleção.
+  sheet.addEventListener("keydown", e => {
+    if (e.key !== "ArrowDown" || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || bar.hidden) return;
+    const first = barBtns()[0]; if (!first) return;
+    e.preventDefault(); e.stopPropagation(); first.focus();
+  });
+  bar.addEventListener("keydown", e => {
+    const list = barBtns(), i = list.indexOf(document.activeElement); if (i < 0) return;
+    const go = n => { e.preventDefault(); e.stopPropagation(); list[(n + list.length) % list.length].focus(); };
+    if (e.key === "ArrowRight") go(i + 1); else if (e.key === "ArrowLeft") go(i - 1);
+    else if (e.key === "Home") go(0); else if (e.key === "End") go(list.length - 1);
+    else if (e.key === "Enter" || e.key === " "){ e.preventDefault(); e.stopPropagation(); open(list[i].dataset.m); }
+    else if (e.key === "Escape" || e.key === "ArrowUp"){ e.preventDefault(); e.stopPropagation(); backToSheet(); }
+  });
   bar.addEventListener("mousedown", e => e.preventDefault());
   bar.addEventListener("click", e => { const b = e.target.closest("button[data-m]"); if (b) open(b.dataset.m); });
   sheet.addEventListener("mouseup", () => setTimeout(show, 0));
   sheet.addEventListener("keyup", e => { if (e.shiftKey && e.key.startsWith("Arrow")) show(); });
   sheet.addEventListener("mousedown", hideAll);
   sheet.addEventListener("input", hideAll);
-  addEventListener("scroll", e => { if (e.target && e.target.classList && e.target.classList.contains("sheet-wrap")) hideAll(); }, true);
+  addEventListener("scroll", e => { if (e.target && e.target.classList && (e.target.classList.contains("sheet-wrap") || e.target.id === "v2Center")) hideAll(); }, true);
   document.addEventListener("mousedown", e => { if (!box.hidden && !box.contains(e.target) && !bar.contains(e.target) && !sheet.contains(e.target)) hideAll(); });
   box.addEventListener("mousedown", e => { if (!/^(INPUT|SELECT|OPTION)$/.test(e.target.tagName)) e.preventDefault(); });
-  const close = () => { hideAll(); sheet.focus(); };
+  const close = () => { const r = rng; hideAll(); sheet.focus({ preventScroll: true }); if (r){ const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r.cloneRange()); } };
   box.querySelector("#qfX").onclick = close;
   async function apply(){
     const val = inp.value.trim();
@@ -3344,16 +3402,21 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
     } else if (mode === "auto"){
       let ok = false; try{ ok = await addFrase(val, full); }catch(e){}
       const nome = vnorm(val).replace(/^(frase|auto\s?texto)\s+/, "");
-      hideAll(); setStatus(ok ? `Autotexto "${nome}" salvo. No ditado, diga "autotexto ${nome}".` : "Não consegui salvar o autotexto (a página precisa estar dentro do claude.ai).", ok ? "ok" : "err");
+      hideAll(); sheet.focus({ preventScroll: true }); setStatus(ok ? `Autotexto "${nome}" salvo. No ditado, diga "autotexto ${nome}".` : "Não consegui salvar o autotexto (a página precisa estar dentro do claude.ai).", ok ? "ok" : "err");
     } else {
       const texto = val + (full.length <= 200 ? ` (exemplo do trecho: "${full.replace(/\s+/g, " ")}")` : "");
       let n = 0; try{ n = await addRules([{ texto, exame: sc.value === "este" ? current.id : "todos" }], "estilo"); }catch(e){}
-      hideAll(); setStatus(n ? "Regra de estilo salva (sem usar o Claude). Vale a partir do próximo Gerar laudo." : "Não consegui salvar a regra (a página precisa estar dentro do claude.ai).", n ? "ok" : "err");
+      hideAll(); sheet.focus({ preventScroll: true }); setStatus(n ? "Regra de estilo salva (sem usar o Claude). Vale a partir do próximo Gerar laudo." : "Não consegui salvar a regra (a página precisa estar dentro do claude.ai).", n ? "ok" : "err");
     }
   }
   box.querySelector("#qfOk").onclick = apply;
   inp.addEventListener("keydown", e => {
-    if (e.key === "Enter"){ e.preventDefault(); e.stopPropagation(); apply(); }
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && sugs.length){
+      e.preventDefault(); e.stopPropagation();
+      sugAt = e.key === "ArrowDown" ? Math.min(sugs.length - 1, sugAt + 1) : Math.max(-1, sugAt - 1); markSug();
+    }
+    else if (e.key === "Enter" && sugAt >= 0){ e.preventDefault(); e.stopPropagation(); choose(sugAt); }
+    else if (e.key === "Enter"){ e.preventDefault(); e.stopPropagation(); apply(); }
     else if (e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); close(); }
   });
 })();
@@ -3391,7 +3454,125 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
       value.tabs.every(t => typeof t.id === "string" && !t.id.includes("/") && typeof t.html === "string" && typeof t.examId === "string") &&
       new Set(value.tabs.map(t => t.id)).size === value.tabs.length && value.tabs.some(t => t.id === value.active);
   }
-  const api = { normalize, distance, score, placePalette, validSession };
+  /* Abas: só os 4 exames editados mais recentes ficam no topo (mais a aba ativa); máscara intacta não fica. */
+  function keepTabs(tabs, active, max = 4) {
+    const ids = new Set(tabs.filter(t => t.edited).sort((a, b) => String(b.updated || "").localeCompare(String(a.updated || ""))).slice(0, max).map(t => t.id));
+    ids.add(active);
+    return tabs.filter(t => ids.has(t.id));
+  }
+  /* Sugestões de grafia: palavras do banco parecidas com a selecionada (letras e som). Sem IA. */
+  const phoneKey = word => String(word).toLowerCase().replace(/ç/g, "s").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/ph/g, "f").replace(/ch|sh/g, "x").replace(/lh/g, "1").replace(/nh/g, "2").replace(/qu(?=[ei])/g, "k").replace(/gu(?=[ei])/g, "g")
+    .replace(/sc(?=[ei])|xc(?=[ei])|ss/g, "s").replace(/c(?=[ei])/g, "s").replace(/c/g, "k").replace(/g(?=[ei])/g, "j")
+    .replace(/h/g, "").replace(/w/g, "v").replace(/y/g, "i").replace(/z/g, "s").replace(/u$/, "o").replace(/i$/, "e").replace(/(.)\1+/g, "$1");
+  function buildWordIndex(entries) {
+    return entries.map(([w, n]) => ({ w, n, f: normalize(w), p: phoneKey(w) }));
+  }
+  function suggestWords(word, index, max = 5) {
+    const m = String(word).match(/^([^\p{L}]*)(.*?)([^\p{L}]*)$/u), pre = m[1], core = m[2], post = m[3];
+    const low = core.toLowerCase(), f = normalize(core), p = phoneKey(core);
+    if (low.length < 3) return [];
+    const out = [];
+    for (const c of index) {
+      if (c.w === low || Math.abs(c.f.length - f.length) > 3) continue;
+      const d1 = distance(f, c.f), d2 = distance(p, c.p);
+      const limit = Math.max(1, Math.floor(f.length * 0.34));
+      if (d1 > limit && !(d2 === 0 && d1 <= limit + 2)) continue;
+      out.push({ w: c.w, d: Math.min(d1, d2 + 0.5), n: c.n });
+    }
+    out.sort((a, b) => a.d - b.d || b.n - a.n || a.w.localeCompare(b.w));
+    const cap = /^\p{Lu}/u.test(core) ? (/^\p{Lu}+$/u.test(core) && core.length > 1 ? s => s.toUpperCase() : s => s[0].toUpperCase() + s.slice(1)) : s => s;
+    return out.slice(0, max).map(x => ({ w: pre + cap(x.w) + post, d: x.d }));
+  }
+  function suggestPhrases(text, index, max = 5) {
+    const words = String(text).trim().split(/\s+/).filter(Boolean);
+    if (words.length < 2) return words.length ? suggestWords(words[0], index, max).map(x => x.w) : [];
+    const all = [];
+    words.forEach((w, i) => suggestWords(w, index, 2).forEach(s => all.push({ t: words.map((x, j) => j === i ? s.w : x).join(" "), d: s.d })));
+    all.sort((a, b) => a.d - b.d);
+    return [...new Set(all.map(x => x.t))].slice(0, max);
+  }
+  /* Ctrl+K completar frase: continuação do fim da frase começada, a partir de frases parecidas dos bancos. */
+  function lastSentence(text) {
+    const t = String(text).replace(/\s+/g, " ");
+    let cut = 0;
+    for (const m of t.matchAll(/[.!?]\s+/g)) cut = m.index + m[0].length;
+    return t.slice(cut).replace(/^\s+/, "");
+  }
+  const tokens = s => [...String(s).matchAll(/\S+/g)].map(m => ({ f: normalize(m[0]).replace(/^[^a-z0-9{_]+|[^a-z0-9}_]+$/g, ""), start: m.index, end: m.index + m[0].length })).filter(t => t.f);
+  function buildCompletionIndex(items) {
+    const map = new Map();
+    for (const it of items) {
+      const s = String(typeof it === "string" ? it : it.s).replace(/^[\s*\\•-]+|[\s*\\]+$/g, "").trim(), w = typeof it === "string" ? 1 : (it.w || 1);
+      if (s.length < 15 || s.length > 600) continue;
+      const k = normalize(s), old = map.get(k);
+      if (old) old.w += w; else map.set(k, { s, w, toks: tokens(s) });
+    }
+    return [...map.values()];
+  }
+  function completeSentence(prefix, index, max = 3) {
+    const pt = tokens(prefix).slice(-8).map(t => t.f);
+    if (pt.length < 2) return [];
+    const space = /\s$/.test(prefix);
+    for (let k = pt.length; k >= 2; k--) {
+      const want = pt.slice(-k), hits = new Map();
+      for (const e of index) {
+        const tk = e.toks;
+        for (let i = 0; i + k <= tk.length; i++) {
+          let ok = true;
+          for (let j = 0; j < k; j++) if (tk[i + j].f !== want[j]) { ok = false; break; }
+          if (!ok) continue;
+          let rest = e.s.slice(tk[i + k - 1].end);
+          const stop = rest.match(/^[\s\S]*?[.!?](?=\s|$)/);
+          rest = (stop ? stop[0] : rest).trim();
+          if (rest.length < 4) break;
+          const head = i === 0 || /[.!?]\s*$/.test(e.s.slice(0, tk[i].start));
+          const key = normalize(rest), prev = hits.get(key), score = e.w * (head ? 1.5 : 1);
+          if (prev) prev.score += score; else hits.set(key, { rest, score });
+          break;
+        }
+      }
+      if (hits.size) {
+        return [...hits.values()].sort((a, b) => b.score - a.score || a.rest.length - b.rest.length).slice(0, max)
+          .map(h => (space || /^[,;:.)]/.test(h.rest) ? "" : " ") + h.rest);
+      }
+    }
+    return [];
+  }
+  /* Importar laudos: converte texto colado/arquivo (.md/.txt/.html) para o formato que extractNotasTomografia lê. */
+  function laudosToNotion(raw) {
+    let t = String(raw).replace(/\r/g, "").replace(/^\uFEFF/, "");
+    const dec = s => s.replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, "&");
+    if (/<summary>\s*\d{6,}/i.test(t)) {
+      return t.replace(/<u>/gi, '<span underline="true">').replace(/<\/u>/gi, "</span>").replace(/<\/?(strong|b)>/gi, "**")
+        .replace(/<br\s*\/?>|<\/(p|li|div|h[1-6])>/gi, "\n");
+    }
+    t = t.replace(/<(script|style)[\s\S]*?<\/\1>/gi, "").replace(/<br\s*\/?>|<\/(p|li|div|h[1-6]|tr)>/gi, "\n").replace(/<[^>]+>/g, "");
+    t = dec(t);
+    const SEC = /^(t[eé]cnica(?: de exame)?|achados(?: adicionais)?|conclus[aã]o|impress[aã]o(?: diagn[oó]stica)?|indica[cç][aã]o(?: cl[ií]nica)?|informa[cç][oõ]es cl[ií]nicas|dados cl[ií]nicos)\s*:?\s*(.*)$/i;
+    const reports = []; let cur = null, seenAch = false;
+    const open = () => { cur = []; seenAch = false; reports.push(cur); };
+    for (let line of t.split("\n")) {
+      line = line.replace(/^\s*#{1,6}\s+/, "").replace(/\*\*|__/g, "").replace(/^\s*[-*•]\s+/, "").trim();
+      if (!line) continue;
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(line) || /^\d{6,}/.test(line)) { open(); continue; }   // linha de identificação: só separa, nunca é guardada
+      if (/^tomografia\b/i.test(line) && line.length < 120 && !/[.;]$/.test(line)) {
+        if (!cur || seenAch) open();
+        cur.push("**" + line + "**"); continue;
+      }
+      const sec = line.match(SEC);
+      if (sec && (!sec[2] || /^(t[eé]cnica|achados|conclus|impress)/i.test(sec[1]))) {
+        if (!cur) open();
+        if (/^achados/i.test(sec[1])) seenAch = true;
+        cur.push("**" + sec[1] + "**"); if (sec[2]) cur.push(sec[2]); continue;
+      }
+      if (!cur) open();
+      cur.push(line);
+    }
+    return reports.filter(r => r.length).map(r => "<summary>000000</summary>\n" + r.join("\n") + "\n</details>").join("\n");
+  }
+  const api = { normalize, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
+    lastSentence, buildCompletionIndex, completeSentence, laudosToNotion };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuV2Core = api;
 })(globalThis);
@@ -3444,13 +3625,14 @@ window.tutuSite.appReady = true;
   const top = el("header", { id: "v2Top" });
   top.append(el("span", { class: "v2-brand" }, "Tutu"));
   const tabs = el("nav", { id: "caseTabs", role: "tablist", "aria-label": "Casos abertos" });
-  top.append(tabs, button("+", () => ui.newTab(), { id: "newCaseTab", title: "Novo caso", "aria-label": "Novo caso" }));
+  top.append(tabs, button("+", () => ui.newTab(), { id: "newCaseTab", title: "Novo caso", "aria-label": "Novo caso" }),
+    button("Histórico", () => openHistory(), { id: "histTopBtn", title: "Todos os exames salvos (os 4 mais recentes ficam nas abas)" }));
   const actions = el("div", { class: "v2-top-actions" });
-  actions.append(el("span", { id: "saveState", role: "status" }, "salvando…"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }));
+  actions.append(el("span", { id: "saveState", role: "status" }, "salvo agora"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }));
   move("copiar", actions); $("copiar").textContent = "Copiar laudo";
-  $("copiar").append(el("kbd", {}, "Ctrl ⇧ 1")); top.append(actions);
+  $("copiar").append(el("kbd", {}, "Ctrl C")); top.append(actions);
   const left = ui.left = el("aside", { id: "v2Left", "aria-label": "Máscaras e histórico" });
-  const leftToggle = button("Máscaras · Ctrl [", () => ui.toggleLeft(), { id: "leftToggle", "aria-expanded": "true", title: "Recolher/expandir máscaras · Ctrl+[", "aria-keyshortcuts": "Control+[" });
+  const leftToggle = button("Máscaras · Ctrl E", () => ui.toggleLeft(), { id: "leftToggle", "aria-expanded": "true", title: "Minimizar/restaurar máscaras · Ctrl+E" });
   const leftBody = el("div", { id: "leftBody" });
   left.append(leftToggle, leftBody);
   leftBody.append(el("input", { id: "maskSearch", type: "search", placeholder: "Buscar máscara…", "aria-label": "Buscar máscara" }));
@@ -3472,7 +3654,7 @@ window.tutuSite.appReady = true;
     ui.panels[name] = el("section", { id: "rightPanel" + i, role: "tabpanel", "aria-labelledby": b.id, class: "v2-panel" });
     ui.panels[name].hidden = i !== 0;
   });
-  right.append(button("Recolher · Ctrl ]", () => ui.toggleRight(), { id: "rightToggle", "aria-expanded": "true", title: "Recolher/expandir ferramentas · Ctrl+]", "aria-keyshortcuts": "Control+]" }), rnav, ...Object.values(ui.panels));
+  right.append(button("Recolher · Ctrl ]", () => ui.toggleRight(), { id: "rightToggle", "aria-expanded": "true" }), rnav, ...Object.values(ui.panels));
   const rev = ui.panels.Revisar, ia = ui.panels.IA, learned = ui.panels.Aprendido;
   ["revisar", "alertBox", "status"].forEach(id => move(id, rev)); rev.append(document.querySelector(".review"));
   rev.append($("verBtn").closest(".ver-wrap")); move("undoBtn", rev);
@@ -3496,8 +3678,7 @@ window.tutuSite.appReady = true;
   ui.calculator = key => { openModal("calcModal"); showCalc(key); };
   const footer = el("footer", { id: "v2Footer" });
   const voice = el("div", { id: "voicePill", role: "status", "aria-live": "polite" });
-  voice.append(el("span", { id: "voiceDot", "aria-hidden": "true" }, "●"), el("span", { id: "voiceLabel" }, "Voz · Alt S"));
-  const outline = el("div", { id: "activeOutline", "aria-hidden": "true" }); outline.hidden = true;
+  voice.append(el("span", { id: "voiceDot", "aria-hidden": "true" }, "●"), el("span", { id: "voiceLabel" }, "Voz · Alt S"), button("F1 · Ditar", () => ui.dictate(), { id: "voiceToggle" }));
   const settings = $("setModal"); settings.classList.add("v2-settings"); settings.removeAttribute("aria-modal"); settings.setAttribute("role", "region");
   const settingsExtras = el("div", { class: "v2-settings-extras" });
   settings.querySelector(".calc-body").prepend(settingsExtras);
@@ -3515,7 +3696,7 @@ window.tutuSite.appReady = true;
   hosts.append($("grid"), $("sideRail")); other.append(hosts);
   settings.querySelector(".calc-body").append(other);
   app.replaceChildren(top, left, center, right, footer, settings);
-  document.body.append(voice, outline);
+  document.body.append(voice);
   ui.settings = on => { settings.hidden = !on; app.classList.toggle("settings-open", on); if (on) { renderKeys(); $("setTitle").focus(); } else focusSheet(); ui.updateOutline?.(); };
   $("setTitle").tabIndex = -1; $("setBtn").onclick = () => ui.settings(true);
   const oldOpen = openModal, oldClose = closeModal;
@@ -3526,24 +3707,16 @@ window.tutuSite.appReady = true;
     app.classList.remove("right-mini"); store.set("v2RightMini", "0");
     Object.entries(ui.panels).forEach(([n, p]) => { p.hidden = n !== name; $(p.getAttribute("aria-labelledby")).setAttribute("aria-selected", String(n === name)); });
     $("rightToggle").setAttribute("aria-expanded", "true");
-    $("rightToggle").textContent = "Recolher · Ctrl ]";
   };
   ui.toggleLeft = () => { const mini = app.classList.toggle("left-mini"); store.set("v2LeftMini", mini ? "1" : "0"); leftToggle.setAttribute("aria-expanded", String(!mini)); };
-  ui.toggleRight = () => { const mini = app.classList.toggle("right-mini"); store.set("v2RightMini", mini ? "1" : "0"); $("rightToggle").setAttribute("aria-expanded", String(!mini)); $("rightToggle").textContent = (mini ? "Expandir" : "Recolher") + " · Ctrl ]"; };
+  ui.toggleRight = () => { const mini = app.classList.toggle("right-mini"); store.set("v2RightMini", mini ? "1" : "0"); $("rightToggle").setAttribute("aria-expanded", String(!mini)); };
   ui.compact = () => { app.classList.toggle("compact"); ui.settings(false); ui.positionPalette?.(); };
   ui.night = () => { const night = document.body.classList.toggle("sepia-night"); store.set("v2Night", night ? "1" : "0"); $("nightToggle").textContent = night ? "Sépia dia" : "Sépia noite"; $("nightToggle").setAttribute("aria-pressed", String(night)); $("themeButton").textContent = night ? "☀" : "☾"; };
   top.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
   if (store.get("v2Night") === "1") ui.night();
   if (store.get("v2LeftMini") === "1" || innerWidth < 760) ui.toggleLeft();
   if (store.get("v2RightMini") === "1" || innerWidth < 760) ui.toggleRight();
-  $("maskSearch").oninput = () => {
-    document.querySelectorAll("#exams .exam").forEach(b => b.hidden = !TutuV2Core.score($("maskSearch").value, b.textContent));
-    document.querySelectorAll("#exams .exam-group").forEach(h => {
-      let visible = false;
-      for (let b = h.nextElementSibling; b && !b.classList.contains("exam-group"); b = b.nextElementSibling) if (!b.hidden) visible = true;
-      h.hidden = !visible;
-    });
-  };
+  $("maskSearch").oninput = () => { document.querySelectorAll("#exams .exam").forEach(b => b.hidden = !TutuV2Core.score($("maskSearch").value, b.textContent)); };
   const render = renderExams;
   renderExams = () => { render(); $("maskSearch").oninput(); };
   // Os atalhos antigos de foco/plantão passam a usar as disposições da casca.
@@ -3593,13 +3766,6 @@ window.tutuSite.appReady = true;
   ui.updateOutline = () => {
     const s = getSelection();
     if (s.rangeCount && sheet.contains(s.anchorNode)) sheetRange = s.getRangeAt(0).cloneRange();
-    const r = sheetRange;
-    if (!r || !sheet.contains(r.startContainer) || !settings.hidden) { outline.hidden = true; return; }
-    const node = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
-    const block = node.closest("#laudo > p, #laudo > div, #laudo li") || sheet;
-    const rect = block.getBoundingClientRect(), clip = center.getBoundingClientRect();
-    outline.hidden = rect.bottom < clip.top || rect.top > clip.bottom;
-    Object.assign(outline.style, { top: Math.max(rect.top, clip.top) + "px", left: rect.left - 3 + "px", width: rect.width + 6 + "px", height: Math.max(1, Math.min(rect.bottom, clip.bottom) - Math.max(rect.top, clip.top)) + "px" });
     ui.positionPalette?.();
   };
   document.addEventListener("selectionchange", ui.updateOutline);
@@ -3611,12 +3777,14 @@ window.tutuSite.appReady = true;
 (() => {
   "use strict";
   const ui = window.tutuV2, KEY = "tutu-v2-session";
-  let tabs = [], active = "", restoring = true, writes = Promise.resolve(), revision = 0, reviewBusy = false, copying = false;
+  let tabs = [], active = "", restoring = true, writes = Promise.resolve(), revision = 0, reviewBusy = false, copying = false, listWritten = false;
   const oldConferir = conferir;
   conferir = async (...args) => { reviewBusy = true; try { return await oldConferir(...args); } finally { reviewBusy = false; confCtl = null; } };
   const oldCopy = doCopy;
   doCopy = async () => { if (copying) return; copying = true; try { return await oldCopy(); } finally { copying = false; } };
   const clone = value => structuredClone(value);
+  // Texto fixo: só reescreve se mudou (sem piscar enquanto o médico digita).
+  const setSave = text => { const n = $("saveState"); if (n.textContent !== text) n.textContent = text; };
   const stamp = () => new Date().toISOString();
   const newId = () => dayKey() + "-" + crypto.randomUUID();
   const cleanHTML = () => {
@@ -3633,6 +3801,7 @@ window.tutuSite.appReady = true;
     return { id: active || caseId || newId(), examId: current.id, exam: clone(current), extraExams: clone(extras),
       html: cleanHTML(), modelSig, versions: clone(versions), verPtr, lastGenerated, lastGenTagged, checkedHash,
       confItems: clone(confItems), sexo, copied: caseCopied, started: caseStart || stamp(), updated: stamp(),
+      edited: !modelIntact() || caseCopied,   // máscara intacta e não copiada = não entra no histórico
       caret: caret(), scroll: ui.center.scrollTop, chatTurns: clone(chatTurns), chatHTML: $("chat").innerHTML,
       question: $("pergunta").value, compData: $("compData").value, compTexto: $("compTexto").value,
       review: $("reviewBody").innerHTML, localReview: !!$("confClaude"), status: $("status").textContent };
@@ -3645,25 +3814,32 @@ window.tutuSite.appReady = true;
   function session() { return { version: 2, active, tabs }; }
   function journal() {
     try { localStorage.setItem(KEY, JSON.stringify(session())); return true; }
-    catch (_) { $("saveState").textContent = "falha no salvamento local"; return false; }
+    catch (_) { setSave("falha no salvamento local"); return false; }
+  }
+  // Só os 4 exames editados mais recentes ficam nas abas (+ a ativa); os outros ficam no botão Histórico.
+  function prune() {
+    const kept = TutuV2Core.keepTabs(tabs, active);
+    if (kept.length === tabs.length) return false;
+    tabs = kept; return true;
   }
   function persist() {
     if (restoring || !active) return writes;
-    const item = captureActive(); const localOK = journal(), rev = ++revision;
+    const item = captureActive(); const pruned = prune(), localOK = journal(), rev = ++revision;
+    if (pruned) renderTabs();
     const list = { version: 2, active, ids: tabs.map(t => t.id) };
-    $("saveState").textContent = "salvando…";
     // Captura antes de enfileirar: uma troca de aba não pode mudar o destino da escrita.
-    const plain = laudoTagged();
+    const plain = laudoTagged(), anyEdited = tabs.some(t => t.edited);
     writes = writes.catch(() => {}).then(async () => {
-      await tutuSite.db.doc("casos/" + item.id).set({
+      if (item.edited) await tutuSite.db.doc("casos/" + item.id).set({
         dia: dayKey(new Date(item.started)), inicio: item.started, atualizado: item.updated,
         hora: new Date(item.started).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
         exame: fullName(item.exam), exameId: item.examId, laudo: plain, laudoHtml: item.html,
         achados: "", versoes: item.versions, copiado: item.copied, v2: item
       });
-      await tutuSite.db.doc("config/abas-v2").set(list);
-      if (rev === revision) $("saveState").textContent = "salvo agora";
-    }).catch(() => { if (rev === revision) $("saveState").textContent = localOK ? "salvo localmente · banco indisponível" : "falha ao salvar"; });
+      // Sessão sem nenhum exame editado não deixa rastro no banco (a menos que já haja uma lista a atualizar).
+      if (list.ids.length && (anyEdited || listWritten)) { await tutuSite.db.doc("config/abas-v2").set(list); listWritten = true; }
+      if (rev === revision) setSave("salvo agora");
+    }).catch(() => { if (rev === revision) setSave(localOK ? "salvo localmente · banco indisponível" : "falha ao salvar"); });
     return writes;
   }
   saveCaseNow = persist;
@@ -3678,13 +3854,10 @@ window.tutuSite.appReady = true;
     const nav = $("caseTabs"); nav.replaceChildren();
     for (const t of tabs) {
       const b = ui.button("", () => ui.switchTab(t.id), { role: "tab", "data-case": t.id,
-        "aria-selected": String(t.id === active), "aria-controls": "v2Center", title: fullName(t.exam || { name: t.examId }) + " · Criado em " + (t.started && !isNaN(Date.parse(t.started)) ? new Date(t.started).toLocaleString("pt-BR") : "data não disponível") + " · Ctrl+Tab", tabindex: t.id === active ? "0" : "-1" });
+        "aria-selected": String(t.id === active), "aria-controls": "v2Center", title: fullName(t.exam || { name: t.examId }) + " · Ctrl+Tab", tabindex: t.id === active ? "0" : "-1" });
       const dot = ui.el("i", { class: "case-rec", "aria-label": "Ditado neste caso" }); dot.hidden = ui.voiceCase !== t.id;
       b.append(dot, ui.el("span", {}, shortName(t.exam || { name: t.examId })));
-      const item = ui.el("div", { class: "case-tab" });
-      const del = ui.button("", () => ui.deleteTab(t.id), { class: "case-delete", title: "Excluir laudo", "aria-label": "Excluir laudo: " + shortName(t.exam || { name: t.examId }) });
-      del.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg>';
-      item.append(b, del); nav.append(item);
+      nav.append(b);
     }
     nav.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
@@ -3737,20 +3910,6 @@ window.tutuSite.appReady = true;
     if (!tabs.length) { const ex = current; tabs.push({ id: newId(), examId: ex.id, exam: clone(ex), html: modelSheetHtml(ex), started: stamp(), versions: [] }); }
     load(tabs[Math.min(index, tabs.length - 1)]); persist();
   };
-  ui.deleteTab = id => {
-    const index = tabs.findIndex(t => t.id === id);
-    if (restoring || index < 0 || !canSwitch()) return;
-    if (!confirm("Excluir este laudo e removê-lo do histórico? Esta ação não pode ser desfeita.")) return;
-    persist();
-    const wasActive = id === active;
-    tabs.splice(index, 1);
-    if (!tabs.length) tabs.push({ id: newId(), examId: current.id, exam: clone(current), html: modelSheetHtml(current), started: stamp(), versions: [] });
-    if (wasActive) load(tabs[Math.min(index, tabs.length - 1)]); else renderTabs();
-    writes = writes.catch(() => {}).then(() => tutuSite.db.doc("casos/" + id).delete()).catch(() => {
-      setStatus("Não foi possível excluir o laudo do histórico. Tente novamente pelo histórico.", "err");
-    });
-    persist();
-  };
   const originalSelect = selectExam;
   selectExam = (id, focus, add) => {
     if (restoring) return originalSelect(id, focus, add);
@@ -3765,7 +3924,7 @@ window.tutuSite.appReady = true;
     const id = item.legado ? newId() : item.id;
     if (tabs.some(t => t.id === id)) { ui.switchTab(id); closeModal("histModal"); return; }
     persist();
-    const t = item.v2 || { id, examId: item.exameId || current.id, exam: EXAMS.find(e => e.id === item.exameId) || current,
+    const t = item.v2 ? { edited: true, ...item.v2 } : { id, edited: true, examId: item.exameId || current.id, exam: EXAMS.find(e => e.id === item.exameId) || current,
       html: item.laudoHtml || toHtml(item.laudo || ""), versions: item.versoes || [], started: item.inicio || stamp(), copied: item.copiado };
     tabs.push(t); load(t); persist(); closeModal("histModal");
   };
@@ -3790,19 +3949,20 @@ window.tutuSite.appReady = true;
     await tutuSite.db.collection("mascaras").get();
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(KEY)); } catch (_) {}
+    const index = await tutuSite.db.doc("config/abas-v2").get();
+    listWritten = index.exists;
     if (!TutuV2Core.validSession(saved)) {
-      const index = await tutuSite.db.doc("config/abas-v2").get();
       if (index.exists && Array.isArray(index.data().ids)) {
         const meta = index.data(), rows = await Promise.all(meta.ids.map(id => tutuSite.db.doc("casos/" + id).get()));
         const recovered = rows.filter(r => r.exists && r.data().v2).map(r => r.data().v2);
         saved = { version: 2, active: recovered.some(t => t.id === meta.active) ? meta.active : recovered[0]?.id, tabs: recovered };
       }
     }
-    if (TutuV2Core.validSession(saved)) { tabs = saved.tabs; load(tabs.find(t => t.id === saved.active)); await persist(); }
+    if (TutuV2Core.validSession(saved)) { tabs = saved.tabs.map(t => t.edited === undefined ? { ...t, edited: true } : t); load(tabs.find(t => t.id === saved.active)); await persist(); }
     // Sessão nova: só diário local; o banco recebe o caso na primeira edição (instalação nova fica vazia).
     else { active = caseId || newId(); caseId = active; caseStart = caseStart || stamp(); tabs = [capture()]; restoring = false; renderTabs(); journal(); }
     focusSheet(); ui.updateOutline(); ui.initialized = true;
-  })().catch(error => { $("saveState").textContent = "falha ao recuperar abas"; setStatus(error.message, "err"); throw error; });
+  })().catch(error => { setSave("falha ao recuperar abas"); setStatus(error.message, "err"); throw error; });
 })();
 
 /* Paleta, atalhos editáveis e integração de eventos com a extensão. */
@@ -3811,7 +3971,7 @@ window.tutuSite.appReady = true;
   const ui = window.tutuV2;
   ui.actions = {
     ditar: { label: "Ditar", run: () => ui.dictate() },
-    proximo: { label: "Próximo campo", run: () => nextField() },
+    proximo: { label: "Próximo campo", run: () => { if (!nextField()) sectionNav(1); } },
     normal: { label: "Normal", run: () => { laudoNormal(); ui.panel("Revisar"); } },
     copiar: { label: "Copiar", run: () => $("copiar").click() },
     gerar: { label: "IA", run: () => { ui.panel("IA"); $("gerar").click(); } },
@@ -3843,11 +4003,11 @@ window.tutuSite.appReady = true;
     label.append(select); keyEditor.append(label);
   }
   $("keyList").after(keyEditor);
-  let paletteRange = null, previousFocus = null, results = [], selected = 0, history = [], paletteEpoch = 0;
+  let paletteRange = null, previousFocus = null, results = [], selected = 0, history = [], paletteEpoch = 0, conts = [];
   const pal = ui.el("section", { id: "commandPalette", role: "dialog", "aria-label": "Buscar máscaras e ações" }); pal.hidden = true;
   const input = ui.el("input", { id: "commandSearch", type: "search", role: "combobox", "aria-controls": "commandResults", "aria-expanded": "false", "aria-autocomplete": "list", "aria-label": "Buscar máscaras, autotextos, comandos, calculadoras e histórico", placeholder: "Máscara, autotexto, comando, cálculo…", autocomplete: "off" });
   const list = ui.el("div", { id: "commandResults", role: "listbox" });
-  pal.append(input, list, ui.el("small", {}, "↑ ↓ escolher · Enter executar · Esc voltar")); document.body.append(pal);
+  pal.append(input, list, ui.el("small", {}, "↑ ↓ escolher · Enter ou Tab aceitar · Esc voltar")); document.body.append(pal);
   function restoreRange() {
     if (paletteRange && sheet.contains(paletteRange.startContainer)) { sheetRange = paletteRange.cloneRange(); focusSheet(); }
   }
@@ -3903,11 +4063,13 @@ window.tutuSite.appReady = true;
   }
   function draw() {
     const q = input.value;
-    results = catalog().map((entry, order) => ({ ...entry, order, score: TutuV2Core.score(q, entry.label + " " + entry.kind + " " + entry.search) }))
-      .filter(entry => entry.score > 0).sort((a, b) => b.score - a.score || a.order - b.order).slice(0, 30);
+    // Continuações da frase começada ficam no topo enquanto nada foi digitado; depois, busca normal.
+    const top = q.trim() ? [] : conts.map((text, order) => ({ kind: "Continuação", label: text.trim(), run: () => insert(text), order, search: "", score: 1e3 }));
+    results = top.concat(catalog().map((entry, order) => ({ ...entry, order, score: TutuV2Core.score(q, entry.label + " " + entry.kind + " " + entry.search) }))
+      .filter(entry => entry.score > 0).sort((a, b) => b.score - a.score || a.order - b.order).slice(0, 30));
     selected = Math.max(0, Math.min(selected, results.length - 1)); list.replaceChildren();
     results.forEach((entry, i) => {
-      const b = ui.button("", () => execute(i), { id: "commandOption" + i, role: "option", "aria-selected": String(i === selected), tabindex: "-1" });
+      const b = ui.button("", () => execute(i), { id: "commandOption" + i, role: "option", "aria-selected": String(i === selected), tabindex: "-1", ...(entry.kind === "Continuação" ? { class: "cmd-cont", title: entry.label } : {}) });
       b.append(ui.el("small", {}, entry.kind), ui.el("span", {}, entry.label)); list.append(b);
     });
     if (!results.length) list.append(ui.el("p", {}, "Nenhum resultado."));
@@ -3920,6 +4082,7 @@ window.tutuSite.appReady = true;
     if (!pal.hidden) { close(); return; }
     previousFocus = document.activeElement;
     const s = getSelection(); paletteRange = s.rangeCount && sheet.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : sheetRange?.cloneRange();
+    conts = []; try { conts = ui.continuations?.(paletteRange) || []; } catch (_) {}
     pal.hidden = false; input.value = ""; selected = 0; input.setAttribute("aria-expanded", "true");
     draw(); input.focus({ preventScroll: true }); const epoch = ++paletteEpoch;
     try {
@@ -3971,13 +4134,12 @@ window.tutuSite.appReady = true;
     let action = null;
     if (e.ctrlKey && !e.altKey && k === "k") action = () => ui.openPalette();
     else if (e.ctrlKey && e.shiftKey && !e.altKey && k === "j") action = () => ui.openHUD();
-    else if (!pal.hidden && ["escape", "enter", "arrowdown", "arrowup"].includes(k)) action = () => {
-      if (k === "escape") close(); else if (k === "enter") execute(selected);
+    else if (!pal.hidden && ["escape", "enter", "tab", "arrowdown", "arrowup"].includes(k) && !(k === "tab" && (e.ctrlKey || e.altKey))) action = () => {
+      if (k === "escape") close(); else if (k === "enter" || k === "tab") execute(selected);
       else { selected = (selected + (k === "arrowdown" ? 1 : -1) + results.length) % (results.length || 1); draw(); $("commandOption" + selected)?.scrollIntoView({ block: "nearest" }); }
     };
     else if (e.ctrlKey && !e.altKey && k === "tab") action = () => ui.cycleTabs(e.shiftKey ? -1 : 1);
     else if (e.ctrlKey && !e.altKey && !e.shiftKey && k === "e") action = () => ui.toggleLeft();
-    else if (e.ctrlKey && !e.altKey && (k === "[" || e.code === "BracketLeft")) action = () => ui.toggleLeft();
     else if (e.ctrlKey && !e.altKey && (k === "]" || e.code === "BracketRight")) action = () => ui.toggleRight();
     else if (e.ctrlKey && !e.altKey && k === ",") action = () => ui.settings($("setModal").hidden);
     else if (e.ctrlKey && e.shiftKey && (e.code === "Digit1" || k === "1" || k === "!")) action = () => $("copiar").click();
@@ -4207,4 +4369,995 @@ window.tutuSite.appReady = true;
   window.addEventListener("keydown", e => {
     if (e.key === "F9" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z")) clearTimeout(timer);
   }, true);
+})();
+
+/* V3a: vocabulário automático (itens 7 e 25), substituições aprendidas (10) e correção que vira regra (23).
+   Entrega à extensão, dentro do #voiceConfig: ngramas, vocabFreq, substituicoes. Sem IA, tudo local.
+   Dados no db, coleção "config" (já entra no backup): config/subst-v3 (regras) e config/vocab-v3 (cache). */
+(() => {
+  "use strict";
+  const VERSAO = 1, MAX_BI = 4000, MAX_TRI = 2000, MAX_VOC = 3000;
+  const DOC_REGRAS = "config/subst-v3", DOC_CACHE = "config/vocab-v3";
+  const VZ = {
+    regras: [], pend: {}, bloq: [], hist: [],
+    base: { bi: {}, tri: {}, vf: {} }, cop: { bi: {}, tri: {}, vf: {} }, porExame: {}, sig: "",
+    extra: "", pronto: false
+  };
+  let fila = Promise.resolve();
+  const enfileira = fn => (fila = fila.then(fn, fn).catch(() => {}));
+  const foldS = s => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const dbp = async () => { for (let i = 0; i < 200; i++){ if (typeof db !== "undefined" && db) return db; await new Promise(r => setTimeout(r, 50)); } return null; };
+  const ocioso = fn => new Promise(res => { const run = () => { try{ res(fn()); }catch(e){ res(null); } }; if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2500 }); else setTimeout(run, 50); });
+  const cede = () => new Promise(r => setTimeout(r, 0));
+
+  /* ---------- texto -> segmentos de palavras (sem datas, números, nomes próprios, linhas de identificação) ---------- */
+  function segmentos(texto){
+    const out = [];
+    const t = String(texto || "").replace(/<\/?[bui]>/gi, "").replace(/\{[^}]*\}/g, "\n").replace(/\d{1,4}[\/.-]\d{1,2}[\/.-]\d{1,4}/g, "\n");
+    for (const linha of t.split(/\n+/)){
+      if (/^\s*(paciente|nome|acesso|prontu[aá]rio|data de nascimento|d\.?n\.?\b|m[eé]dico|crm|solicitante)\b/i.test(linha)) continue;
+      for (const frase of linha.split(/[.;:!?()\[\]"]+/)){
+        let seg = [], nome = false;
+        const fecha = () => { if (seg.length) out.push(seg); seg = []; };
+        for (const tok of frase.split(/[^\p{L}\p{N}-]+/u)){
+          if (!tok) continue;
+          if (/\d/.test(tok)){ fecha(); continue; }
+          const w = tok.replace(/^-+|-+$/g, ""); if (!w) continue;
+          const inicial = /^\p{Lu}/u.test(w) && /\p{Ll}/u.test(w);
+          if (inicial && (seg.length || nome)){ fecha(); nome = true; continue; }   // maiúscula no meio da frase: nome próprio (e os nomes seguintes)
+          nome = false;
+          seg.push(w.toLowerCase());
+        }
+        fecha();
+      }
+    }
+    return out;
+  }
+  const soma = (m, k, n = 1) => { m[k] = (m[k] || 0) + n; };
+  function conta(texto, alvo){
+    for (const s of segmentos(texto)){
+      for (let i = 0; i < s.length; i++){
+        if (s[i].length >= 3) soma(alvo.vf, s[i]);
+        if (i + 1 < s.length) soma(alvo.bi, s[i] + " " + s[i + 1]);
+        if (i + 2 < s.length) soma(alvo.tri, s[i] + " " + s[i + 1] + " " + s[i + 2]);
+      }
+    }
+  }
+  const topo = (m, n) => Object.entries(m).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, n);
+  const podar = (alvo, bi, tri, vf) => { alvo.bi = Object.fromEntries(topo(alvo.bi, bi)); alvo.tri = Object.fromEntries(topo(alvo.tri, tri)); alvo.vf = Object.fromEntries(topo(alvo.vf, vf)); };
+  const vazio = () => ({ bi: {}, tri: {}, vf: {} });
+
+  /* ---------- string extra do voiceConfig ---------- */
+  function montaExtra(){
+    const ng = {};
+    const un = (a, b) => { const m = { ...a }; for (const k in b) m[k] = (m[k] || 0) + b[k]; return m; };
+    for (const [k, v] of topo(un(VZ.base.bi, VZ.cop.bi), MAX_BI)) ng[k] = v;
+    for (const [k, v] of topo(un(VZ.base.tri, VZ.cop.tri), MAX_TRI)) ng[k] = v;
+    // termos que o médico corrigiu (campo "para") entram com frequência alta: viram vocabulário na hora (junção "sub galeal" -> "subgaleal", fonética)
+    const usr = new Map();
+    try{ for (const c of correcoes) for (const w of String(c.para || "").toLowerCase().split(/[^a-zà-úç-]+/)) if (w.length >= 5 && /\p{L}/u.test(w)) usr.set(w.replace(/^-+|-+$/g, ""), 99); }catch(e){}
+    const vf = topo(un(VZ.base.vf, VZ.cop.vf), MAX_VOC).filter(([w]) => !usr.has(w)).map(([w, n]) => [w, n]).concat([...usr].map(([w, n]) => [w, n]));
+    const sub = VZ.regras.map(r => ({ de: r.de, para: r.para, ...(r.exame ? { exame: r.exame } : {}) }));
+    VZ.extra = JSON.stringify({ ngramas: ng, vocabFreq: vf, substituicoes: sub }).slice(1, -1);
+  }
+  montaExtra();
+  const publicaOriginal = publishVoice;
+  publishVoice = function(){
+    publicaOriginal.apply(this, arguments);
+    try{
+      const assUsr = correcoes.map(c => c.para).join("|");
+      if (assUsr !== VZ.assUsr){ VZ.assUsr = assUsr; montaExtra(); }   // correção nova ou apagada: refaz o vocabulário já
+      const el = $("voiceConfig"), t = el.textContent;
+      // exameAtual: a extensão aplica as substituições com escopo só no exame aberto
+      const ex = (typeof current !== "undefined" && current && current.id) ? current.id : null;
+      if (t && t.endsWith("}") && !/"ngramas"\s*:/.test(t.slice(0, 40))) el.textContent = t.slice(0, -1) + "," + VZ.extra + ',"exameAtual":' + JSON.stringify(ex) + "}";
+    }catch(e){}
+  };
+  const republica = () => { montaExtra(); try{ publishVoice(); }catch(e){} };
+
+  /* ---------- vocabulário: cálculo único (adiado) + incremental ---------- */
+  const examesTexto = () => { try{ return EXAMS.map(e => [e.id, stripTags(maskOf(e))]); }catch(e){ return []; } };
+  const assinatura = () => { try{ return VERSAO + "|" + BANK.length + "|" + examesTexto().reduce((n, x) => n + x[1].length, 0); }catch(e){ return String(VERSAO); } };
+  async function salvaCache(){
+    const d = await dbp(); if (!d) return;
+    try{ await d.doc(DOC_CACHE).set({ versao: VERSAO, sig: VZ.sig, base: VZ.base, cop: VZ.cop, porExame: VZ.porExame, em: new Date().toISOString() }); }catch(e){}
+  }
+  async function recalcula(){
+    const d = await dbp();
+    const base = vazio(), por = {};
+    const add = async (lista, alvoExame) => {
+      for (let i = 0; i < lista.length; i++){
+        conta(lista[i][1], base);
+        if (alvoExame && lista[i][0]){ const p = por[lista[i][0]] || (por[lista[i][0]] = vazio()); conta(lista[i][1], p); }
+        if (i % 250 === 249) await cede();
+      }
+    };
+    await add(BANK.map(e => [null, String(e[1]) + ". " + String(e[3])]), false);
+    await add(examesTexto(), true);
+    try{
+      const ex = d ? await d.collection("exemplos").get() : { docs: [] };
+      await add(ex.docs.flatMap(x => (x.data().laudos || []).map(t => [x.id, t])), true);
+      const hi = d ? await d.collection("historico").get() : { docs: [] };
+      await add(hi.docs.flatMap(x => (x.data().itens || []).map(i => [i.exameId, i.texto])), true);
+    }catch(e){}
+    podar(base, MAX_BI * 2, MAX_TRI * 2, MAX_VOC * 2);
+    const porExame = {}; for (const id in por) porExame[id] = topo(por[id].vf, 200).map(x => x[0]);
+    VZ.base = base; VZ.cop = vazio(); VZ.porExame = porExame; VZ.sig = assinatura();
+    await salvaCache();
+  }
+  async function carregaVocab(){
+    const d = await dbp();
+    let c = null;
+    try{ const s = d && await d.doc(DOC_CACHE).get(); c = s && s.exists ? s.data() : null; }catch(e){}
+    if (c && c.versao === VERSAO && c.sig === assinatura()){ VZ.base = c.base || vazio(); VZ.cop = c.cop || vazio(); VZ.porExame = c.porExame || {}; VZ.sig = c.sig; }
+    else await ocioso(() => 0).then(() => recalcula());
+    VZ.pronto = true; republica();
+  }
+  /* laudo copiado: soma ao vocabulário sem recalcular tudo */
+  function addLaudo(texto, exameId){
+    return enfileira(async () => {
+      conta(texto, VZ.cop);
+      podar(VZ.cop, MAX_BI, MAX_TRI, MAX_VOC);
+      const id = exameId || (typeof current !== "undefined" && current ? current.id : null);
+      if (id){ const p = vazio(); conta(texto, p); const ja = VZ.porExame[id] || []; const m = {}; ja.forEach((w, i) => m[w] = 1000 - i); for (const w in p.vf) m[w] = (m[w] || 0) + 1000; VZ.porExame[id] = topo(m, 200).map(x => x[0]); }
+      republica(); await salvaCache();
+    });
+  }
+  const learnOriginal = typeof learnFromEdit === "function" ? learnFromEdit : null;
+  if (learnOriginal) learnFromEdit = function(plain){ try{ addLaudo(plain); }catch(e){} return learnOriginal.apply(this, arguments); };
+
+  /* ---------- substituições aprendidas ---------- */
+  // regra nunca mexe em lado, negação ou número (espelha regraInsegura de extensao/texto-v2.js)
+  const TABU = /(^|[^a-z])(direit[oa]s?|esquerd[oa]s?|bilatera(l|is)|lateral|ambos|ambas|nao|nem|sem|ausenc?i?a|ausentes?|inexistente|nenhum[a]?|nega|negam|negativ[oa]|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|duzentos|trezentos|quatrocentos|quinhentos|mil|meio|meia)(?![a-z])/;
+  const regraInsegura = (de, para) => /\d/.test(de + para) || TABU.test(foldS(de + " " + para));
+  const AVISO_INSEGURA = "Regra não criada: mexe em lado/negação/número";
+  const chave = (de, exame) => foldS(de).trim() + "|" + (exame || "");
+  const salvaRegras = async () => {
+    const d = await dbp(); if (!d) return;
+    try{ await d.doc(DOC_REGRAS).set({ versao: VERSAO, regras: VZ.regras, pend: VZ.pend, bloq: VZ.bloq, hist: VZ.hist }); }catch(e){}
+  };
+  const nomeExame = id => { try{ const e = EXAMS.find(x => x.id === id); return e ? shortName(e) : id; }catch(e){ return id; } };
+  const criarRegra = (de, para, exame, auto) => enfileira(() => criarRegraI(de, para, exame, auto)).then(() => true);
+  async function criarRegraI(de, para, exame, auto){
+    de = String(de || "").trim(); para = String(para || "").trim(); exame = exame || "";
+    if (!de || !para || foldS(de) === foldS(para)) return false;
+    if (regraInsegura(de, para)) { aviso(AVISO_INSEGURA); return false; }
+    {
+      const k = chave(de, exame);
+      VZ.regras = VZ.regras.filter(r => chave(r.de, r.exame) !== k);
+      VZ.regras.push({ de, para, ...(exame ? { exame } : {}), auto: !!auto, criadoEm: new Date().toISOString() });
+      VZ.hist = VZ.hist.filter(h => h !== k).concat(k);
+      delete VZ.pend[foldS(de) + ">" + foldS(para)];
+      desenha(); republica(); await salvaRegras();
+    }
+    return true;
+  }
+  function apagarRegra(k, bloqueia){
+    return enfileira(async () => {
+      const r = VZ.regras.find(x => chave(x.de, x.exame) === k); if (!r) return;
+      VZ.regras = VZ.regras.filter(x => x !== r); VZ.hist = VZ.hist.filter(h => h !== k);
+      const pk = foldS(r.de) + ">" + foldS(r.para);
+      delete VZ.pend[pk];
+      if (bloqueia && !VZ.bloq.includes(pk)) VZ.bloq.push(pk);   // regra automática desfeita não volta sozinha
+      desenha(); republica(); await salvaRegras();
+    });
+  }
+  const desfazerUltima = () => { const k = VZ.hist[VZ.hist.length - 1]; if (!k) return Promise.resolve(false); return apagarRegra(k, true).then(() => true); };
+
+  /* correção feita pelo médico: 1ª vez sugere, 3ª vez igual cria sozinha */
+  const registrar = (de, para, exame) => enfileira(() => registrarI(de, para, exame));
+  async function registrarI(de, para, exame){
+    de = String(de || "").trim(); para = String(para || "").trim(); exame = exame || "";
+    if (!de || !para || foldS(de) === foldS(para)) return "ignorada";
+    if (regraInsegura(de, para)) { aviso(AVISO_INSEGURA); return "ignorada"; }
+    const pk = foldS(de) + ">" + foldS(para);
+    const existe = VZ.regras.some(r => foldS(r.de).trim() === foldS(de).trim() && foldS(r.para) === foldS(para) && (!r.exame || r.exame === exame));
+    if (existe || VZ.bloq.includes(pk)) return "ignorada";
+    const p = VZ.pend[pk] || (VZ.pend[pk] = { de, para, n: 0, por: {} });
+    p.n++; p.por[exame] = (p.por[exame] || 0) + 1;
+    if (p.n >= 3){
+      const exs = Object.keys(p.por).filter(Boolean);
+      await criarRegraI(de, para, p.por[""] || exs.length > 1 ? "" : exs[0] || "", true);
+      aviso(`Regra criada: "${de}" → "${para}".`);
+      return "auto";
+    }
+    sugere(de, para, exame);
+    await salvaRegras();
+    return "pendente";
+  }
+  document.addEventListener("laudos-correcao", e => {
+    let d; try{ d = JSON.parse(e.detail); }catch(err){ return; }
+    const exame = (d && d.exame) || (typeof current !== "undefined" && current ? current.id : "");
+    registrar(d && d.de, d && d.para, exame);
+  });
+
+  /* ---------- interface pequena ---------- */
+  const css = document.createElement("style");
+  css.textContent = `#v3Sugestao{position:fixed;left:16px;bottom:56px;z-index:60;max-width:min(440px,calc(100vw - 32px));background:var(--paper,#fffaf0);color:var(--ink,#2b2118);border:1px solid var(--line,#c9b999);border-radius:8px;padding:8px 10px;box-shadow:0 4px 18px rgba(0,0,0,.18);font-size:13px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+#v3Sugestao[hidden]{display:none}#v3Sugestao button,#v3Subst button{font:inherit;font-size:12px;cursor:pointer}
+#v3Subst{margin:10px 0}#v3Subst ul{list-style:none;margin:4px 0;padding:0}#v3Subst li{display:flex;gap:8px;align-items:center;padding:2px 0;font-size:13px}
+#v3Subst li .k{font-weight:600}#v3Subst li .esc{opacity:.7;font-size:12px}#v3Subst li.empty{opacity:.7}`;
+  document.head.append(css);
+  const sug = document.createElement("div"); sug.id = "v3Sugestao"; sug.hidden = true; sug.setAttribute("role", "status");
+  document.body.append(sug);
+  let sugT = null;
+  function fechaSug(){ sug.hidden = true; clearTimeout(sugT); }
+  function aviso(t){ sug.textContent = t; sug.hidden = false; clearTimeout(sugT); sugT = setTimeout(fechaSug, 6000); }
+  function sugere(de, para, exame){
+    sug.textContent = "";
+    const t = document.createElement("span"); t.textContent = `Sempre trocar "${de}" por "${para}"?`; sug.append(t);
+    const b = (rotulo, fn) => { const x = document.createElement("button"); x.type = "button"; x.className = "btn small"; x.textContent = rotulo; x.onclick = () => { fn(); fechaSug(); }; sug.append(x); };
+    if (exame) b("Neste exame", () => criarRegra(de, para, exame, false));
+    b("Em todos", () => criarRegra(de, para, "", false));
+    b("Agora não", () => {});
+    sug.hidden = false; clearTimeout(sugT); sugT = setTimeout(fechaSug, 15000);
+  }
+  const caixa = document.createElement("div"); caixa.id = "v3Subst";
+  caixa.innerHTML = `<span class="label">Substituições aprendidas</span>
+<p class="voz-help" style="margin:2px 0">Trocas que o ditado aplica sozinho. Nascem de correções suas: sugestão na 1ª vez, automática na 3ª igual.</p>
+<ul id="v3SubstList"></ul><div class="bar"><button class="btn small" id="v3Desfaz" type="button">Desfazer a última</button><span class="voz-msg" id="v3SubstMsg" role="status"></span></div>`;
+  function desenha(){
+    const ul = $("v3SubstList"); if (!ul) return;
+    ul.textContent = "";
+    if (!VZ.regras.length){ const li = document.createElement("li"); li.className = "empty"; li.textContent = "Nenhuma substituição ainda."; ul.append(li); }
+    VZ.regras.forEach(r => {
+      const li = document.createElement("li");
+      const k = document.createElement("span"); k.className = "k"; k.textContent = r.de;
+      const p = document.createElement("span"); p.textContent = "→ " + r.para;
+      const e = document.createElement("span"); e.className = "esc"; e.textContent = (r.exame ? nomeExame(r.exame) : "todos os exames") + (r.auto ? " · automática" : "");
+      const x = document.createElement("button"); x.type = "button"; x.className = "btn small"; x.textContent = "Apagar"; x.setAttribute("aria-label", "Apagar substituição " + r.de);
+      x.onclick = () => apagarRegra(chave(r.de, r.exame), r.auto);
+      li.append(k, p, e, x); ul.append(li);
+    });
+    $("v3Desfaz").disabled = !VZ.hist.length;
+  }
+  try{
+    const corpo = document.querySelector("#setModal .calc-body");
+    const antes = $("legacyTools");
+    if (corpo) corpo.insertBefore(caixa, antes && antes.parentNode === corpo ? antes : null);
+    $("v3Desfaz").onclick = async () => { const ok = await desfazerUltima(); $("v3SubstMsg").textContent = ok ? "Última substituição desfeita." : "Nada para desfazer."; };
+    desenha();
+  }catch(e){}
+
+  /* ---------- início ---------- */
+  async function carregaRegras(){
+    const d = await dbp();
+    try{
+      const s = d && await d.doc(DOC_REGRAS).get();
+      const v = s && s.exists ? s.data() : null;
+      if (v){ VZ.regras = Array.isArray(v.regras) ? v.regras : []; VZ.pend = v.pend && typeof v.pend === "object" ? v.pend : {}; VZ.bloq = Array.isArray(v.bloq) ? v.bloq : []; VZ.hist = Array.isArray(v.hist) ? v.hist : []; }
+    }catch(e){}
+    desenha(); republica();
+  }
+  const ready = (async () => { await carregaRegras(); await new Promise(r => setTimeout(r, 300)); await carregaVocab(); await fila; })();
+  window.tutuVocab = {
+    ready, whenIdle: () => fila, addLaudo, criarRegra, desfazerUltima, registrar,
+    apagar: (de, exame) => apagarRegra(chave(de, exame), false),
+    regras: () => VZ.regras.map(r => ({ ...r })), porExame: id => (VZ.porExame[id] || []).slice(),
+    recalcula: () => enfileira(async () => { await recalcula(); republica(); })
+  };
+})();
+
+/* Voz na página (lote V3b): estado do microfone, provisório, baixa confiança, alerta de lado/negação/medida,
+   campos de autotexto, treino ampliado com conjunto reservado e painel "minha voz melhorou?".
+   Escuta os eventos da extensão (laudos-mic, laudos-provisorio, laudos-final); não altera o texto do laudo,
+   salvo no botão "voltar ao original". Sem IA, sem rede. */
+(() => {
+  "use strict";
+  const norm = s => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+  /* ---------- funções puras: alerta de lado, negação e medida ---------- */
+  const obj = o => Object.assign(Object.create(null), o);
+  const LADOS = obj({ direito: "D", direita: "D", direitos: "D", direitas: "D", esquerdo: "E", esquerda: "E", esquerdos: "E", esquerdas: "E",
+    bilateral: "B", bilaterais: "B", bilateralmente: "B" });
+  const NEGS = new Set(["nao", "sem", "ausencia", "ausente", "ausentes", "nenhum", "nenhuma"]);
+  const NUM = obj({ zero: 0, um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, onze: 11,
+    doze: 12, treze: 13, catorze: 14, quatorze: 14, quinze: 15, dezesseis: 16, dezessete: 17, dezoito: 18, dezenove: 19, vinte: 20, trinta: 30,
+    quarenta: 40, cinquenta: 50, sessenta: 60, setenta: 70, oitenta: 80, noventa: 90, cem: 100, cento: 100 });
+  const UNID = obj({ mm: "mm", milimetro: "mm", milimetros: "mm", cm: "cm", centimetro: "cm", centimetros: "cm", ml: "ml", mililitro: "ml", mililitros: "ml",
+    uh: "uh", hu: "uh" });
+  const isDigits = t => /^\d/.test(t);
+  // Lê "valor" (dígitos ou número por extenso, com "e" e "vírgula"); devolve {valor, usados} ou null.
+  function lerNumero(tk, i) {
+    let val, n = 1;
+    if (isDigits(tk[i])) val = parseFloat(tk[i].replace(",", "."));
+    else if (tk[i] in NUM) {
+      // "um/uma" só é número com vírgula ou unidade ("uma vírgula cinco", "um cm"); senão é artigo.
+      if (NUM[tk[i]] === 1 && tk[i + 1] !== "virgula" && !UNID[tk[i + 1]]) return null;
+      val = NUM[tk[i]];
+      if (val >= 20 && val < 100 && tk[i + 1] === "e" && tk[i + 2] in NUM && NUM[tk[i + 2]] > 0 && NUM[tk[i + 2]] < 10) { val += NUM[tk[i + 2]]; n = 3; }
+    } else return null;
+    if (tk[i + n] === "virgula" && tk[i + n + 1] !== undefined && (isDigits(tk[i + n + 1]) || tk[i + n + 1] in NUM)) {
+      const dec = isDigits(tk[i + n + 1]) ? tk[i + n + 1].replace(/\D.*$/, "") : String(NUM[tk[i + n + 1]]);
+      val = parseFloat(String(val) + "." + dec); n += 2;
+    }
+    return { valor: val, usados: n };
+  }
+  function medidas(texto) {
+    const tk = norm(texto).match(/\d+(?:[.,]\d+)?|[a-z]+/g) || [], out = [];
+    for (let i = 0; i < tk.length;) {
+      const r = lerNumero(tk, i);
+      if (!r) { i++; continue; }
+      i += r.usados;
+      const un = UNID[tk[i]] || "";
+      if (un) i++;
+      out.push({ k: String(r.valor) + un, w: String(r.valor).replace(".", ",") + (un ? " " + un : "") });
+    }
+    return out;
+  }
+  const lados = t => (norm(t).match(/[a-z]+/g) || []).filter(w => w in LADOS).map(w => ({ k: LADOS[w], w }));
+  const negs = t => (norm(t).match(/[a-z]+/g) || []).filter(w => NEGS.has(w)).map(w => ({ k: "neg", w }));
+  function dif(a, b) {
+    const bag = new Map(); for (const x of a) bag.set(x.k, (bag.get(x.k) || 0) + 1);
+    const added = [];
+    for (const x of b) { if (bag.get(x.k) > 0) bag.set(x.k, bag.get(x.k) - 1); else added.push(x.w); }
+    const used = new Map(); for (const x of b) used.set(x.k, (used.get(x.k) || 0) + 1);
+    const removed = [];
+    for (const x of a) { if (used.get(x.k) > 0) used.set(x.k, used.get(x.k) - 1); else removed.push(x.w); }
+    return { removed, added };
+  }
+  // Compara o texto final com o original reconhecido; devolve [{tipo, de, para}] (vazio = nada a avisar).
+  function riscos(texto, original) {
+    if (!texto || !original || norm(texto).trim() === norm(original).trim()) return [];
+    const out = [];
+    for (const [tipo, fn] of [["lado", lados], ["negação", negs], ["medida", medidas]]) {
+      const d = dif(fn(original), fn(texto));
+      if (d.removed.length || d.added.length) out.push({ tipo, de: d.removed.join(", "), para: d.added.join(", ") });
+    }
+    return out;
+  }
+
+  /* ---------- estatística semanal (item 24) ---------- */
+  function semanaKey(d = new Date()) {
+    const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())), dia = t.getUTCDay() || 7;
+    t.setUTCDate(t.getUTCDate() + 4 - dia);
+    const y = t.getUTCFullYear(), w = Math.ceil(((t - Date.UTC(y, 0, 1)) / 864e5 + 1) / 7);
+    return y + "-S" + String(w).padStart(2, "0");
+  }
+  const taxa = w => (w && w.palavras > 0 ? (w.correcoes || 0) / w.palavras * 100 : null);
+  function serie(semanas, n = 8) {
+    return Object.keys(semanas || {}).sort().slice(-n).map(k => ({ semana: k, palavras: semanas[k].palavras || 0, correcoes: semanas[k].correcoes || 0, taxa: taxa(semanas[k]) }));
+  }
+  function veredito(pts) {
+    const v = pts.filter(p => p.taxa !== null && p.palavras >= 100);
+    if (v.length < 2) return "Ainda poucos dados: dite alguns laudos com a extensão ligada (mínimo de 100 palavras em 2 semanas).";
+    const a = v[0].taxa, b = v[v.length - 1].taxa;
+    if (b < a * 0.9) return `Melhorou: de ${a.toFixed(1).replace(".", ",")} para ${b.toFixed(1).replace(".", ",")} correções por 100 palavras.`;
+    if (b > a * 1.1) return `Mais correções que antes: de ${a.toFixed(1).replace(".", ",")} para ${b.toFixed(1).replace(".", ",")} por 100 palavras.`;
+    return `Estável: cerca de ${b.toFixed(1).replace(".", ",")} correções por 100 palavras.`;
+  }
+
+  if (typeof module !== "undefined" && module.exports) { module.exports = { riscos, medidas, semanaKey, taxa, serie, veredito }; return; }
+  const ui = window.tutuV2;
+  const parse = e => { try { return typeof e.detail === "string" ? JSON.parse(e.detail) : (e.detail || null); } catch (_) { return null; } };
+  const el = ui.el;
+  const pill = document.getElementById("voicePill");
+
+  const style = el("style", { id: "v3VozStyle" });
+  style.textContent = `
+    #v3Pilha { position:fixed; bottom:104px; left:50%; transform:translateX(-50%); width:max-content; max-width:min(560px,calc(100vw - 24px)); display:flex; flex-direction:column; align-items:center; gap:6px; z-index:8; pointer-events:none; }
+    body:has(#tutuApp.compact) #v3Pilha { left:auto; right:14px; transform:none; max-width:410px; align-items:flex-end; }
+    #v3Provisorio { margin:0; padding:4px 12px; border-radius:12px; background:var(--panel); border:1px dashed var(--line); color:var(--muted); font-style:italic; font-size:12.5px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #v3Aviso { pointer-events:auto; box-sizing:border-box; padding:7px 10px; border-radius:12px; background:var(--p-yellow); border:1px solid var(--line); color:var(--text); font-size:12px; max-width:100%; display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; box-shadow:0 4px 14px #0002; }
+    #v3Aviso b { font-weight:600; } #v3Aviso q { font-style:normal; }
+    #v3Aviso .v3-trecho { flex-basis:100%; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    #v3Nivel { width:38px; height:6px; border-radius:3px; background:var(--line); overflow:hidden; display:inline-block; }
+    #v3Nivel i { display:block; height:100%; width:0; background:var(--ok); }
+    #voicePill[data-mic="off"] #v3Nivel, #voicePill:not([data-mic]) #v3Nivel { display:none; }
+    #voicePill[data-mic="pausado"] #voiceDot { color:var(--warn); }
+    #v3CamposChip { font-size:11px; padding:1px 8px; border-radius:20px; background:var(--p-yellow); }
+    ::highlight(v3-baixa) { text-decoration:underline dotted; text-decoration-color:var(--warn,#937122); text-decoration-thickness:1.5px; text-underline-offset:3px; }
+    ::highlight(v3-campo) { background-color:var(--p-yellow,#f5e8c4); }
+    #v3Painel { margin-top:10px; } #v3Painel summary { cursor:pointer; font-weight:600; }
+    #v3Painel svg { width:100%; height:auto; display:block; } #v3Painel .v3-n { font-size:12px; color:var(--muted); margin:4px 0; }
+    #v3MedirBtn { margin-left:8px; }`;
+  document.head.append(style);
+
+  const pilha = el("div", { id: "v3Pilha" });
+  const prov = el("p", { id: "v3Provisorio", "aria-hidden": "true" }); prov.hidden = true;
+  const aviso = el("div", { id: "v3Aviso", role: "status" }); aviso.hidden = true;
+  pilha.append(prov, aviso);
+  document.body.append(pilha);
+
+  /* ---------- data-caso-id no editor ---------- */
+  let casoAnterior = "";
+  function syncCaso() {
+    const id = ui.activeId?.() || "";
+    if (id) sheet.setAttribute("data-caso-id", id); else sheet.removeAttribute("data-caso-id");
+    if (id !== casoAnterior) { casoAnterior = id; limparBaixas(); esconderAviso(); esconderProv(); }
+    pintarCampos();
+  }
+
+  /* ---------- estado do microfone ---------- */
+  const nivelBox = el("span", { id: "v3Nivel", "aria-hidden": "true" }); nivelBox.append(el("i"));
+  $("voiceLabel").after(nivelBox);
+  document.addEventListener("laudos-mic", e => {
+    const d = parse(e); if (!d) return;
+    const rec = !!d.on && !d.paused;
+    pill.classList.toggle("recording", rec);
+    pill.dataset.mic = !d.on ? "off" : d.paused ? "pausado" : "ligado";
+    let txt = !d.on ? "Voz · Alt S" : d.paused ? "Ditado pausado" : "Ditando na folha";
+    if (d.aviso) txt += " · " + d.aviso;
+    $("voiceLabel").textContent = txt; pill.title = d.aviso || "";
+    let n = Number(d.nivel); if (!isFinite(n)) n = 0; if (n > 1) n /= 100;
+    nivelBox.firstChild.style.width = Math.round(Math.max(0, Math.min(1, n)) * 100) + "%";
+    nivelBox.dataset.nivel = String(Math.round(Math.max(0, Math.min(1, n)) * 100));
+    ui.voiceCase = rec ? ui.activeId() : null; ui.renderTabs?.();
+    if (!d.on) esconderProv();
+  });
+
+  /* ---------- provisório em cinza (item 20) ---------- */
+  let provTimer = null;
+  function esconderProv() { clearTimeout(provTimer); prov.hidden = true; prov.textContent = ""; if (ui.voiceState) { ui.voiceState.interim = ""; ui.updateHUD?.(); } }
+  document.addEventListener("laudos-provisorio", e => {
+    const d = parse(e); if (!d) return;
+    const texto = String(d.texto || "").trim();
+    if (!texto) { esconderProv(); return; }
+    const fora = d.destino?.caso && d.destino.caso !== ui.activeId();
+    prov.textContent = (fora ? "em outra aba · " : "") + texto; prov.hidden = false;
+    ui.voiceState = { caseId: d.destino?.caso || ui.activeId(), interim: texto }; ui.updateHUD?.();
+    clearTimeout(provTimer); provTimer = setTimeout(esconderProv, 8000);
+  });
+
+  /* ---------- localizar texto na folha ---------- */
+  function achar(str) {
+    str = String(str || "").trim(); if (!str) return null;
+    const full = sheetTextNodes(sheet).map(n => n.nodeValue).join(""), i = full.lastIndexOf(str);
+    return i < 0 ? null : { i, r: rangeFromOffsets(sheet, i, i + str.length), str };
+  }
+
+  /* ---------- baixa confiança (item 15): CSS Custom Highlight, sem mexer no DOM/texto copiado ---------- */
+  let baixas = [];
+  const hlOK = typeof Highlight !== "undefined" && !!CSS.highlights;
+  function repintarBaixas() { if (hlOK) { if (baixas.length) CSS.highlights.set("v3-baixa", new Highlight(...baixas.map(b => b.r))); else CSS.highlights.delete("v3-baixa"); } }
+  function limparBaixas() { baixas = []; repintarBaixas(); }
+  function marcarBaixas(texto, palavras) {
+    const base = achar(texto); if (!base || !palavras?.length) return false;
+    const full = sheetTextNodes(sheet).map(n => n.nodeValue).join(""), alvo = full.slice(base.i, base.i + base.str.length).toLowerCase();
+    for (const p of [...new Set(palavras.map(x => String(x).toLowerCase().trim()).filter(Boolean))]) {
+      const re = new RegExp("(?<![\\p{L}\\p{N}])" + p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\p{L}\\p{N}])", "gu");
+      let m; while ((m = re.exec(alvo))) {
+        const r = rangeFromOffsets(sheet, base.i + m.index, base.i + m.index + p.length);
+        if (r) baixas.push({ r, w: p });
+      }
+    }
+    repintarBaixas(); return true;
+  }
+  ui.voz3 = {
+    riscos, medidas, semanaKey, serie, veredito,
+    destaques: () => baixas.map(b => b.r.toString()),
+    avisoAtivo: () => !aviso.hidden
+  };
+  // Some ao editar (a palavra mudou) e ao clicar nela.
+  sheet.addEventListener("input", () => {
+    const antes = baixas.length;
+    baixas = baixas.filter(b => !b.r.collapsed && b.r.toString().toLowerCase() === b.w);
+    if (baixas.length !== antes) repintarBaixas();
+  });
+  sheet.addEventListener("click", () => {
+    const s = getSelection(); if (!baixas.length || !s.rangeCount) return;
+    const rg = s.getRangeAt(0), antes = baixas.length;
+    baixas = baixas.filter(b => { try { return !(rg.compareBoundaryPoints(Range.END_TO_START, b.r) <= 0 && rg.compareBoundaryPoints(Range.START_TO_END, b.r) >= 0); } catch (_) { return true; } });
+    if (baixas.length !== antes) repintarBaixas();
+  });
+
+  /* ---------- alerta de lado/negação/medida e voltar ao original (item 16) ---------- */
+  function esconderAviso() { clearTimeout(avisoTimer); aviso.hidden = true; aviso.replaceChildren(); }
+  let avisoTimer = null;
+  function mostrarAviso(lista, texto, original) {
+    aviso.replaceChildren();
+    aviso.append(el("b", {}, "Conferir:"));
+    for (const r of lista) {
+      const s = el("span"); s.append(document.createTextNode(r.tipo + " "));
+      if (r.de) { s.append(el("q", {}, "“" + r.de + "”")); s.append(document.createTextNode(r.para ? " → " : " removido")); }
+      else s.append(document.createTextNode("acrescentado "));
+      if (r.para) s.append(el("q", {}, "“" + r.para + "”"));
+      aviso.append(s);
+    }
+    aviso.append(el("span", { class: "v3-trecho" }, "Trecho: " + texto.trim()));
+    aviso.append(ui.button("Voltar ao original", () => voltar(texto, original), { id: "v3Voltar" }),
+      ui.button("Manter", esconderAviso, { id: "v3Manter" }));
+    aviso.hidden = false; clearTimeout(avisoTimer); avisoTimer = setTimeout(esconderAviso, 25000);
+  }
+  function voltar(texto, original) {
+    const f = achar(texto);
+    if (!f || !f.r) { esconderAviso(); setStatus("Trecho não encontrado na folha; nada foi alterado."); return; }
+    try { clearTimeout(editVerTimer); pushVersion("Antes de voltar ao original"); } catch (_) {}
+    limparBaixas();
+    sheet.focus({ preventScroll: true }); const s = getSelection(); s.removeAllRanges(); s.addRange(f.r);
+    document.execCommand("insertText", false, String(original).trim());
+    try { clearTimeout(editVerTimer); pushVersion("Voltou ao original"); } catch (_) {}
+    esconderAviso(); setStatus("Trecho voltou ao texto original reconhecido.", "ok");
+  }
+
+  /* ---------- estatística de uso (item 24) ---------- */
+  let usoCache = null, pend = { palavras: 0, correcoes: 0 }, flushTimer = null, fila = Promise.resolve();
+  const dbx = () => window.tutuSite?.db;
+  function somar(palavras, correcoes) {
+    pend.palavras += palavras; pend.correcoes += correcoes;
+    clearTimeout(flushTimer); flushTimer = setTimeout(gravarUso, 1500);
+  }
+  function gravarUso() {
+    const p = pend; pend = { palavras: 0, correcoes: 0 };
+    if (!p.palavras && !p.correcoes || !dbx()) return fila;
+    fila = fila.catch(() => {}).then(async () => {
+      const ref = dbx().doc("treino/uso"), snap = await ref.get();
+      const semanas = snap.exists && snap.data().semanas ? { ...snap.data().semanas } : {}, k = semanaKey();
+      const w = semanas[k] || { palavras: 0, correcoes: 0 };
+      semanas[k] = { palavras: w.palavras + p.palavras, correcoes: w.correcoes + p.correcoes };
+      for (const old of Object.keys(semanas).sort().slice(0, -52)) delete semanas[old];
+      await ref.set({ semanas });
+    }).catch(() => {});
+    return fila;
+  }
+  ui.voz3.gravar = gravarUso;
+  document.addEventListener("laudos-correcao", () => somar(0, 1));
+
+  document.addEventListener("laudos-final", e => {
+    const d = parse(e); if (!d) return;
+    esconderProv();
+    const texto = String(d.texto || ""), original = String(d.original || "");
+    somar(texto.split(/\s+/).filter(Boolean).length, 0);
+    const alvoCaso = d.destino?.caso;
+    if (alvoCaso && alvoCaso !== ui.activeId()) {
+      const lista = riscos(texto, original);
+      if (lista.length) { mostrarAviso(lista, "(em outra aba) " + texto, original); aviso.querySelector("#v3Voltar").hidden = true; }
+      return;
+    }
+    const lista = riscos(texto, original);
+    const tentar = (n) => {
+      const ok = d.baixas?.length ? marcarBaixas(texto, d.baixas) : true;
+      if (!ok && n < 3) setTimeout(() => tentar(n + 1), 120 * (n + 1));
+    };
+    tentar(0);
+    if (lista.length) mostrarAviso(lista, texto, original); else esconderAviso();
+  });
+
+  /* ---------- campos de autotexto [___] (item 19) ---------- */
+  // Tab e F2 já avançam (nextField, 50-interface.js); aqui: Shift+Tab volta, campos ficam destacados e contados.
+  // O campo fica selecionado: a próxima fala (ou digitação) o substitui.
+  const campoRe = () => new RegExp(FIELD_RE.source, "g");
+  function prevField() {
+    const t = sheetTextNodes(sheet).map(n => n.nodeValue).join(""), re = campoRe(), all = [];
+    let m; while ((m = re.exec(t))) all.push(m);
+    if (!all.length) return false;
+    const s = getSelection(), rg = s.rangeCount && sheet.contains(s.anchorNode) ? s.getRangeAt(0) : sheetRange;
+    const from = rg && sheet.contains(rg.startContainer) ? offsetOf(sheet, rg.startContainer, rg.startOffset) : t.length;
+    const hit = [...all].reverse().find(x => x.index + x[0].length <= from) || all[all.length - 1];
+    const r = rangeFromOffsets(sheet, hit.index, hit.index + hit[0].length); if (!r) return false;
+    sheet.focus({ preventScroll: true }); s.removeAllRanges(); s.addRange(r); return true;
+  }
+  sheet.addEventListener("keydown", e => {
+    if (e.key === "Tab" && e.shiftKey && !e.ctrlKey && !e.altKey && prevField()) e.preventDefault();
+  });
+  ui.actions.anterior = { label: "Campo anterior", run: () => prevField() };
+  const chip = el("span", { id: "v3CamposChip" }); chip.hidden = true; pill.append(chip);
+  let pintando = false;
+  function pintarCampos() {
+    if (pintando) return; pintando = true;
+    requestAnimationFrame(() => {
+      pintando = false;
+      const t = sheetTextNodes(sheet).map(n => n.nodeValue).join(""), re = campoRe(), rs = [];
+      let m; while ((m = re.exec(t))) { const r = rangeFromOffsets(sheet, m.index, m.index + m[0].length); if (r) rs.push(r); }
+      if (hlOK) { if (rs.length) CSS.highlights.set("v3-campo", new Highlight(...rs)); else CSS.highlights.delete("v3-campo"); }
+      chip.hidden = !rs.length; chip.textContent = rs.length + (rs.length === 1 ? " campo · Tab" : " campos · Tab");
+      ui.voz3.campos = rs.length;
+    });
+  }
+  new MutationObserver(pintarCampos).observe(sheet, { childList: true, subtree: true, characterData: true });
+  ui.voz3.pintarCampos = pintarCampos;
+
+  /* ---------- treino ampliado + conjunto reservado (item 22) ---------- */
+  const h32 = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return h >>> 0; };
+  const reservada = t => h32(t) % 5 === 0;
+  const RESERVA = TRAIN_SENTS.filter(reservada).slice(0, 100);
+  const EXTRAS = (() => {
+    const base = new Set(TRAIN_SENTS), seen = new Set(), out = [];
+    for (const e of BANK) for (const s of String(e[3]).split(/(?<=[.])\s+|\n/)) {
+      const t = s.trim().replace(/\s+/g, " "), w = t.split(" ");
+      if (w.length < 4 || w.length > 30 || /[\[\]{}_<>]|\d{3,}/.test(t) || base.has(t) || seen.has(t) || reservada(t)) continue;
+      seen.add(t); out.push(t);
+      if (out.length >= 3000) return out;
+    }
+    return out;
+  })();
+  const trainShuffleOrig = trainShuffle;
+  trainShuffle = () => {
+    const usadas = trainUsadas(), lista = trainShuffleOrig().filter(t => !reservada(t));
+    const mais = EXTRAS.filter(t => !lista.includes(t)).sort((a, b) => (usadas.has(hashText(a)) - usadas.has(hashText(b))) || (Math.random() - 0.5));
+    return lista.concat(mais.slice(0, Math.max(0, 40 - lista.length)));
+  };
+  ui.voz3.treino = { reserva: RESERVA.length, extras: EXTRAS.length, reservada };
+  let medindo = false;
+  const autoOrig = trainAutoLearn, saveOrig = saveTrainStats;
+  trainAutoLearn = b => (medindo ? Promise.resolve() : autoOrig(b));
+  saveTrainStats = () => (medindo ? salvarMedicao() : saveOrig());
+  async function salvarMedicao() {
+    if (!dbx() || !trainWords.tot) return;
+    try {
+      const ref = dbx().doc("treino/medicoes"), snap = await ref.get();
+      const itens = snap.exists && Array.isArray(snap.data().itens) ? snap.data().itens.slice(-99) : [];
+      itens.push({ data: new Date().toISOString(), palavras: trainWords.tot, acerto: Math.round(trainWords.ok / trainWords.tot * 100) });
+      await ref.set({ itens });
+      $("trainProg").textContent = `Medição concluída · acerto ${itens[itens.length - 1].acerto}% em ${trainWords.tot} palavras (não gerou correções)`;
+      if (painel.open) desenharPainel();
+    } catch (_) {}
+  }
+  function medir() {
+    medindo = true;
+    trainQueue = [...RESERVA].sort(() => Math.random() - 0.5).slice(0, 12);
+    trainIdx = 0; trainFound = new Map(); trainWords = { ok: 0, tot: 0 }; trainDone = new Set();
+    $("trainResult").hidden = true; trainShow();
+    $("trainProg").textContent = "MEDIÇÃO (frases reservadas) · " + $("trainProg").textContent;
+  }
+  const medirBtn = ui.button("Medir (frases reservadas)", medir, { id: "v3MedirBtn", title: "Lê frases que nunca entram no treino normal; não cria correções, só mede" });
+  $("trainProg").after(medirBtn);
+  $("trainEnd").addEventListener("click", () => { if (medindo) $("trainResult").hidden = true; });
+  for (const id of ["trainOpen", "trainOpen2"]) $(id).addEventListener("click", () => { medindo = false; });
+  new MutationObserver(() => { if ($("trainModal").hidden) medindo = false; }).observe($("trainModal"), { attributes: true, attributeFilter: ["hidden"] });
+
+  /* ---------- painel "minha voz melhorou?" (item 24) ---------- */
+  const painel = el("details", { id: "v3Painel" });
+  painel.append(el("summary", {}, "Minha voz melhorou?"));
+  const corpo = el("div", { id: "v3PainelCorpo" }); painel.append(corpo);
+  ui.panels.Aprendido.append(painel);
+  const SVGNS = "http://www.w3.org/2000/svg";
+  function grafico(pts) {
+    const W = 300, H = 110, L = 28, B = 22, T = 10, R = 8, svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("role", "img"); svg.setAttribute("id", "v3Grafico");
+    svg.setAttribute("aria-label", "Correções por 100 palavras, por semana");
+    const mk = (tag, a, txt) => { const n = document.createElementNS(SVGNS, tag); for (const k in a) n.setAttribute(k, a[k]); if (txt != null) n.textContent = txt; svg.append(n); return n; };
+    const vals = pts.map(p => p.taxa ?? 0), max = Math.max(1, ...vals) * 1.15;
+    const x = i => L + (pts.length > 1 ? i * (W - L - R) / (pts.length - 1) : (W - L - R) / 2), y = v => T + (1 - v / max) * (H - T - B);
+    mk("line", { x1: L, y1: H - B, x2: W - R, y2: H - B, stroke: "currentColor", "stroke-opacity": ".3" });
+    mk("line", { x1: L, y1: T, x2: L, y2: H - B, stroke: "currentColor", "stroke-opacity": ".3" });
+    mk("text", { x: L - 4, y: T + 4, "text-anchor": "end", "font-size": 9, fill: "currentColor" }, max.toFixed(0));
+    mk("text", { x: L - 4, y: H - B, "text-anchor": "end", "font-size": 9, fill: "currentColor" }, "0");
+    if (pts.length > 1) mk("polyline", { points: pts.map((p, i) => x(i) + "," + y(p.taxa ?? 0)).join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2 });
+    pts.forEach((p, i) => {
+      mk("circle", { cx: x(i), cy: y(p.taxa ?? 0), r: 3, fill: "var(--accent)" });
+      if (i === 0 || i === pts.length - 1) mk("text", { x: x(i), y: H - 8, "text-anchor": i === 0 && pts.length > 1 ? "start" : "end", "font-size": 9, fill: "currentColor" }, p.semana);
+    });
+    return svg;
+  }
+  let epocaPainel = 0;
+  async function desenharPainel() {
+    const minha = ++epocaPainel;
+    if (!dbx()) { corpo.replaceChildren(el("p", { class: "v3-n" }, "Banco indisponível.")); return; }
+    await gravarUso();
+    const [uso, est, med] = await Promise.all(["treino/uso", "treino/estatisticas", "treino/medicoes"].map(p => dbx().doc(p).get().catch(() => ({ exists: false }))));
+    if (minha !== epocaPainel) return; // abertura repetida (toggle + ação): vale só a última
+    corpo.replaceChildren();
+    const pts = serie(uso.exists ? uso.data().semanas : {});
+    if (!pts.length) corpo.append(el("p", { class: "v3-n", id: "v3SemDados" }, "Sem ditado registrado ainda."));
+    else {
+      corpo.append(grafico(pts));
+      const ult = pts[pts.length - 1];
+      corpo.append(el("p", { class: "v3-n", id: "v3Ultima" }, `${ult.semana}: ${ult.correcoes} correções em ${ult.palavras} palavras` + (ult.taxa !== null ? ` (${ult.taxa.toFixed(1).replace(".", ",")} por 100)` : "")));
+    }
+    corpo.append(el("p", { id: "v3Veredito" }, veredito(pts)));
+    const s = est.exists && Array.isArray(est.data().sessoes) ? est.data().sessoes : [];
+    if (s.length) corpo.append(el("p", { class: "v3-n", id: "v3Treino" }, `Treino em leitura: ${s.length} sessões, acerto ${s[0].acerto}% → ${s[s.length - 1].acerto}%.`));
+    const m = med.exists && Array.isArray(med.data().itens) ? med.data().itens : [];
+    corpo.append(el("p", { class: "v3-n", id: "v3Medicoes" }, m.length
+      ? `Medições reservadas: ${m.length}, acerto ${m[0].acerto}% → ${m[m.length - 1].acerto}%.`
+      : "Medições reservadas: nenhuma ainda (Treinar minha voz → Medir)."));
+  }
+  painel.addEventListener("toggle", () => { if (painel.open) desenharPainel(); });
+  ui.voz3.painel = desenharPainel;
+  ui.actions.minhavoz = { label: "Minha voz melhorou?", run: () => { ui.panel("Aprendido"); painel.open = true; desenharPainel(); } };
+
+  // Por último: depende de todas as variáveis acima já inicializadas.
+  new MutationObserver(syncCaso).observe($("caseTabs"), { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
+  ui.ready?.then?.(syncCaso);
+  syncCaso();
+})();
+
+/* Sugestões locais sem IA: continuação de frase (Ctrl+K) e palavras parecidas (painel Corrigir da barra de seleção).
+   Os dados vêm dos bancos (BANK_TC/BANK_NT), dos exemplos e dos autotextos do médico. */
+(() => {
+  "use strict";
+  const ui = window.tutuV2, core = TutuV2Core;
+  let compIdx = null, compKey = "", wordIdx = null, wordKey = "";
+  const exampleLines = () => Object.values(examples || {}).flatMap(list => (list || []).flatMap(t => String(t).split("\n")));
+  const sig = () => [BANK.length, BANK.length ? BANK[BANK.length - 1][3].length : 0, frases.length, exampleLines().length].join(":");
+  function completionIndex() {
+    const key = sig();
+    if (compIdx && key === compKey) return compIdx;
+    const items = [];
+    for (const e of BANK) for (const s of String(e[3]).split("\n")) items.push({ s, w: /^Laudos/.test(e[1]) ? 1.2 : 1 });
+    for (const f of frases) for (const s of String(f.texto || "").split("\n")) items.push({ s, w: 1.3 });
+    for (const s of exampleLines()) items.push({ s, w: 1.5 });
+    compKey = key; return (compIdx = core.buildCompletionIndex(items));
+  }
+  function wordIndex() {
+    const key = sig() + ":" + correcoes.length + ":" + dictOk.size;
+    if (wordIdx && key === wordKey) return wordIdx;
+    const freq = new Map(), add = (text, n = 1) => {
+      for (const w of String(text).toLowerCase().match(/\p{L}[\p{L}-]*\p{L}/gu) || []) if (w.length >= 3) freq.set(w, (freq.get(w) || 0) + n);
+    };
+    for (const e of BANK) add(e[3]);
+    for (const e of DEFAULT_EXAMS) add(e.mask);
+    for (const f of frases) add(f.texto, 2);
+    for (const c of correcoes) add(c.para, 3);
+    for (const w of dictOk) add(w, 2);
+    wordKey = key; return (wordIdx = core.buildWordIndex([...freq]));
+  }
+  ui.suggest = text => core.suggestPhrases(text, wordIndex(), 5);
+  // Continuações da frase começada quando o cursor está no fim do parágrafo (nunca em títulos).
+  ui.continuations = range => {
+    const r = range || sheetRange;
+    if (!r || !r.collapsed || !sheet.contains(r.startContainer)) return [];
+    let block = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+    while (block && block.parentElement !== sheet) block = block.parentElement;
+    if (!block) return [];
+    const rest = document.createRange(); rest.selectNodeContents(block); rest.setStart(r.startContainer, r.startOffset);
+    if (rest.toString().trim()) return [];
+    const head = document.createRange(); head.selectNodeContents(block); head.setEnd(r.startContainer, r.startOffset);
+    const text = head.toString().replace(/ /g, " ");
+    if (isHeading(text.trim())) return [];
+    return core.completeSentence(core.lastSentence(text), completionIndex(), 3);
+  };
+})();
+
+/* Configurações › Importar laudos: texto colado ou arquivo (.md/.txt/.html) exportado do Notion "Notas Tomografia".
+   Extrai só as frases (sem dados de paciente) com extractNotasTomografia e mescla no banco local (IndexedDB). Sem IA. */
+(() => {
+  "use strict";
+  const ui = window.tutuV2, host = document.querySelector(".v2-settings-extras");
+  if (!host) return;
+  const el = ui.el;
+  const wrap = el("section", { id: "importLaudos" });
+  const text = el("textarea", { id: "importText", class: "field", rows: "4", placeholder: "Cole aqui o texto dos laudos…", "aria-label": "Texto dos laudos para importar" });
+  const file = el("input", { id: "importFile", type: "file", accept: ".md,.txt,.html,.htm,text/*", "aria-label": "Arquivo de laudos (.md, .txt, .html)" });
+  const msg = el("span", { id: "importMsg", class: "voz-msg", role: "status" });
+  const say = (t, err) => { msg.textContent = t; msg.style.color = err ? "var(--crit)" : ""; };
+  async function importar(raw) {
+    const converted = TutuV2Core.laudosToNotion(raw);
+    const found = converted ? extractNotasTomografia(converted) : { entries: [], laudos: 0 };
+    if (!found.entries.length) { say("Não encontrei laudos com técnica, achados ou conclusão nesse texto. Nada foi alterado.", true); return; }
+    const merged = tutuSite.mergeBank(BANK.filter(e => /^Laudos/.test(e[1])), found.entries);
+    if (!merged.added) { say(`Nenhuma frase nova: as ${merged.dup} frases desses ${found.laudos} laudos já estavam no banco.`); return; }
+    const laudos = (NT_INFO.laudos || 0) + found.laudos, data = brDate(Date.now());
+    replaceNT(merged.entries);
+    NT_INFO = { laudos, data, fonte: "db" }; showNtInfo();
+    await tutuSite.saveBankNT(merged.entries, { laudos, data, iso: new Date().toISOString() });
+    say(`Entraram ${merged.added} frases novas de ${found.laudos} laudos (${merged.dup} já existiam). Sugestões e Ctrl+K já usam; o vocabulário de voz atualiza ao recarregar a página.`);
+  }
+  const go = el("button", { id: "importGo", type: "button" }, "Importar laudos");
+  go.onclick = async () => {
+    const raw = text.value;
+    if (!raw.trim()) { say("Cole o texto ou escolha um arquivo.", true); return; }
+    go.disabled = true; say("Importando…");
+    try { await importar(raw); text.value = ""; } catch (e) { say("Não foi possível importar: " + e.message, true); } finally { go.disabled = false; }
+  };
+  file.onchange = async () => {
+    const f = file.files[0]; file.value = "";
+    if (!f) return;
+    try { text.value = await f.text(); say(`Arquivo "${f.name}" carregado (${text.value.length} caracteres). Clique em Importar laudos.`); }
+    catch (e) { say("Não foi possível ler o arquivo: " + e.message, true); }
+  };
+  wrap.append(el("h2", {}, "Importar laudos"),
+    el("p", { class: "meta" }, "Cole o texto ou escolha o arquivo (.md, .txt, .html) exportado do Notion (Notas Tomografia). Entram só as frases de técnica, achados e conclusão; datas viram {data} e números de prontuário saem. Fica apenas neste computador."),
+    text, file, go, msg);
+  host.append(wrap);
+})();
+
+/* Sincronização entre PCs pelo repositório privado arturaragao/laudos-tutu-dados (API REST do GitHub, sem servidor).
+   dados/<coleção>.json = {versao:1, docs:{id:{data, atualizado, apagado}}}. Mescla por id: o `atualizado` mais recente vence;
+   apagado = tombstone. Escritas locais deixam um carimbo (00-plataforma.js) e entram numa fila no IndexedDB que sobrevive
+   a fechar a página e a ficar offline. A chave do GitHub vem de Configurações ou da extensão (chrome.storage.sync).
+   Bancos de frases: bancos/*.json do mesmo repo (cache local; só baixa o que mudou). Nada de paciente: só o que o app já guarda. */
+(() => {
+  "use strict";
+  const T = window.tutuSite, S = T.sync, G = T.gh, ui = window.tutuV2, el = ui.el;
+  const num = (v, d) => Number.isFinite(window[v]) ? window[v] : d;   // TUTU_SYNC_MS / TUTU_PULL_MS: só para testes
+  const DEBOUNCE = () => num("TUTU_SYNC_MS", 5000), PULL = () => num("TUTU_PULL_MS", 300000);
+  const TOMB_MS = 180 * 864e5, TENTATIVAS = 5;
+  const stable = v => JSON.stringify(v, (k, x) => x && typeof x === "object" && !Array.isArray(x)
+    ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : x);
+  const hora = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); };
+
+  /* ---------- indicador no topo (largura fixa; "sincronizando" só aparece se demorar) ---------- */
+  const TEXTO = { ok: "sincronizado ✓", sync: "sincronizando…", offline: "offline", semchave: "sem chave", erro: "erro de sincronia" };
+  const ind = el("span", { id: "syncState", role: "status", "data-state": "semchave" }, TEXTO.semchave);
+  document.getElementById("saveState")?.before(ind);
+  let estado = "semchave", showTimer = 0, ultima = "";
+  function setEstado(s, detalhe) {
+    estado = s; clearTimeout(showTimer);
+    const mostrar = () => { ind.dataset.state = s; ind.textContent = TEXTO[s]; ind.title = detalhe || (ultima ? "Última sincronização: " + hora(ultima) : ""); info(); };
+    if (s === "sync") showTimer = setTimeout(mostrar, 600); else mostrar();
+  }
+
+  /* ---------- fila ---------- */
+  const dirty = new Set(), ver = {};
+  let inicial = false, carregou = false, timer = 0, rodando = false, religar = false, pendPull = false, falhas = 0, ultimoPull = 0;
+  const persistir = () => S.kvSet("_sync/fila", [...dirty]).catch(() => {});
+  S.onChange(col => { dirty.add(col); ver[col] = (ver[col] || 0) + 1; persistir(); agenda(DEBOUNCE(), false); });
+  function agenda(ms, pull) {
+    pendPull = pendPull || pull; clearTimeout(timer);
+    timer = setTimeout(rodar, ms);
+  }
+  async function rodar() {
+    if (rodando) { religar = true; return; }
+    rodando = true;
+    const pull = pendPull; pendPull = false;
+    try { await ciclo(pull); } finally {
+      rodando = false;
+      if (religar) { religar = false; agenda(0, false); }
+    }
+    return true;
+  }
+
+  /* ---------- um documento-coleção: puxa, mescla nos dois sentidos, envia ---------- */
+  async function syncCol(col, shas, mudadas) {
+    for (let t = 0; t < TENTATIVAS; t++) {
+      const caminho = "dados/" + col + ".json";
+      const r = await G.getJson(caminho);
+      const rdocs = (r && r.json && r.json.docs) || {};
+      const local = await S.listCol(col);
+      const out = { ...rdocs }, aplicar = [], carimbar = [];
+      let sobe = false;
+      for (const id of new Set([...Object.keys(rdocs), ...Object.keys(local)])) {
+        const rd = rdocs[id], ld = local[id];
+        if (!ld) { aplicar.push({ id, expect: null, data: rd.data, atualizado: rd.atualizado, apagado: !!rd.apagado }); continue; }
+        if (!rd) {
+          if (ld.atualizado === null) { ld.atualizado = S.nowIso(); carimbar.push({ id, atualizado: ld.atualizado }); }
+          out[id] = { data: ld.has ? ld.data : null, atualizado: ld.atualizado, apagado: !ld.has }; sobe = true; continue;
+        }
+        if (ld.atualizado === null) {   // dado antigo, sem carimbo: igual ao remoto = adota; diferente = o remoto vence e o local fica guardado
+          if (!(ld.has && !rd.apagado && stable(ld.data) === stable(rd.data))) await S.kvSet("_perdido/" + col + "/" + id, { data: ld.data, quando: new Date().toISOString() });
+          aplicar.push({ id, expect: null, data: rd.data, atualizado: rd.atualizado, apagado: !!rd.apagado });
+        } else if (rd.atualizado > ld.atualizado) {
+          aplicar.push({ id, expect: ld.atualizado, data: rd.data, atualizado: rd.atualizado, apagado: !!rd.apagado });
+        } else if (ld.atualizado > rd.atualizado) {
+          out[id] = { data: ld.has ? ld.data : null, atualizado: ld.atualizado, apagado: !ld.has }; sobe = true;
+        }
+      }
+      const ignorados = await S.applyRemote(col, aplicar);
+      if (aplicar.length - ignorados > 0) mudadas.add(col);
+      if (carimbar.length) await S.setMetas(col, carimbar);
+      if (!sobe) { if (r && !ignorados) shas[col] = r.sha; else delete shas[col]; return; }
+      const corte = new Date(Date.now() - TOMB_MS).toISOString();
+      for (const [id, d] of Object.entries(out)) if (d.apagado && d.atualizado < corte) delete out[id];
+      try { shas[col] = await G.putJson(caminho, { versao: 1, docs: out }, r && r.sha, "sync " + col); return; }
+      catch (e) { if (!e.conflito) throw e; }   // 409/422: alguém gravou antes; puxa, mescla e tenta de novo
+    }
+    throw Object.assign(new Error("Conflito persistente em " + col), { status: 409 });
+  }
+
+  async function ciclo(pull) {
+    if (!G.token) { setEstado("semchave"); return; }
+    if (!carregou) {
+      for (const c of (await S.kvGet("_sync/fila")) || []) dirty.add(c);
+      inicial = !!(await S.kvGet("_sync/inicial")); carregou = true;
+    }
+    if (navigator.onLine === false) { setEstado("offline"); pendPull = pendPull || pull; return; }
+    setEstado("sync");
+    const mudadas = new Set(), snap = { ...ver };
+    try {
+      const shas = (await S.kvGet("_sync/shas")) || {};
+      let cols = new Set(inicial ? dirty : S.COLS);
+      if (pull) {
+        const remoto = Object.fromEntries((await G.list("dados")).map(f => [f.name, f.sha]));
+        for (const c of S.COLS) if (remoto[c + ".json"] && remoto[c + ".json"] !== shas[c]) cols.add(c);
+      }
+      for (const col of cols) {
+        const v0 = ver[col] || 0;
+        await syncCol(col, shas, mudadas);
+        if ((ver[col] || 0) === v0) dirty.delete(col);
+      }
+      await S.kvSet("_sync/shas", shas);
+      if (!inicial) { inicial = true; await S.kvSet("_sync/inicial", true); }
+      await persistir();
+      if (pull) { ultimoPull = Date.now(); await atualizarBancos(); }
+      ultima = new Date().toISOString(); falhas = 0;
+      await S.kvSet("_sync/ultima", ultima);
+      setEstado("ok");
+      if (mudadas.has("config") && !primeiraVez.feito) recarregarSeSeguro();
+      primeiraVez.feito = true;
+      if (dirty.size) agenda(DEBOUNCE(), false);
+    } catch (e) {
+      pendPull = pendPull || pull;
+      if (e.semChave || e.auth) { setEstado("semchave", e.auth ? "O GitHub recusou a chave. Confira as permissões (Contents e Actions: read/write no repo laudos-tutu-dados)." : ""); return; }
+      if (e.offline) { setEstado("offline"); return; }
+      falhas++;
+      setEstado("erro", e.message);
+      agenda(e.limite ? 60000 : Math.min(60000, 5000 * 2 ** falhas), true);
+    }
+  }
+  const primeiraVez = { feito: false };
+  function recarregarSeSeguro() {   // config (formato, atalhos, voz) só é lida na abertura: aplica 1 vez, antes de o médico começar
+    try { if (sessionStorage.getItem("tutuSyncReload")) return; if (typeof sheetHasContent === "function" && sheetHasContent() && !modelIntact()) return; sessionStorage.setItem("tutuSyncReload", "1"); location.reload(); } catch (_) {}
+  }
+
+  /* ---------- bancos ---------- */
+  async function aplicarBancos() {
+    const g = await T.lerBancosGh();
+    if (!g.tc && !g.nt) return;
+    const b = (await T.exportBackup()).bancos;
+    const tc = T.mergeBank(g.tc ? g.tc.frases : window.BANK_TC, b.bank_tc).entries;
+    const nt = T.mergeBank(g.nt ? g.nt.frases : window.BANK_NT, b.bank_nt).entries;
+    window.BANK_TC = tc; window.BANK_NT = nt;
+    if (g.tc) window.BANK_TC_DATE = T.brData(g.tc.atualizado);
+    if (g.nt) window.BANK_NT_META = { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: T.brData(g.nt.atualizado), iso: g.nt.atualizado };
+    window.BANK_GH = { tc: !!g.tc || !!window.BANK_GH?.tc, nt: !!g.nt || !!window.BANK_GH?.nt };
+    const all = tc.concat(nt);
+    BANK.length = 0; BANK.push(...all);
+    BIDX.length = 0; for (const e of all) BIDX.push({ key: fold(e[0] + " " + e[1] + " " + e[2]), body: fold(e[3]) });
+    PIDX = null; capBase = null;
+    for (const e of all) for (const w of fold(e[3]).split(/[^a-z]+/)) if (w.length >= 3) KNOWN.add(w);
+    COMP_IDX.length = 0; COMP_IDX.push(...BANK.map((e, i) => /compara/i.test(e[1] + " " + e[2]) ? i : -1).filter(i => i >= 0).slice(0, 6));
+    BANK_GROUPS.length = 0; BANK_GROUPS.push(...new Set(BANK.map(e => e[0])));
+    $("bankInfo").textContent = BANK.filter(e => !/^Laudos/.test(e[1])).length + " frases · atualizado em " + T.brData((g.tc || g.nt).atualizado);
+    NT_INFO = { laudos: window.BANK_NT_META.laudos, data: window.BANK_NT_META.data, fonte: "db" }; showNtInfo();
+    document.dispatchEvent(new CustomEvent("tutu-bancos"));
+  }
+  async function atualizarBancos() {
+    if (await T.bancosRefresh() || !window.BANK_GH?.tc && (await T.lerBancosGh()).tc) await aplicarBancos();
+  }
+
+  /* ---------- Notion: dispara o workflow e acompanha o repositório até os bancos mudarem ---------- */
+  let notionRodando = false;
+  async function notionAgora() {
+    if (!G.token) { say("Cole primeiro a chave do GitHub.", true); return; }
+    if (notionRodando) return;
+    notionRodando = true; say("Pedindo ao GitHub para atualizar do Notion…");
+    try {
+      const antes = ((await S.kvGet("_gh/indice")) || {}).atualizado || "";
+      await G.dispararNotion();
+      const pausa = num("TUTU_NOTION_POLL_MS", 20000);
+      for (let i = 0; i < 18; i++) {
+        say("Notion pedido; esperando o GitHub terminar…");
+        await new Promise(r => setTimeout(r, i === 0 ? Math.min(2000, pausa) : pausa));
+        const mudou = await T.bancosRefresh();
+        const idx = (await S.kvGet("_gh/indice")) || {};
+        if (mudou || (idx.atualizado && idx.atualizado !== antes)) { await aplicarBancos(); say("Notion atualizado em " + hora(new Date()) + "."); info(); return; }
+      }
+      say("O GitHub ainda não terminou; os bancos novos entram sozinhos na próxima sincronização.");
+    } catch (e) { say(e.auth ? "A chave não tem permissão de Actions (read/write) no repo laudos-tutu-dados." : e.offline ? "Sem rede." : "Não foi possível pedir a atualização: " + e.message, true); }
+    finally { notionRodando = false; }
+  }
+
+  /* ---------- Configurações › Sincronização ---------- */
+  const host = document.querySelector(".v2-settings-extras");
+  const msg = el("span", { id: "syncMsg", class: "voz-msg", role: "status" }), infoEl = el("p", { id: "syncInfo", class: "meta" });
+  const say = (t, err) => { msg.textContent = t; msg.style.color = err ? "var(--crit)" : ""; };
+  async function info() {
+    const idx = (await S.kvGet("_gh/indice").catch(() => null)) || {};
+    infoEl.textContent = (G.token ? "Chave guardada neste computador e na extensão. " : "Sem chave: os dados ficam só neste computador. ") +
+      (ultima ? "Última sincronização: " + hora(ultima) + ". " : "") + (idx.quando ? "Bancos conferidos em " + hora(idx.quando) + "." : "");
+  }
+  if (host) {
+    const campo = el("input", { id: "syncToken", type: "password", class: "field", autocomplete: "off", spellcheck: "false", placeholder: "Chave do GitHub (cole aqui)", "aria-label": "Chave do GitHub" });
+    const salvar = ui.button("Salvar chave", async () => {
+      const v = campo.value.trim();
+      if (!v) { say("Cole a chave para salvar.", true); return; }
+      await T.setToken(v); campo.value = ""; say("Chave salva. Sincronizando…"); info(); agenda(0, true);
+    }, { id: "syncSalvar" });
+    const agora = ui.button("Sincronizar agora", () => { agenda(0, true); say("Sincronizando…"); }, { id: "syncAgora" });
+    const notion = ui.button("Atualizar do Notion agora", notionAgora, { id: "notionAgora" });
+    const link = el("a", { href: "https://github.com/settings/personal-access-tokens/new", target: "_blank", rel: "noopener noreferrer", id: "syncLink" }, "criar a chave no GitHub");
+    const ajuda = el("p", { class: "meta" }, "Seus dados (correções, autotextos, regras, casos, bancos) ficam no repositório privado laudos-tutu-dados e acompanham você em todos os PCs. Para ligar: ");
+    ajuda.append(link, document.createTextNode(" (fine-grained token, só o repositório laudos-tutu-dados, permissões Contents e Actions em Read and write) e cole abaixo. Em outro PC com o mesmo perfil do Chrome a chave chega sozinha pela extensão. Nunca vai para o git."));
+    const sec = el("section", { id: "syncSec" });
+    sec.append(el("h2", {}, "Sincronização entre PCs"), ajuda, campo, salvar, agora, notion, msg, infoEl);
+    host.append(sec);
+  }
+  ui.actions.notion = { label: "Atualizar do Notion agora", run: notionAgora };
+  ui.actions.sincronizar = { label: "Sincronizar agora", run: () => agenda(0, true) };
+  const antigo = $("ntUpd").onclick;
+  $("ntUpd").onclick = ev => G.token ? notionAgora() : antigo?.call($("ntUpd"), ev);
+  $("bkFile").closest("label")?.setAttribute("title", "Reserva: a sincronização automática dispensa o backup.");
+
+  /* ---------- gatilhos ---------- */
+  T.onChave(() => { info(); agenda(0, true); });
+  const puxar = () => { if (Date.now() - ultimoPull > 20000) agenda(0, true); };
+  window.addEventListener("focus", puxar);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") puxar(); });
+  window.addEventListener("online", () => agenda(500, true));
+  window.addEventListener("offline", () => setEstado("offline"));
+  setInterval(() => agenda(0, true), PULL());
+  window.tutuSync = { agora: () => { agenda(0, true); }, estado: () => estado, notionAgora, aplicarBancos };
+  S.kvGet("_sync/ultima").then(v => { ultima = v || ""; }).catch(() => {}).finally(() => { if (!G.token) setEstado("semchave"); agenda(0, true); });
 })();
