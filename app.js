@@ -3628,7 +3628,8 @@ window.tutuSite.appReady = true;
   top.append(tabs, button("+", () => ui.newTab(), { id: "newCaseTab", title: "Novo caso", "aria-label": "Novo caso" }),
     button("Histórico", () => openHistory(), { id: "histTopBtn", title: "Todos os exames salvos (os 4 mais recentes ficam nas abas)" }));
   const actions = el("div", { class: "v2-top-actions" });
-  actions.append(el("span", { id: "saveState", role: "status" }, "salvo agora"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }));
+  actions.append(el("span", { id: "saveState", role: "status" }, "salvo agora"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }),
+    button("⚙", () => ui.settings(true), { id: "settingsTop", title: "Configurações · Ctrl+,", "aria-label": "Configurações" }));
   move("copiar", actions); $("copiar").textContent = "Copiar laudo";
   $("copiar").append(el("kbd", {}, "Ctrl C")); top.append(actions);
   const left = ui.left = el("aside", { id: "v2Left", "aria-label": "Máscaras e histórico" });
@@ -3991,7 +3992,6 @@ window.tutuSite.appReady = true;
       const b = ui.button("", () => ui.actions[action].run(), { title: ui.actions[action].label + " · " + key });
       b.append(ui.el("kbd", {}, key), ui.el("span", {}, ui.actions[action].label)); foot.append(b);
     }
-    foot.append(ui.button("⚙", () => ui.settings(true), { title: "Configurações · Ctrl+,", "aria-label": "Configurações" }));
   };
   ui.renderShortcuts();
   const keyEditor = ui.el("div", { class: "v2-key-editor" });

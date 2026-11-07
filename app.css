@@ -559,3 +559,5 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 /* Ctrl+K: continuações da frase no topo da paleta */
 .tutu-v2 #commandResults button.cmd-cont { align-items:flex-start; }
 #commandResults button.cmd-cont span { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; font-size:12.5px; line-height:1.35; }
+
+.tutu-v2 #settingsTop { font-size: 18px; line-height: 1; padding: 3px 8px; }
