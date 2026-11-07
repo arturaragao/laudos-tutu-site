@@ -561,3 +561,11 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #commandResults button.cmd-cont span { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; font-size:12.5px; line-height:1.35; }
 
 .tutu-v2 #settingsTop { font-size: 18px; line-height: 1; padding: 3px 8px; }
+
+/* Conclusão sugerida (110-v2-conclusao.js): ghost fora da folha, nunca entra no laudo. */
+#ghostConc { position:fixed; z-index:20; box-sizing:border-box; background:var(--paper); cursor:pointer; font-style:italic; line-height:normal;
+  color:color-mix(in srgb, var(--paper-ink) 38%, var(--paper)); }
+#ghostConc[hidden] { display:none; }
+#ghostConc .gc-linha { white-space:pre-wrap; overflow-wrap:anywhere; }
+#ghostConc .gc-dica { font:500 10px/1.4 var(--f-body); font-style:normal; color:var(--muted); text-align:right; }
+#ghostConc:hover .gc-dica { color:var(--accent); }
