@@ -367,11 +367,12 @@
   const brData = iso => { const d = new Date(iso); return isNaN(d) ? "sem data" : d.toLocaleDateString("pt-BR"); };
   // {tc, nt}: cada lado = {frases, atualizado} ou null. notas-tomografia = NT; as demais (TC, USG, RM, RX) = TC.
   async function lerBancosGh(){
-    const out = { tc: null, nt: null }, idx = await kvGet("_gh/indice");
+    const out = { tc: null, nt: null, pares: [] }, idx = await kvGet("_gh/indice");
     if (!idx) return out;
     for (const slug of idx.slugs){
       const c = await kvGet("_gh/banco/" + slug);
       if (!c || !Array.isArray(c.doc?.frases)) continue;
+      if (slug === "notas-tomografia" && Array.isArray(c.doc?.pares)) out.pares = c.doc.pares.filter(p => Array.isArray(p) && p.length >= 4);   // achado -> conclusão (só nesta página)
       const lado = slug === "notas-tomografia" ? "nt" : "tc";
       const o = out[lado] || (out[lado] = { frases: [], atualizado: "" });
       o.frases.push(...c.doc.frases.filter(e => Array.isArray(e) && e.length >= 4));
@@ -414,6 +415,8 @@
     if ((!g.tc || !g.nt) && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname)){
       await loadScript("bancos/bank_tc.js"); await loadScript("bancos/bank_nt.js");
     }
+    if (!g.pares.length && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname)) await loadScript("bancos/pares.js");   // reserva local (data/notas-tomografia.json)
+    window.BANK_PARES = g.pares.length ? g.pares : (window.BANK_PARES || []);
     const fileTC = window.BANK_TC || [], fileNT = window.BANK_NT || [], b = backup.bancos;
     const fileMeta = window.BANK_NT_META || {}, fileDate = window.BANK_TC_DATE;
     window.BANK_TC = mergeBank(g.tc ? g.tc.frases : fileTC, b.bank_tc).entries;

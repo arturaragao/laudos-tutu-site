@@ -5274,7 +5274,8 @@ window.tutuSite.appReady = true;
   /* ---------- bancos ---------- */
   async function aplicarBancos() {
     const g = await T.lerBancosGh();
-    if (!g.tc && !g.nt) return;
+    if (g.pares.length) window.BANK_PARES = g.pares;
+    if (!g.tc && !g.nt) { if (g.pares.length) document.dispatchEvent(new CustomEvent("tutu-bancos")); return; }
     const b = (await T.exportBackup()).bancos;
     const tc = T.mergeBank(g.tc ? g.tc.frases : window.BANK_TC, b.bank_tc).entries;
     const nt = T.mergeBank(g.nt ? g.nt.frases : window.BANK_NT, b.bank_nt).entries;
@@ -5374,17 +5375,18 @@ window.tutuSite.appReady = true;
     "pode podendo apresenta apresentam observa observam nota notam visualiza visualizam tambem alem junto onde quando cada outro outra outros outras ainda sendo " +
     "sido foram esta estao estar seguinte inferior superior medial lateral anterior posterior adjacente adjacentes proximo proxima associado associada " +
     "presente presentes evidente evidentes regular regulares normal normais habitual habituais preservado preservada preservados preservadas").split(" "));
+  // radical: tira a vogal/“s” final (bordas/bordos, cólica/cólicos, litíase/litíases) e fica com 7 letras
+  const stem = w => (w.length >= 5 ? w.replace(/[aeo]s?$/, "") : w).slice(0, 6);
   // palavras de estilo da conclusão: não contam como conteúdo clínico (comparação com a conclusão existente e com os achados)
-  const ESTILO = new Set(["achados", "compati", "sugerin", "sugesti", "inferin", "aspecto", "imagem", "provave", "possive"]);
+  const ESTILO = new Set(["achados", "compativel", "sugerindo", "sugestivo", "inferindo", "aspecto", "imagem", "provavel", "possivel"].map(x => stem(x)));
   const QUALIF = new Set("aguda agudo agudas agudos cronica cronico cronicas cronicos complicada complicado simples tipica tipico tipicos tipicas leve moderada moderado grave nao".split(" "));
-  const QUALIF_TOK = new Set([...QUALIF].map(x => x.slice(0, 7)));
+  const QUALIF_TOK = new Set([...QUALIF].map(x => stem(x)));
   const IGNORAR_AREA = /^(exames?|acompanhar|geral|laudos?)\b/;
   const IGNORAR_SECAO = /^(exames?|acompanhar|geral|laudos?|tecnica|indicacao|protocolo|comparacao)\b/;
   const NEG = /\b(sem|nao|ausenc\w*|ausente\w*|afast\w*|descart\w*|exclu\w*|negativ\w*|inexistent\w*|nenhum\w*|improvav\w*|dispensa\w*)\b/;
   const NORMAL = /\bnormai?s?\b|\bnormalidade\b|\bpreservad\w*|\bhabituais?\b|\bhabitual\b|\bsem alteraco\w*/;
   const MAX_APRENDIDOS = 400, REJEICOES_BLOQUEIO = 3;
 
-  const stem = w => w.slice(0, 7);
   /* tokens (radicais de 7 letras) sem números, medidas, palavras comuns e palavras curtas */
   function tokens(text) {
     const out = new Set();
@@ -5396,10 +5398,16 @@ window.tutuSite.appReady = true;
   }
   /* tokens do que a frase afirma: tira as palavras negadas ("sem realce pelo contraste", "ausência de líquido livre") */
   function tokensPositivos(frase) {
-    const f = fold(frase), neg = new Set();
+    // "não visibilizado/identificado" descreve ausência do órgão (status pós-cirurgia), não nega o que vem depois
+    const f = fold(frase).replace(/\bnao(?=\s+(?:se\s+)?(?:visibiliz|identific|individualiz|caracteriz))/g, "nxo"), neg = new Set();
     for (const m of f.matchAll(new RegExp(NEG.source, "g"))) {
       const resto = f.slice(m.index + m[0].length).split(/[,;:.]/)[0].split(/\s+/).filter(Boolean).slice(0, 6).join(" ");
       for (const t of tokens(m[0] + " " + resto)) neg.add(t);
+    }
+    // "colelitíase afastada": a negação vem depois do termo, vale para as palavras anteriores da oração
+    for (const m of f.matchAll(/\b(?:afastad|descartad|excluid|ausent|inexistent)\w*/g)) {
+      const antes = f.slice(0, m.index).split(/[,;:.]/).pop().split(/\s+/).filter(Boolean).slice(-4).join(" ");
+      for (const t of tokens(antes)) neg.add(t);
     }
     return new Set([...tokens(frase)].filter(t => !neg.has(t)));
   }
@@ -5419,6 +5427,21 @@ window.tutuSite.appReady = true;
   function limparMedidas(s) {
     let t = String(s).replace(/\s*\([^()]*(?:\d|_{2,})[^()]*\)/g, "").replace(MEDIDA, "");
     return t.replace(/\s+([,.;])/g, "$1").replace(/,\s*([.;])/g, "$1").replace(/\s{2,}/g, " ").trim();
+  }
+
+  /* Trechos que dependem do exame anterior ou de datas não servem numa conclusão nova. Devolve o texto limpo ou null (descartar). */
+  const COMPARA = /\b(semelhante|similar|inalterad\w*|persist\w*|houve|surgiment\w*|reducao|regress\w*|progress\w*|exames? anteriore?s?|estudos? anteriore?s?|anteriormente|em relacao ao|em comparacao|comparad\w*|comparativ\w*|estavel|estaveis|estabilidade|estudo atual|exame atual|menos evidente|mais evidente|um pouco (?:menos|mais)|evolutiv\w*)\b/;
+  function limparComparacao(texto) {
+    let t = String(texto).replace(/\s*\([^()]*(?:\{data\}|\banterior|\bcompara|\bsemelhante|\bpersist)[^()]*\)/gi, "")
+      .replace(/,?\s*conforme\s+(?:acima\s+)?descrit[oa]s?(?:\s+acima)?/gi, "")
+      .replace(/,?\s*(?:sem altera[cç][õo]es significativas|semelhante|similar|inalterad[oa]s?)[^.;]*?(?:exames? anteriore?s?|estudos? anteriore?s?|\{data\})[^.;]*/gi, "")
+      .replace(/,?\s*(?:em|na)\s+compara[cç][ãa]o\s+com[^.;]*/gi, "")
+      .replace(/,?\s*(?:em\s+)?rela[cç][ãa]o\s+ao\s+exame[^.;]*/gi, "")
+      .replace(/\s*\{data\}/gi, "").replace(/\s+([,.;])/g, "$1").replace(/\s{2,}/g, " ").trim();
+    t = t.replace(/^[,;\s]+/, "");
+    if (COMPARA.test(fold(t)) || /\bexame\b.*\b(de|do)\s*$/i.test(t)) return null;
+    if (/^(sem|semelhante|similar)\b/i.test(t) && fold(texto) !== fold(t) ) return null;   // sobrou só a parte dependente da comparação
+    return t;
   }
 
   /* Lado: "D", "E", "B" (ambos/bilateral) ou "" */
@@ -5441,7 +5464,8 @@ window.tutuSite.appReady = true;
 
   /* ---------- índice ---------- */
   function termosDe(topico, linhas) {
-    const termos = new Set([fold(topico).trim()]);
+    // tópico sem “(Achado Adicional)” e sem “›”: “Hérnia › Umbilical (Achado Adicional)” -> “hernia umbilical”
+    const termos = new Set([fold(topico).replace(/\([^()]*\)/g, " ").replace(/›/g, " ").replace(/\s+/g, " ").trim()]);
     const re = /(?:inferindo|sugerindo|sugestiv[oa]s?|compativ(?:el|eis)|podendo corresponder|correspondendo|representando)[^()]{0,160}\(([^()]{3,70})\)/g;
     for (const l of linhas) {
       const f = fold(l);
@@ -5456,12 +5480,15 @@ window.tutuSite.appReady = true;
     return lista.filter(v => v.join(" ").length >= 5)
       .map(v => new RegExp("\\b" + v.map(escRe).join("\\s+") + "(?:s|es)?\\b", "g"));
   }
-  function candidatasDe(linhas) {
+  function candidatasDe(linhas, topTok) {
     const curta = l => { const c = limparMedidas(l); return c && !/\d/.test(c) && c.length <= 120 && c.split(/\s+/).length <= 14; };
     if (linhas.length === 1) return curta(linhas[0]) ? [linhas[0]] : [];
     const cands = [];
     for (let i = linhas.length - 1; i >= 0 && curta(linhas[i]); i--) cands.unshift(linhas[i]);
-    return cands.length === linhas.length ? [linhas[linhas.length - 1]] : cands;
+    const fim = cands.length === linhas.length ? [linhas[linhas.length - 1]] : cands;
+    // entradas que alternam descrição e conclusão: linha curta que traz a palavra do tópico também é conclusão
+    for (const l of linhas) if (!fim.includes(l) && curta(l) && [...tokens(l)].some(t => topTok.has(t))) fim.push(l);
+    return fim;
   }
   /* Índice das patologias do banco (BANK_TC): [área, seção, tópico, texto]. Ignora tópico vazio e listas pessoais. */
   function indexar(banco) {
@@ -5474,10 +5501,10 @@ window.tutuSite.appReady = true;
       if (/\b(normal|normais|normalidade)\b/.test(fold(topico))) continue;
       const linhas = texto.split("\n").map(l => l.trim()).filter(Boolean);
       if (!linhas.length || linhas.filter(ehListaNomes).length * 2 >= linhas.length) continue;
-      const cands = candidatasDe(linhas).filter(l => !ehListaNomes(l));
-      const desc = linhas.filter(l => !cands.includes(l) || linhas.length === 1);
       const termos = termosDe(topico, linhas);
-      const topTok = new Set([...tokens(topico), ...termos.flatMap(t => [...tokens(t)])]);
+      const topTok = new Set([...tokens(topico.replace(/›/g, " ")), ...termos.flatMap(t => [...tokens(t)])]);
+      const cands = candidatasDe(linhas, topTok).filter(l => !ehListaNomes(l));
+      const desc = linhas.filter(l => !cands.includes(l) || linhas.length === 1);
       const sets = desc.map(l => tokens(l)).filter(s => s.size >= 3);
       sets.push(topTok);
       const todos = new Set(sets.flatMap(s => [...s]));
@@ -5521,6 +5548,11 @@ window.tutuSite.appReady = true;
   /* Candidata do banco pronta para a conclusão: sem medida, sem lado inventado, sem placeholder. null se não servir. */
   function limparCandidata(linha, ladoAchado) {
     let t = String(linha).replace(/^\s*(?:\d+\s*[.)]|[-•*])\s*/, "").replace(/^\s*conclus[aã]o\s*:\s*/i, "").replace(/\s*\*+\s*$/, "").trim();
+    t = limparComparacao(t); if (t == null) return null;
+    // classificações (Bosniak I, LI-RADS 4...) são conclusão, não medida: ficam intactas
+    const prot = [], guarda = m => { prot.push(m); return "\u0001" + String.fromCharCode(96 + prot.length) + "\u0001"; };
+    t = t.replace(/\((?=[^()]*\b(?:bosniak|li-?rads|bi-?rads|ti-?rads|pi-?rads|o-?rads|lung-?rads)\b)(?![^()]*\d\s*(?:mm|cm|ml)\b)[^()]*\)/gi, guarda)
+      .replace(/\b(?:bosniak|li-?rads|bi-?rads|ti-?rads|pi-?rads|o-?rads|lung-?rads)\s*(?:iv|iii|ii|i|v|\d)[a-f]?\b/gi, guarda);
     t = limparMedidas(t);
     t = t.replace(/\{([^{}|]*\|[^{}]*)\}/g, (_m, ops) => {
       const alvo = ladoAchado === "D" ? /^direit/ : ladoAchado === "E" ? /^esquerd/ : null;
@@ -5536,21 +5568,133 @@ window.tutuSite.appReady = true;
     }
     t = t.replace(/\s+([,.;])/g, "$1").replace(/\s{2,}/g, " ").replace(/[,;\s]+$/, "").replace(/\.+$/, "").trim();
     if (t.length < 5) return null;
+    t = t.replace(/\u0001([a-z])\u0001/g, (_m, c) => prot[c.charCodeAt(0) - 97]);
     return capitalizar(t) + ".";
   }
-  function escolherFrase(ent, fs, ladoAchado) {
+  /* “Apendicite Aguda” -> "Apendicite aguda." (só a 1ª letra maiúscula; siglas mantidas) */
+  /* ---------- segurança clínica da frase sugerida ---------- */
+  // Termos de gravidade/complicação e de intensidade: só podem aparecer na sugestão se já estiverem no achado.
+  const GRAVE = ["encarcer", "estrangul", "complicad", "perfur", "absces", "necros", "isquemi", "obstru", "malign", "neoplas", "metast", "trombo", "dissec",
+    "ruptur", "rompid", "hemorrag", "fistul", "gangren", "infart", "carcinom", "tumor", "cancer", "sarcom", "linfoma", "agud"];
+  const INTENS = ["discret", "incipient", "leve", "minim", "pequen", "moderad", "acentuad", "important", "significativ", "volumos", "extens", "grave", "sever", "grande"];
+  const INT_INI = /^(?:discret[oa]s?|incipientes?|leves?|minim[oa]s?|pequen[oa]s?|moderad[oa]s?|acentuad[oa]s?|importantes?|significativ[oa]s?|volumos[oa]s?|extens[oa]s?|grandes?)\s+/i;
+  /* tira a intensidade do começo da frase quando o achado não a diz (“Discreta ateromatose” -> “Ateromatose”); sem `fr`, tira sempre */
+  function semIntensidade(frase, fr) {
+    let t = String(frase), g = fr == null ? null : fold(fr);
+    for (;;) {
+      const m = t.match(INT_INI); if (!m) break;
+      if (g && g.includes(fold(m[0]).trim().slice(0, 5))) break;
+      t = t.slice(m[0].length);
+    }
+    return capitalizar(t);
+  }
+  // órgãos/subtipos: a sugestão não pode citar um que o achado não cita (renal ≠ hepático, umbilical ≠ inguinal)
+  const ORGAOS = [
+    ["renal", /\b(rim|rins|renal|renais|calic\w*|pielic\w*)\b/, "renal", "renal", true],
+    ["hepatico", /\b(figado|hepat\w*)\b/, "hepático", "hepática", false],
+    ["esplenico", /\b(baco|esplen\w*)\b/, "esplênico", "esplênica", false],
+    ["biliar", /\b(vesicula|biliar|biliares|colecist\w*|colelit\w*|coledoc\w*|colang\w*)\b/, "biliar", "biliar", false],
+    ["pancreas", /\b(pancre\w*)\b/, "pancreático", "pancreática", false],
+    ["pulmao", /\b(pulmon\w*|pulmao|pulmoes|bronq\w*)\b/, "pulmonar", "pulmonar", true],
+    ["pleura", /\b(pleur\w*)\b/, "pleural", "pleural", true],
+    ["pericardio", /\b(pericard\w*)\b/, "pericárdico", "pericárdica", false],
+    ["aorta", /\b(aort\w*|iliac\w*)\b/, "aórtico", "aórtica", false],
+    ["prostata", /\b(prostat\w*)\b/, "prostático", "prostática", false],
+    ["bexiga", /\b(bexig\w*|vesical|vesicais)\b/, "vesical", "vesical", false],
+    ["utero", /\b(uter\w*|endometri\w*|miometri\w*|hister\w*)\b/, "uterino", "uterina", false],
+    ["ovario", /\b(ovar\w*|anex\w*)\b/, "ovariano", "ovariana", true],
+    ["tireoide", /\b(tireo\w*)\b/, "tireoidiano", "tireoidiana", false],
+    ["adrenal", /\b(adrenal|adrenais|suprarrenal\w*|suprarrenais)\b/, "adrenal", "adrenal", true],
+    ["colon", /\b(colon|colic\w*|sigmoid\w*|ceco|apendic\w*|reto)\b/, "cólico", "cólica", false],
+    ["delgado", /\b(ileo|jejun\w*|duoden\w*|delgad\w*)\b/, "", "", false],
+    ["estomago", /\b(gastr\w*|estomag\w*)\b/, "gástrico", "gástrica", false],
+    ["h_umbilical", /\bumbilical\b/, "umbilical", "umbilical", false],
+    ["h_inguinal", /\b(inguinal|inguinais)\b/, "inguinal", "inguinal", true],
+    ["h_hiatal", /\bhiatal\b/, "hiatal", "hiatal", false],
+    ["h_epigastrica", /\bepigastric\w*\b/, "epigástrico", "epigástrica", false],
+    ["h_femoral", /\b(femoral|femorais)\b/, "femoral", "femoral", true],
+    ["h_incisional", /\b(incisional|incisionais)\b/, "incisional", "incisional", false],
+    ["coluna", /\b(vertebr\w*|discal|discos?|espond\w*|escolio\w*|lombar|cervical)\b/, "", "", false],
+  ];
+  const orgaosDe = texto => { const f = fold(texto), out = new Set(); for (const o of ORGAOS) if (o[1].test(f)) out.add(o[0]); return out; };
+  const RE_CLASSE = /\b(bosniak|li-?rads|bi-?rads|ti-?rads|pi-?rads|o-?rads|lung-?rads)\s*(iv|iii|ii|i|v|\d)([a-f])?\b/g;
+  const ROMANO = { i: "1", ii: "2", iii: "3", iv: "4", v: "5" };
+  const classesDe = texto => new Set([...fold(texto).matchAll(RE_CLASSE)].map(m => m[1].replace("-", "") + (ROMANO[m[2]] || m[2]) + (m[3] || "")));
+  /* A frase final é segura para este achado? (gravidade, intensidade, órgão/subtipo, classificação, lado) */
+  function valida(frase, fr) {
+    const f = fold(frase), g = fold(fr);
+    const afirma = f.replace(/\b(?:nao|sem)\s+(?:\w+\s*){1,3}/g, " ").split(/[^a-z0-9]+/).filter(Boolean), no = g.split(/[^a-z0-9]+/).filter(Boolean);
+    for (const k of GRAVE.concat(INTENS)) {
+      if (!afirma.some(w => w.startsWith(k)) || no.some(w => w.startsWith(k))) continue;
+      if (k === "agud" && /[a-z]+ite\b|inflamat|infecc/.test(g)) continue;      // “apendicite” já é um processo agudo
+      return false;
+    }
+    const og = orgaosDe(frase), fo = orgaosDe(fr);
+    for (const id of og) if (!fo.has(id)) return false;
+    const cf = classesDe(fr);
+    for (const c of classesDe(frase)) if (!cf.has(c)) return false;
+    const lf = ladoDe(frase);
+    return !lf || lf === ladoDe(fr);
+  }
+
+  /* “Apendicite Aguda” -> “Apendicite aguda.” (só a 1ª letra maiúscula; siglas mantidas). “Hérnia › inguinal” -> “Hérnia inguinal.” */
+  function frasePeloTermo(topico) {
+    const ws = String(topico).replace(/\s*›\s*/g, " ").split(/\s*[\/(]\s*/)[0].trim().split(/\s+/).filter(Boolean).map(w => /^\p{Lu}{2,}$/u.test(w) ? w : w.toLowerCase());
+    return capitalizar(ws.join(" ")) + ".";
+  }
+  /* Termo genérico (“Cisto.”, “Esteatose.”): completa com o órgão do achado, o lado (órgão par) e a classificação (Bosniak...). */
+  function completarTermo(frase, fr) {
+    let t = frase.replace(/\.$/, "");
+    const ws = t.split(/\s+/);
+    if (ws.length <= 2) {
+      if (ws.length === 1 && !orgaosDe(t).size) {
+        const g = fold(fr); let melhor = null;
+        for (const o of ORGAOS) { const m = g.match(o[1]); if (m && o[2] && (!melhor || m.index < melhor.i)) melhor = { o, i: m.index }; }
+        if (melhor) {
+          const masc = /(?:oma|ema|isma|rama)$/.test(fold(ws[0])) || !/(?:a|ia|ose|ite|ase|ao|dade|gem)$/.test(fold(ws[0]));
+          t += " " + (masc ? melhor.o[2] : melhor.o[3]);
+        }
+      }
+      const lado = ladoDe(fr), par = ORGAOS.some(o => o[4] && orgaosDe(t).has(o[0]));
+      if (par && lado && !ladoDe(t)) t += lado === "D" ? " à direita" : lado === "E" ? " à esquerda" : " bilateral";
+    }
+    const cl = String(fr).match(/\b(?:Bosniak|LI-?RADS|BI-?RADS|TI-?RADS|PI-?RADS|O-?RADS|Lung-?RADS)\s*(?:IV|III|II|I|V|\d)[A-F]?\b/i);
+    if (cl && !classesDe(t).size) t += " (" + cl[0] + ")";
+    return t + ".";
+  }
+  /* Regra de status cirúrgico: órgão “não visibilizado” + pós-operatório/-ectomia no achado -> “Status pós-...”. */
+  const CIRURGIA = [[/\b(vesicula|colecist\w*)\b/, "Status pós-colecistectomia.", "vesicula"], [/\buter\w*|\bhister\w*/, "Status pós-histerectomia.", "utero"],
+    [/\b(baco|esplen\w*)\b/, "Status pós-esplenectomia.", "baco"], [/\b(rim|rins)\b/, "Status pós-nefrectomia.", "rim"], [/\bapendic\w*/, "Status pós-apendicectomia.", "apendice"],
+    [/\bovar\w*/, "Status pós-ooforectomia.", "ovario"], [/\bprostat\w*/, "Status pós-prostatectomia.", "prostata"], [/\btireo\w*/, "Status pós-tireoidectomia.", "tireoide"]];
+  function statusPos(fr) {
+    const g = fold(fr);
+    if (!/\bnao\s+(?:se\s+)?(?:visibiliz|identific|individualiz|caracteriz|visualiz)\w*|\bausen\w*|\bausente\b/.test(g)) return null;
+    if (!/\bpos-?operat\w*|\bstatus\b|\bcirurg\w*|\bressec\w*|\bretirad\w*|\b\w*ectomia\b/.test(g)) return null;
+    const c = CIRURGIA.find(x => x[0].test(g));
+    return c ? { chave: "cir|" + c[2], topico: c[1], frase: c[1], origem: "regra", score: 0.95, tier: 1 } : null;
+  }
+
+  const GENERICOS = new Set("cisto cistos esteatose nodulo nodulos lesao lesoes massa massas calcificacao calcificacoes litiase atrofia hipertrofia ectasia dilatacao espessamento derrame hernia".split(" "));
+  function escolherFrase(ent, fs, ladoAchado, fr) {
     const permitidos = new Set([...fs, ...ent.topTok]);
     let melhor = null;
     ent.cands.forEach((c, i) => {
-      const limpa = limparCandidata(c, ladoAchado); if (!limpa) return;
+      let limpa = limparCandidata(c, ladoAchado); if (!limpa) return;
+      limpa = semIntensidade(limpa, fr);
       const tk = [...semEstilo(tokens(limpa.replace(/\bn[aã]o\s+complicad[oa]s?\b/gi, "")))];
       if (tk.some(t => !permitidos.has(t) && !QUALIF_TOK.has(t))) return;     // termo que não foi dito nem é do tópico
+      if (!valida(limpa, fr)) return;
       const expl = tk.length ? tk.filter(t => fs.has(t)).length / tk.length : 0;
       if (!melhor || expl > melhor.expl || (expl === melhor.expl && i > melhor.i)) melhor = { limpa, expl, i };
     });
     if (melhor) return { frase: melhor.limpa, origem: "banco" };
-    const termo = ent.topico.split(/\s*[\/(]\s*/)[0].toLowerCase().replace(/\s+/g, " ").trim();
-    return { frase: "Achados compatíveis com " + termo + ".", origem: "generica" };
+    if (ent.topico.replace(/\s*›\s*/g, " ").split(/\s*[\/(]\s*/)[0].trim().split(/\s+/).length > 4) return null;   // tópico longo não vira conclusão
+    const base = frasePeloTermo(ent.topico), tt = [...tokens(base)].filter(t => !QUALIF_TOK.has(t) && !ESTILO.has(t));
+    if (tt.length >= 2 && !tt.every(t => fs.has(t))) return null;
+    // diagnóstico específico que o achado não menciona (“Tuberculose”) nunca vira conclusão; só termos descritivos genéricos
+    if (tt.length === 1 && !fs.has(tt[0]) && !GENERICOS.has(fold(base).split(/\W+/)[0])) return null;          // tópico de várias palavras que o achado não diz: não serve de conclusão
+    const f = completarTermo(base, fr);
+    return valida(f, fr) ? { frase: f, origem: "topico" } : null;
   }
 
   /* ---------- semelhança ---------- */
@@ -5623,26 +5767,116 @@ window.tutuSite.appReady = true;
 
   /* ---------- sugestões ---------- */
   function frases(texto) { return String(texto).split(/(?<=[.;!?])\s+/).map(s => s.trim()).filter(Boolean); }
-  /* achados: lista de textos (parágrafos). opts: { conclusao: [linhas existentes], aprendido, max, ignorarBloqueio } */
+  /* ---------- pares (achado real do laudo do Artur -> conclusão que ele escreveu): fonte prioritária ---------- */
+  const chaveConc = t => fold(t).replace(/[^a-z0-9]+/g, " ").trim();
+  /* pares: [região, órgão, achado, conclusão, n]. Descarta o que não serve (normal, comparação, medida que não sai). */
+  function indexarPares(pares) {
+    const ents = [], df = new Map(), porChave = new Map();
+    for (const p of pares || []) {
+      if (!Array.isArray(p) || p.length < 4) continue;
+      const achado = String(p[2] == null ? "" : p[2]), conc = String(p[3] == null ? "" : p[3]), n = Math.max(1, +p[4] || 1);
+      if (!achado.trim() || !conc.trim() || ehListaNomes(conc)) continue;
+      const base = limparCandidata(conc, ""); if (!base || NORMAL.test(fold(base))) continue;
+      const tk = tokensPositivos(achado), ck = semEstilo(tokens(base));
+      if (!tk.size || !ck.size) continue;
+      const chave = "par|" + chaveConc(semIntensidade(base)), e = { achado, conc, n, tk, ck, lado: ladoDe(achado), chave };
+      ents.push(e);
+      const g = porChave.get(chave) || { n: 0, ck: semEstilo(tokens(semIntensidade(base))), ents: [] };
+      g.n += n; g.ents.push(e); porChave.set(chave, g);
+      for (const t of tk) df.set(t, (df.get(t) || 0) + 1);
+    }
+    const N = ents.length || 1, idf = new Map();
+    for (const [t, c] of df) idf.set(t, Math.log(1 + N / c));
+    return { ents, idf, maxIdf: Math.log(1 + N), porChave };
+  }
+  /* melhor conclusão dos pares para uma frase: acha os pares parecidos, agrupa por conclusão e prefere o grupo mais frequente (soma de n) */
+  function melhorPar(ip, fsPos, lado, folded, ap, ignorarBloqueio, fr) {
+    if (!ip || !ip.ents.length || !fsPos.size || NORMAL.test(folded)) return null;
+    const w = t => ip.idf.get(t) || ip.maxIdf;
+    let denF = 0; for (const t of fsPos) denF += w(t);
+    const achou = [];
+    for (const e of ip.ents) {
+      if (lado && e.lado && lado !== e.lado) continue;                    // lado diferente: nunca
+      let wi = 0, comum = 0, nucleo = false;
+      for (const t of fsPos) if (e.tk.has(t)) { wi += w(t); comum++; if (e.ck.has(t)) nucleo = true; }
+      if (comum < Math.min(2, e.tk.size, fsPos.size)) continue;
+      let denP = 0; for (const t of e.tk) denP += w(t);
+      const cp = wi / denP, cf = wi / denF;
+      // com a palavra-núcleo da conclusão na frase basta boa cobertura; sem ela (ex.: "litíases" -> "Colelitíase") a frase precisa ser quase a mesma
+      if (nucleo ? (cp < 0.6 || cf < 0.3) : (comum < 3 || cp < 0.65 || cf < 0.55)) continue;
+      achou.push({ e, sim: 0.6 * cp + 0.4 * cf });
+    }
+    const topo = achou.length ? Math.max(...achou.map(x => x.sim)) : 0, grupos = new Map();
+    for (const x of achou) {
+      if (x.sim < Math.max(0.5, topo - 0.15)) continue;
+      const g = grupos.get(x.e.chave) || { chave: x.e.chave, peso: 0, sim: 0, membros: [] };
+      g.peso += x.e.n * x.sim; g.sim = Math.max(g.sim, x.sim); g.membros.push(x); grupos.set(x.e.chave, g);
+    }
+    // conclusões que o próprio achado já cobre por inteiro (ex.: “aorta” + “ilíacas” -> “Ateromatose aorto-ilíaca”), mais específica e mais frequente primeiro
+    const cobertos = [];
+    for (const [chave, info] of ip.porChave) {
+      if (info.ck.size < 2 || info.n < 3 || ![...info.ck].every(t => fsPos.has(t))) continue;
+      cobertos.push({ chave, peso: info.n, tam: info.ck.size, sim: 0.5, membros: info.ents.filter(e => !(lado && e.lado && lado !== e.lado)).map(e => ({ e, sim: 0.5 })) });
+    }
+    cobertos.sort((a, b) => b.tam - a.tam || b.peso - a.peso);
+    for (const g of [...cobertos, ...[...grupos.values()].sort((a, b) => b.peso - a.peso || b.sim - a.sim)]) {
+      if (!ignorarBloqueio && estaBloqueada(ap, g.chave)) continue;
+      let aprendida = ap.itens[g.chave] && ap.itens[g.chave].frase;
+      if (aprendida && !valida(aprendida, fr)) aprendida = "";
+      let frase = aprendida || null;
+      for (const m of g.membros.sort((a, b) => (b.e.lado === lado) - (a.e.lado === lado) || b.sim - a.sim || b.e.n - a.e.n)) {
+        if (frase) break;
+        const c = limparCandidata(m.e.conc, lado), f = c && semIntensidade(c, fr);
+        if (f && valida(f, fr)) frase = f;
+      }
+      if (!frase) continue;
+      return { chave: g.chave, topico: frase, frase, origem: aprendida ? "aprendida" : "pares", score: g.sim, tier: aprendida ? 0 : 1 };
+    }
+    return null;
+  }
+
+  /* ---------- sugestões ---------- */
+  function frases(texto) { return String(texto).split(/(?<=[.;!?])\s+/).map(s => s.trim()).filter(Boolean); }
+  /* achados: lista de textos (parágrafos). opts: { conclusao: [linhas existentes], aprendido, pares (índice), max, ignorarBloqueio }
+     Prioridade por frase: aprendida (edições dele) > pares das Notas Tomografia > Notas TC (idx). */
   function sugerir(idx, achados, opts) {
     opts = opts || {};
-    const max = opts.max || 3, ap = opts.aprendido || vazio(), melhorPorChave = new Map();
-    if (!idx || !idx.entradas.length) return [];
-    for (const par of achados || []) for (const fr of frases(par)) {
-      if (/[{}]/.test(fr)) continue;                         // campo ainda não preenchido
-      const fs = tokens(fr); if (fs.size < 2) continue;
-      const folded = fold(fr), lado = ladoDe(fr), fsPos = tokensPositivos(fr), cand = [];
-      for (const ent of idx.entradas) { const r = pontuar(idx, ent, fs, fsPos, folded); if (r) cand.push({ ent, ...r }); }
-      cand.sort((a, b) => b.score - a.score);
-      const pick = cand.find(c => opts.ignorarBloqueio || !estaBloqueada(ap, c.ent.chave));
-      if (!pick) continue;
-      const aprendida = ap.itens[pick.ent.chave] && ap.itens[pick.ent.chave].frase;
-      const f = aprendida ? { frase: aprendida, origem: "aprendida" } : escolherFrase(pick.ent, fs, lado);
-      const ant = melhorPorChave.get(pick.ent.chave);
-      if (!ant || pick.score > ant.score) melhorPorChave.set(pick.ent.chave, { chave: pick.ent.chave, topico: pick.ent.topico, frase: f.frase, origem: f.origem, score: pick.score });
+    const max = opts.max || 3, ap = opts.aprendido || vazio(), ip = opts.pares || null, melhorPorChave = new Map();
+    const temTC = idx && idx.entradas.length;
+    if (!temTC && !(ip && ip.ents.length)) return [];
+    for (const par of achados || []) for (const fr0 of frases(par)) {
+      if (/[{}]/.test(fr0)) continue;
+      const fr = limparComparacao(fr0) || fr0;               // “sem alterações em relação ao exame anterior” não é achado normal                         // campo ainda não preenchido
+      const fs = tokens(fr); if (!fs.size) continue;
+      const folded = fold(fr), lado = ladoDe(fr), fsPos = tokensPositivos(fr), opcoes = [];
+      const dePar = melhorPar(ip, fsPos, lado, folded, ap, opts.ignorarBloqueio, fr);
+      if (dePar) opcoes.push(dePar);
+      const cir = statusPos(fr);
+      if (cir && (opts.ignorarBloqueio || !estaBloqueada(ap, cir.chave))) {
+        const ja = ap.itens[cir.chave] && ap.itens[cir.chave].frase;
+        if (ja && valida(ja, fr)) { cir.frase = ja; cir.origem = "aprendida"; cir.tier = 0; }
+        opcoes.push(cir);
+      }
+      if (temTC && fs.size >= 2) {
+        const cand = [];
+        for (const ent of idx.entradas) { const r = pontuar(idx, ent, fs, fsPos, folded); if (r) cand.push({ ent, ...r }); }
+        cand.sort((a, b) => b.score - a.score);
+        for (const pick of cand) {
+          if (!opts.ignorarBloqueio && estaBloqueada(ap, pick.ent.chave)) continue;
+          const aprendida = ap.itens[pick.ent.chave] && ap.itens[pick.ent.chave].frase;
+          const f = aprendida && valida(aprendida, fr) ? { frase: aprendida, origem: "aprendida" } : escolherFrase(pick.ent, fs, lado, fr);
+          if (!f) continue;                                  // candidata insegura para este achado: tenta a próxima
+          opcoes.push({ chave: pick.ent.chave, topico: pick.ent.topico, frase: f.frase, origem: f.origem, score: pick.score, tier: f.origem === "aprendida" ? 0 : 2 });
+          break;
+        }
+      }
+      opcoes.sort((a, b) => a.tier - b.tier || b.score - a.score);
+      const o = opcoes[0]; if (!o) continue;
+      const ant = melhorPorChave.get(o.chave);
+      if (!ant || o.tier < ant.tier || (o.tier === ant.tier && o.score > ant.score)) melhorPorChave.set(o.chave, o);
     }
     const out = [];
-    for (const s of [...melhorPorChave.values()].sort((a, b) => b.score - a.score)) {
+    for (const s of [...melhorPorChave.values()].sort((a, b) => a.tier - b.tier || b.score - a.score)) {
       if (jaTem(s.frase, opts.conclusao)) continue;
       if (out.some(o => jaTem(s.frase, [o.frase]))) continue;   // quase repetida de outra sugestão
       out.push(s); if (out.length >= max) break;
@@ -5650,7 +5884,7 @@ window.tutuSite.appReady = true;
     return out;
   }
 
-  const api = { fold, tokens, ehListaNomes, limparMedidas, ladoDe, removerLado, negadoEm, indexar, sugerir, jaTem, dice, vazio, normalizar,
+  const api = { fold, tokens, ehListaNomes, limparMedidas, ladoDe, removerLado, negadoEm, indexar, indexarPares, limparComparacao, valida, semIntensidade, completarTermo, statusPos, limparCandidata, frasePeloTermo, sugerir, jaTem, dice, vazio, normalizar,
     registrarRejeicao, estaBloqueada, aprenderDe, mesclar, sanitizarAprendida, semNumero };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuConclusao = api;
@@ -5691,6 +5925,12 @@ window.tutuSite.appReady = true;
     if (!idx || idxBanco !== banco) { idx = C.indexar(banco); idxBanco = banco; }   // a sincronização troca o array: reindexa
     return idx;
   };
+  let ipar = null, iparRef = null;
+  const indicePares = () => {
+    const b = window.BANK_PARES;
+    if (!ipar || iparRef !== b) { ipar = C.indexarPares(b); iparRef = b; }       // idem: reindexa quando a sincronização troca a lista
+    return ipar;
+  };
   const soNumero = t => /^\s*\d+\s*[.)]?\s*$/.test(t);
   function secaoConclusao() {
     const ps = [...sheet.children], hi = ps.findIndex(p => norm(p.textContent) === "conclusão");
@@ -5716,7 +5956,12 @@ window.tutuSite.appReady = true;
   /* ---------- ghost (fora da folha) ---------- */
   const ghost = ui.el("div", { id: "ghostConc", role: "note", "aria-label": "Sugestão de conclusão", title: "Clique para inserir na Conclusão" });
   ghost.hidden = true; document.body.append(ghost);
-  const esconder = () => { atual = null; ghost.hidden = true; ghost.replaceChildren(); };
+  /* Espaço para o ghost sem tocar no texto: uma regra CSS no <head> (margem na linha de referência) empurra visualmente
+     "Achados adicionais" para baixo. Nada é gravado na folha. */
+  const espaco = document.head.appendChild(document.createElement("style")); espaco.id = "ghostConcEspaco";
+  const aviso = ui.el("button", { type: "button", id: "ghostAviso", title: "Ir até a sugestão" });
+  aviso.hidden = true; document.body.append(aviso);
+  const esconder = () => { atual = null; ghost.hidden = true; ghost.replaceChildren(); espaco.textContent = ""; aviso.hidden = true; };
   function linhasDe(sugs, info) {
     const numerar = info.temPlaceholder || info.numeradas > 0 || sugs.length > 1;
     return sugs.map((s, i) => (numerar ? (info.maxNum + i + 1) + ". " : "") + s.frase);
@@ -5724,12 +5969,17 @@ window.tutuSite.appReady = true;
   function posicionar() {
     if (!atual || ghost.hidden) return;
     const info = secaoConclusao(); if (!info) { esconder(); return; }
-    const ref = info.alvo || info.ultimo || info.heading, r = ref.getBoundingClientRect(), c = ui.center.getBoundingClientRect();
-    const top = info.alvo ? r.top : r.bottom;
-    ghost.style.visibility = top < c.top || top > c.bottom - 24 ? "hidden" : "visible";
-    const cs = getComputedStyle(ref);
+    const ref = info.alvo || info.ultimo || info.heading, i = [...sheet.children].indexOf(ref);
+    const r = ref.getBoundingClientRect(), c = ui.center.getBoundingClientRect(), top = info.alvo ? r.top : r.bottom, cs = getComputedStyle(ref);
     Object.assign(ghost.style, { left: r.left + "px", top: top + "px", width: Math.max(160, r.width) + "px", fontFamily: cs.fontFamily, fontSize: cs.fontSize });
+    const extra = Math.max(0, Math.ceil(ghost.offsetHeight - (info.alvo ? ref.offsetHeight : 0)));
+    espaco.textContent = extra && i >= 0 ? `#laudo > :nth-child(${i + 1}) { margin-bottom: ${extra}px !important; }` : "";
+    const fora = top < c.top ? "↑" : top > c.bottom - 24 ? "↓" : "";
+    ghost.style.visibility = fora ? "hidden" : "visible";
+    aviso.hidden = !fora; aviso.textContent = "Conclusão sugerida " + fora + " " + TECLA;
   }
+  aviso.addEventListener("mousedown", e => e.preventDefault());
+  aviso.addEventListener("click", () => { const info = secaoConclusao(); (info && (info.alvo || info.ultimo || info.heading))?.scrollIntoView({ block: "center" }); posicionar(); });
   function mostrar(sugs, info) {
     atual = { sugs };
     ghost.replaceChildren(...linhasDe(sugs, info).map(t => ui.el("div", { class: "gc-linha" }, t)),
@@ -5748,7 +5998,7 @@ window.tutuSite.appReady = true;
     let achados = []; try { achados = alteredFindings(); } catch (_) {}
     if (!achados.length) { esconder(); return; }
     const caso = ui.activeId ? ui.activeId() : "", desp = dispensadas.get(caso) || new Set();
-    const sugs = C.sugerir(indice(), achados, { conclusao: info.linhas, aprendido }).filter(s => !desp.has(s.chave + "|" + C.fold(s.frase)));
+    const sugs = C.sugerir(indice(), achados, { conclusao: info.linhas, aprendido, pares: indicePares() }).filter(s => !desp.has(s.chave + "|" + C.fold(s.frase)));
     if (!sugs.length) { esconder(); return; }
     mostrar(sugs, info);
   }
@@ -5801,7 +6051,7 @@ window.tutuSite.appReady = true;
     // sugestão bloqueada por 3 Esc volta quando ele mesmo escreve essa conclusão
     try {
       const bloq = Object.keys(aprendido.itens).filter(k => C.estaBloqueada(aprendido, k));
-      if (bloq.length) for (const s of C.sugerir(indice(), alteredFindings(), { aprendido, ignorarBloqueio: true, max: 50 }))
+      if (bloq.length) for (const s of C.sugerir(indice(), alteredFindings(), { aprendido, pares: indicePares(), ignorarBloqueio: true, max: 50 }))
         if (bloq.includes(s.chave) && info.linhas.some(l => C.dice(C.semNumero(l), s.frase) > 0.5)) { aprendido.itens[s.chave].rej = 0; aprendido.itens[s.chave].atualizado = agora(); mudou = true; }
     } catch (_) {}
     if (mudou) salvar();
@@ -5831,4 +6081,205 @@ window.tutuSite.appReady = true;
   }
   ui.conclusao = { calcular, aceitar, dispensar, ligado: () => ligado, aprendido: () => aprendido, carregar };
   carregar(true);
+})();
+
+/* Painel "IA viu": achados da IA de imagem (docs/IA-IMAGEM.md) vindos da ponte local; o médico aceita, edita ou rejeita.
+   Só consulta a ponte (127.0.0.1:47831) e só aparece quando ela responde. Nada de paciente no site: guarda apenas o caso_id já visto. */
+(() => {
+  "use strict";
+  const ui = window.tutuV2, BASE = "http://127.0.0.1:47831", NOME = "IA viu", VISTO = "v2IAVisto";
+  const POLL_MS = 10000, PRIMEIRA_MS = 3000;
+  const ETAPAS = { extraindo: "extraindo o exame", series: "escolhendo a série", segmentando: "segmentando os órgãos", analisando: "analisando" };
+  const TIPOS = { calculo_renal: "Cálculo renal", cisto_renal: "Cisto renal", esteatose: "Esteatose", outro: "Outro" };
+  let casos = [], atualId = null, dados = null, dadosAssin = "", ponteOk = false, aviso = "", assinRender = "", busy = false;
+
+  /* ---------- aba e painel ---------- */
+  const tab = ui.button("", () => ui.panel(NOME), { role: "tab", id: "rightTabIA", "aria-controls": "rightPanelIA", "aria-selected": "false", title: "IA viu · Alt+I" });
+  const selo = ui.el("i", { class: "ia-selo", "aria-label": "Novo resultado da IA de imagem" }, "●");
+  selo.hidden = true;
+  tab.append(ui.el("b", { "aria-hidden": "true" }, "🔎"), ui.el("span", {}, NOME), selo);
+  tab.hidden = true;
+  const panel = ui.panels[NOME] = ui.el("section", { id: "rightPanelIA", role: "tabpanel", "aria-labelledby": "rightTabIA", class: "v2-panel" });
+  panel.hidden = true;
+  document.getElementById("rightTabs").append(tab);
+  ui.right.append(panel);
+
+  /* ---------- ponte ---------- */
+  async function ponte(rota, corpo) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 5000);
+    try {
+      const r = await fetch(BASE + rota, corpo === undefined ? { signal: ctl.signal } :
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo), signal: ctl.signal });
+      if (!r.ok) return null;
+      return { json: await r.json(), aviso: r.headers.get("X-Tutu-Aviso") || "" };
+    } catch (_) { return null; } finally { clearTimeout(t); }
+  }
+  async function poll() {
+    if (document.hidden || busy) return;
+    busy = true;
+    try {
+      const r = await ponte("/imagem/casos");
+      ponteOk = !!r && Array.isArray(r.json);
+      casos = ponteOk ? r.json.slice(0, 5) : []; aviso = ponteOk ? r.aviso : "";
+      if (ponteOk && !casos.some(c => c.caso_id === atualId)) atualId = casos[0]?.caso_id || null;
+      const c = atual();
+      if (c && c.etapa === "pronto") {
+        const assin = c.caso_id + "|" + c.revisados + "|" + c.n_achados;
+        if (assin !== dadosAssin) { const d = await ponte("/imagem/caso?id=" + encodeURIComponent(c.caso_id)); if (d) { dados = d.json; dadosAssin = assin; } }
+      } else { dados = null; dadosAssin = ""; }
+      tab.hidden = !ponteOk && panel.hidden;
+      atualizarSelo(); render();
+    } finally { busy = false; }
+  }
+  const atual = () => casos.find(c => c.caso_id === atualId) || null;
+  const lerVisto = () => { try { return localStorage.getItem(VISTO) || ""; } catch (_) { return ""; } };
+  const gravaVisto = id => { try { localStorage.setItem(VISTO, id); } catch (_) {} };
+  const painelAberto = () => !panel.hidden && !ui.app.classList.contains("right-mini");
+  function atualizarSelo() {
+    const novo = casos[0];
+    if (novo && painelAberto() && atualId === novo.caso_id && novo.etapa === "pronto") gravaVisto(novo.caso_id);
+    selo.hidden = !(novo && novo.etapa === "pronto" && novo.revisados < novo.n_achados && lerVisto() !== novo.caso_id);
+  }
+
+  /* ---------- inserir na folha (Achados / Conclusão), sem duplicar ---------- */
+  const fold = s => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  const soNumero = t => /^\s*\d+\s*[.)]?\s*$/.test(t);
+  function secao(nome) {
+    const ps = [...sheet.children], hi = ps.findIndex(p => norm(p.textContent) === nome);
+    if (hi < 0) return null;
+    let end = hi + 1; while (end < ps.length && !isHeading(ps[end].textContent.trim())) end++;
+    return { head: ps[hi], blocos: ps.slice(hi + 1, end) };
+  }
+  const novoP = t => { const p = document.createElement("p"); p.setAttribute("style", PSTYLE); p.textContent = t; return p; };
+  function colocar(sec, texto, vazio) {
+    const alvo = sec.blocos.find(vazio);
+    if (alvo) { alvo.textContent = texto; return alvo; }
+    const cheios = sec.blocos.filter(b => b.textContent.trim()), p = novoP(texto);
+    (cheios[cheios.length - 1] || sec.head).after(p); return p;
+  }
+  /* Devolve {achados, conclusao}: true quando inseriu, false quando já estava na folha. */
+  function inserirNaFolha(frase, conclusao) {
+    const res = { achados: false, conclusao: false };
+    pushVersion("Antes da IA de imagem");
+    let ultimo = null;
+    const sa = secao("achados");
+    if (!frase) { /* nada */ }
+    else if (!sa) { sheet.focus({ preventScroll: true }); insertAtCaret(frase); res.achados = true; }
+    else if (!sa.blocos.some(b => fold(b.textContent) === fold(frase))) { ultimo = colocar(sa, frase, b => !b.textContent.trim()); res.achados = true; }
+    const sc = conclusao ? secao("conclusão") : null;
+    if (sc && !sc.blocos.some(b => fold(b.textContent.replace(/^\s*\d+\s*[.)]\s*/, "")) === fold(conclusao))) {
+      const cheios = sc.blocos.filter(b => b.textContent.trim() && !soNumero(b.textContent));
+      const maxNum = Math.max(0, ...cheios.map(b => +(b.textContent.trim().match(/^(\d+)\s*[.)]/) || [0, 0])[1]));
+      const numerar = maxNum > 0 || sc.blocos.some(b => soNumero(b.textContent));
+      colocar(sc, (numerar ? (maxNum + 1) + ". " : "") + conclusao, b => soNumero(b.textContent) || !b.textContent.trim());
+      res.conclusao = true;
+    }
+    if (ultimo) { sheet.focus({ preventScroll: true }); caretAtEnd(ultimo); }
+    if (res.achados || res.conclusao) { updateCount(); renderAlerts(); scheduleCaseSave(); pushVersion("IA de imagem"); }
+    return res;
+  }
+
+  /* ---------- veredito ---------- */
+  async function enviar(a, veredito, frase) {
+    const c = atual(); if (!c) return;
+    if (veredito !== "rejeitado") {
+      const r = inserirNaFolha(frase, a.conclusao);
+      setStatus(r.achados || r.conclusao ? "Frase da IA inserida na folha." : "Essa frase já estava na folha.", "ok");
+    }
+    const r = await ponte("/imagem/revisao", { caso_id: c.caso_id, achado_id: a.id, veredito, frase_final: veredito === "rejeitado" ? "" : frase });
+    if (!r) setStatus("Não consegui registrar o veredito na ponte.", "err");
+    dadosAssin = ""; await poll();
+  }
+  async function enviarPerdido(form) {
+    const c = atual(); if (!c) return;
+    const r = await ponte("/imagem/perdido", { caso_id: c.caso_id, tipo: form.tipo.value, corte: form.corte.value.trim(), nota: form.nota.value.trim() });
+    setStatus(r ? "Anotado: a IA perdeu algo." : "Não consegui anotar na ponte.", r ? "ok" : "err");
+    if (r) { form.reset(); form.closest("details").open = false; dadosAssin = ""; await poll(); }
+  }
+
+  /* ---------- tela ---------- */
+  const rotulo = id => `${id.slice(6, 8)}/${id.slice(4, 6)} ${id.slice(9, 11)}:${id.slice(11, 13)}`;
+  function cartao(a, rev, caso) {
+    const card = ui.el("article", { class: "ia-card", "data-achado": a.id });
+    if (a.imagem) {
+      const img = ui.el("img", { class: "ia-thumb", alt: "Corte do achado", loading: "lazy",
+        src: `${BASE}/imagem/img?id=${encodeURIComponent(caso.caso_id)}&f=${encodeURIComponent(a.imagem)}` });
+      card.append(img);
+    }
+    const frase = ui.el("p", { class: "ia-frase" }, a.frase || "");
+    const det = [a.detalhe, a.corte != null ? "corte nº " + a.corte : "", a.confianca ? "confiança " + a.confianca : ""].filter(Boolean).join(" · ");
+    card.append(frase, ui.el("p", { class: "meta ia-det" }, det));
+    if (rev) { card.append(ui.el("p", { class: "ia-feito" }, { aceito: "✓ aceito", editado: "✓ editado", rejeitado: "✕ rejeitado" }[rev.veredito] || rev.veredito)); card.classList.add("ia-revisado"); return card; }
+    const linha = ui.el("div", { class: "ia-acoes" });
+    const aceitar = ui.button("Aceitar", () => enviar(a, "aceito", a.frase), { class: "ia-aceitar" });
+    const editar = ui.button("Editar", () => {
+      const campo = ui.el("textarea", { class: "ia-edit", rows: "3", "aria-label": "Frase editável" }); campo.value = a.frase || "";
+      const ok = ui.button("Aceitar editado", () => campo.value.trim() && enviar(a, "editado", campo.value.trim()), { class: "ia-aceitar-ed" });
+      const cancelar = ui.button("Cancelar", () => { assinRender = ""; render(); });
+      frase.replaceWith(campo); linha.replaceChildren(ok, cancelar); campo.focus();
+    }, { class: "ia-editar" });
+    const rejeitar = ui.button("Rejeitar", () => enviar(a, "rejeitado", ""), { class: "ia-rejeitar" });
+    linha.append(aceitar, editar, rejeitar); card.append(linha);
+    return card;
+  }
+  function formPerdido() {
+    const box = ui.el("details", { class: "ia-perdeu" });
+    box.append(ui.el("summary", {}, "＋ a IA perdeu algo"));
+    const f = ui.el("form", { class: "ia-form" }), tipo = ui.el("select", { name: "tipo", "aria-label": "Tipo do achado perdido" });
+    for (const [v, t] of Object.entries(TIPOS)) tipo.append(ui.el("option", { value: v }, t));
+    f.append(tipo, ui.el("input", { name: "corte", type: "number", min: "0", placeholder: "Nº do corte", "aria-label": "Número do corte" }),
+      ui.el("input", { name: "nota", type: "text", maxlength: "500", placeholder: "Nota (opcional)", "aria-label": "Nota" }),
+      ui.button("Enviar", () => enviarPerdido(f), { class: "ia-enviar" }));
+    f.onsubmit = e => { e.preventDefault(); enviarPerdido(f); };
+    box.append(f); return box;
+  }
+  function render() {
+    const c = atual(), assin = JSON.stringify([ponteOk, aviso, atualId, casos, dados]);
+    if (assin === assinRender) return;
+    if (panel.contains(document.activeElement) && /^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName)) return;   // não atropela quem digita
+    assinRender = assin;
+    const out = [ui.el("h2", {}, "🔎 IA viu")];
+    if (!ponteOk) out.push(ui.el("p", { class: "meta ia-msg" }, "Ponte local indisponível. Abra a ponte (127.0.0.1:47831) para ver o que a IA de imagem achou."));
+    else {
+      if (aviso) out.push(ui.el("p", { class: "ia-aviso", role: "status" }, aviso));
+      if (!c) out.push(ui.el("p", { class: "meta ia-msg" }, "Nenhum exame ainda. Ponha o ZIP na pasta entrada\\ da IA de imagem."));
+      if (casos.length > 1) {
+        const lista = ui.el("div", { class: "ia-casos", role: "group", "aria-label": "Últimos exames" });
+        for (const k of casos) lista.append(ui.button(rotulo(k.caso_id), () => { atualId = k.caso_id; dados = null; dadosAssin = ""; assinRender = ""; poll(); },
+          { "aria-pressed": String(k.caso_id === atualId), title: "Exame " + k.caso_id }));
+        out.push(lista);
+      }
+      if (c && c.etapa === "erro") out.push(ui.el("p", { class: "ia-aviso" }, "A IA não conseguiu processar: " + (c.mensagem || "erro")));
+      else if (c && c.etapa !== "pronto") out.push(ui.el("p", { class: "ia-proc", role: "status" }, `Processando… (${ETAPAS[c.etapa] || c.etapa || "iniciando"})`));
+      else if (c && dados) {
+        const ach = dados.achados || {}, rev = (dados.revisao && dados.revisao.achados) || {}, s = ach.serie || {};
+        if (s.descricao || s.fase) out.push(ui.el("p", { class: "meta" }, ["Série: " + (s.descricao || "?"), s.fase ? "fase " + s.fase : ""].filter(Boolean).join(" · ")));
+        for (const w of ach.avisos || []) out.push(ui.el("p", { class: "ia-aviso" }, w));
+        if (!(ach.achados || []).length) out.push(ui.el("p", { class: "meta ia-msg" }, "A IA não achou nada nos itens que avalia."));
+        for (const a of ach.achados || []) out.push(cartao(a, rev[a.id], c));
+        const neg = ach.negativos || [];
+        if (neg.length) { const ul = ui.el("ul", { class: "ia-neg" }); ul.append(...neg.map(n => ui.el("li", {}, n.detalhe || n.tipo))); out.push(ul); }
+        out.push(formPerdido());
+      }
+    }
+    panel.replaceChildren(...out);
+  }
+
+  /* ---------- abrir/fechar, atalho, ciclo ---------- */
+  ui.actions.iaviu = {
+    label: NOME, run: () => {
+      if (painelAberto()) { ui.toggleRight(); return; }
+      tab.hidden = false; ui.panel(NOME); assinRender = ""; poll();
+    }
+  };
+  ui.shortcuts["Alt+I"] = "iaviu";
+  ui.renderShortcuts();
+  tab.addEventListener("click", () => { assinRender = ""; poll(); });
+  // Consulta sozinha só onde a ponte aceita a origem (site local, GitHub Pages, localhost); em outras portas ela responderia 403.
+  if (location.origin === BASE || location.origin === "https://arturaragao.github.io" || /^http:\/\/localhost(:\d+)?$/.test(location.origin)) {
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+    setTimeout(poll, PRIMEIRA_MS);
+    setInterval(poll, POLL_MS);
+  }
+  ui.iaViu = { poll, render, inserirNaFolha, painel: panel, tab };
 })();

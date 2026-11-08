@@ -569,3 +569,26 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #ghostConc .gc-linha { white-space:pre-wrap; overflow-wrap:anywhere; }
 #ghostConc .gc-dica { font:500 10px/1.4 var(--f-body); font-style:normal; color:var(--muted); text-align:right; }
 #ghostConc:hover .gc-dica { color:var(--accent); }
+/* IA viu: painel dos achados da IA de imagem */
+#rightTabs button[hidden] { display:none; }
+#rightTabs button { position:relative; }
+.ia-selo { position:absolute; top:1px; right:3px; font-size:9px; font-style:normal; color:var(--warn); }
+.ia-card { background:var(--paper); border:1px solid var(--line); border-radius:16px; padding:10px; display:flex; flex-direction:column; gap:6px; }
+.ia-card.ia-revisado { opacity:.7; }
+.ia-thumb { width:100%; max-height:150px; object-fit:contain; border-radius:10px; background:#000; }
+.ia-frase { margin:0; font-size:13px; }
+.ia-det { margin:0; font-size:11px; }
+.ia-acoes, .ia-casos { display:flex; flex-wrap:wrap; gap:5px; }
+.ia-acoes button, .ia-casos button, .ia-enviar { border-radius:10px; padding:4px 9px; font-size:12px; }
+.ia-casos button[aria-pressed="true"] { background:var(--p-blue); font-weight:600; }
+.tutu-v2 .ia-aceitar, .tutu-v2 .ia-aceitar-ed { background:var(--accent); color:var(--accent-ink); }
+.ia-feito { margin:0; font-size:12px; color:var(--ok); }
+.ia-aviso { margin:0; padding:6px 10px; border-radius:12px; background:var(--p-yellow); font-size:12px; }
+.ia-proc, .ia-msg { margin:0; font-size:12px; color:var(--muted); }
+.ia-neg { margin:0; padding-left:18px; color:var(--muted); font-size:12px; }
+.ia-form { display:flex; flex-direction:column; gap:6px; margin-top:6px; }
+.ia-perdeu summary { cursor:pointer; font-size:12px; color:var(--accent); }
+#ghostAviso { position:fixed; z-index:21; bottom:104px; left:50%; transform:translateX(-50%); padding:3px 12px; border:1px solid var(--line); border-radius:14px;
+  background:var(--panel); color:var(--muted); font:500 11.5px var(--f-body); cursor:pointer; box-shadow:0 2px 8px #30271914; }
+#ghostAviso[hidden] { display:none; }
+#ghostAviso:hover { color:var(--accent); }
