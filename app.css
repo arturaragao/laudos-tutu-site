@@ -581,6 +581,9 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 .ia-acoes, .ia-casos { display:flex; flex-wrap:wrap; gap:5px; }
 .ia-acoes button, .ia-casos button, .ia-enviar { border-radius:10px; padding:4px 9px; font-size:12px; }
 .ia-casos button[aria-pressed="true"] { background:var(--p-blue); font-weight:600; }
+.ia-lista { display:flex; flex-direction:column; gap:4px; max-height:55vh; overflow:auto; }
+.ia-lista button { text-align:left; border-radius:10px; padding:5px 9px; font-size:12px; }
+.ia-lista button[aria-pressed="true"] { background:var(--p-blue); }
 .tutu-v2 .ia-aceitar, .tutu-v2 .ia-aceitar-ed { background:var(--accent); color:var(--accent-ink); }
 .ia-feito { margin:0; font-size:12px; color:var(--ok); }
 .ia-aviso { margin:0; padding:6px 10px; border-radius:12px; background:var(--p-yellow); font-size:12px; }

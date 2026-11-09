@@ -6090,8 +6090,19 @@ window.tutuSite.appReady = true;
   const ui = window.tutuV2, BASE = "http://127.0.0.1:47831", NOME = "IA viu", VISTO = "v2IAVisto";
   const POLL_MS = 10000, PRIMEIRA_MS = 3000;
   const ETAPAS = { extraindo: "extraindo o exame", series: "escolhendo a série", segmentando: "segmentando os órgãos", analisando: "analisando" };
-  const TIPOS = { calculo_renal: "Cálculo renal", cisto_renal: "Cisto renal", esteatose: "Esteatose", outro: "Outro" };
-  let casos = [], atualId = null, dados = null, dadosAssin = "", ponteOk = false, aviso = "", assinRender = "", busy = false;
+  const TIPOS = { calculo_renal: "Cálculo renal", cisto_renal: "Cisto renal", esteatose: "Esteatose", ateromatose_aortica: "Ateromatose aórtica",
+    colelitiase: "Colelitíase", colecistectomia: "Colecistectomia", hidronefrose: "Hidronefrose", litiase_ureteral: "Litíase ureteral",
+    aorta_ectasia: "Ectasia da aorta", aorta_aneurisma: "Aneurisma da aorta", diverticulose: "Diverticulose", cisto_hepatico: "Cisto hepático", nodulo_hepatico: "Nódulo hepático",
+    cisto_pancreatico: "Cisto pancreático", nodulo_solido_renal: "Nódulo sólido renal",
+    linfonodo_aumentado: "Linfonodo aumentado", densificacao_gordura: "Densificação da gordura", paniculite_mesenterica: "Paniculite mesentérica",
+    diverticulite: "Diverticulite", outro: "Outro" };
+  /* Campos que o Artur pode corrigir num achado (valor da ponte -> rótulo); só aparecem os que o achado tem. */
+  const CAMPOS = {
+    lado: { rot: "Lado", op: { direito: "direito", esquerdo: "esquerdo", bilateral: "bilateral" } },
+    terco: { rot: "Terço", op: { superior: "superior", medio: "médio", inferior: "inferior" } },
+    categoria: { rot: "Tipo do cisto", op: { cortical: "cortical", parapielico: "parapiélico" } },
+    grau: { rot: "Grau", op: { discreta: "discreta", moderada: "moderada", acentuada: "acentuada" } } };
+  let casos = [], atualId = null, dados = null, dadosAssin = "", ponteOk = false, aviso = "", assinRender = "", busy = false, filtro = "";
 
   /* ---------- aba e painel ---------- */
   const tab = ui.button("", () => ui.panel(NOME), { role: "tab", id: "rightTabIA", "aria-controls": "rightPanelIA", "aria-selected": "false", title: "IA viu · Alt+I" });
@@ -6120,7 +6131,7 @@ window.tutuSite.appReady = true;
     try {
       const r = await ponte("/imagem/casos");
       ponteOk = !!r && Array.isArray(r.json);
-      casos = ponteOk ? r.json.slice(0, 5) : []; aviso = ponteOk ? r.aviso : "";
+      casos = ponteOk ? r.json : []; aviso = ponteOk ? r.aviso : "";
       if (ponteOk && !casos.some(c => c.caso_id === atualId)) atualId = casos[0]?.caso_id || null;
       const c = atual();
       if (c && c.etapa === "pronto") {
@@ -6180,7 +6191,9 @@ window.tutuSite.appReady = true;
   }
 
   /* ---------- veredito ---------- */
-  async function enviar(a, veredito, frase) {
+  /* Registro de aprendizado (Tutu-IA\correcoes.jsonl): só o que mudou; a ponte lê o "antes" do próprio achado. */
+  const registrar = (c, achado, acao, depois) => ponte("/imagem/correcao", { caso_id: c.caso_id, achado, acao, depois });
+  async function enviar(a, veredito, frase, depois) {
     const c = atual(); if (!c) return;
     if (veredito !== "rejeitado") {
       const r = inserirNaFolha(frase, a.conclusao);
@@ -6188,11 +6201,17 @@ window.tutuSite.appReady = true;
     }
     const r = await ponte("/imagem/revisao", { caso_id: c.caso_id, achado_id: a.id, veredito, frase_final: veredito === "rejeitado" ? "" : frase });
     if (!r) setStatus("Não consegui registrar o veredito na ponte.", "err");
+    else {
+      const mudou = depois && Object.keys(depois).length ? depois : undefined;
+      await registrar(c, a.id, veredito === "rejeitado" ? "rejeitar" : (mudou ? "editar" : "aceitar"), mudou);
+    }
     dadosAssin = ""; await poll();
   }
   async function enviarPerdido(form) {
     const c = atual(); if (!c) return;
-    const r = await ponte("/imagem/perdido", { caso_id: c.caso_id, tipo: form.tipo.value, corte: form.corte.value.trim(), nota: form.nota.value.trim() });
+    const lado = form.lado.value, nota = form.nota.value.trim();
+    const r = await ponte("/imagem/perdido", { caso_id: c.caso_id, tipo: form.tipo.value, corte: form.corte.value.trim(), nota });
+    if (r) await registrar(c, form.tipo.value, "nao_viu", { ...(lado ? { lado } : {}), ...(nota ? { texto: nota } : {}) });
     setStatus(r ? "Anotado: a IA perdeu algo." : "Não consegui anotar na ponte.", r ? "ok" : "err");
     if (r) { form.reset(); form.closest("details").open = false; dadosAssin = ""; await poll(); }
   }
@@ -6214,9 +6233,25 @@ window.tutuSite.appReady = true;
     const aceitar = ui.button("Aceitar", () => enviar(a, "aceito", a.frase), { class: "ia-aceitar" });
     const editar = ui.button("Editar", () => {
       const campo = ui.el("textarea", { class: "ia-edit", rows: "3", "aria-label": "Frase editável" }); campo.value = a.frase || "";
-      const ok = ui.button("Aceitar editado", () => campo.value.trim() && enviar(a, "editado", campo.value.trim()), { class: "ia-aceitar-ed" });
+      const sels = {}, medida = a.medida_mm != null ? ui.el("input", { class: "ia-edit-med", type: "number", min: "0.1", step: "0.1", "aria-label": "Medida em mm" }) : null;
+      if (medida) medida.value = a.medida_mm;
+      const extras = ui.el("div", { class: "ia-campos" });
+      for (const [k, def] of Object.entries(CAMPOS)) {
+        if (!a[k]) continue;
+        const sel = sels[k] = ui.el("select", { "aria-label": def.rot });
+        for (const [v, t] of Object.entries(def.op)) sel.append(ui.el("option", { value: v }, t));
+        sel.value = a[k]; const lb = ui.el("label", {}, def.rot + " "); lb.append(sel); extras.append(lb);
+      }
+      if (medida) { const lb = ui.el("label", {}, "Medida (mm) "); lb.append(medida); extras.append(lb); }
+      const mudou = () => {   // só o que o Artur trocou (a ponte guarda o "antes" do achado)
+        const d = {};
+        for (const [k, sel] of Object.entries(sels)) if (sel.value !== a[k]) d[k] = sel.value;
+        if (medida && medida.value !== "" && +medida.value !== a.medida_mm) d.medida_mm = +medida.value;
+        return d;
+      };
+      const ok = ui.button("Aceitar editado", () => campo.value.trim() && enviar(a, "editado", campo.value.trim(), mudou()), { class: "ia-aceitar-ed" });
       const cancelar = ui.button("Cancelar", () => { assinRender = ""; render(); });
-      frase.replaceWith(campo); linha.replaceChildren(ok, cancelar); campo.focus();
+      frase.replaceWith(campo); campo.after(extras); linha.replaceChildren(ok, cancelar); campo.focus();
     }, { class: "ia-editar" });
     const rejeitar = ui.button("Rejeitar", () => enviar(a, "rejeitado", ""), { class: "ia-rejeitar" });
     linha.append(aceitar, editar, rejeitar); card.append(linha);
@@ -6224,14 +6259,27 @@ window.tutuSite.appReady = true;
   }
   function formPerdido() {
     const box = ui.el("details", { class: "ia-perdeu" });
-    box.append(ui.el("summary", {}, "＋ a IA perdeu algo"));
+    box.append(ui.el("summary", {}, "＋ a IA não viu algo"));
     const f = ui.el("form", { class: "ia-form" }), tipo = ui.el("select", { name: "tipo", "aria-label": "Tipo do achado perdido" });
     for (const [v, t] of Object.entries(TIPOS)) tipo.append(ui.el("option", { value: v }, t));
-    f.append(tipo, ui.el("input", { name: "corte", type: "number", min: "0", placeholder: "Nº do corte", "aria-label": "Número do corte" }),
-      ui.el("input", { name: "nota", type: "text", maxlength: "500", placeholder: "Nota (opcional)", "aria-label": "Nota" }),
+    const lado = ui.el("select", { name: "lado", "aria-label": "Lado" }); lado.append(ui.el("option", { value: "" }, "lado?"));
+    for (const [v, t] of Object.entries(CAMPOS.lado.op)) lado.append(ui.el("option", { value: v }, t));
+    f.append(tipo, lado, ui.el("input", { name: "corte", type: "number", min: "0", placeholder: "Nº do corte", "aria-label": "Número do corte" }),
+      ui.el("input", { name: "nota", type: "text", maxlength: "200", placeholder: "Nota curta, sem nome nem ID do paciente", "aria-label": "Nota (sem identificação do paciente)" }),
       ui.button("Enviar", () => enviarPerdido(f), { class: "ia-enviar" }));
     f.onsubmit = e => { e.preventDefault(); enviarPerdido(f); };
     box.append(f); return box;
+  }
+  function linhaCaso(k) {
+    const proc = k.etapa !== "pronto" && k.etapa !== "erro";
+    const info = k.etapa === "erro" ? "erro: " + (k.mensagem || "falhou")
+      : proc ? "processando (" + (ETAPAS[k.etapa] || k.etapa || "iniciando") + ")"
+      : `${k.n_achados} achado(s) · ${k.revisados >= k.n_achados ? "revisado" : "falta revisar"}`;
+    const b = ui.button("", () => { atualId = k.caso_id; dados = null; dadosAssin = ""; assinRender = ""; poll(); },
+      { "aria-pressed": String(k.caso_id === atualId), title: "Exame " + k.caso_id });
+    if (k.etapa === "erro") b.style.opacity = "0.55";
+    b.append(ui.el("b", {}, k.acesso || "sem acesso"), ` · ${rotulo(k.caso_id)} · ${info}`);
+    return b;
   }
   function render() {
     const c = atual(), assin = JSON.stringify([ponteOk, aviso, atualId, casos, dados]);
@@ -6244,10 +6292,14 @@ window.tutuSite.appReady = true;
       if (aviso) out.push(ui.el("p", { class: "ia-aviso", role: "status" }, aviso));
       if (!c) out.push(ui.el("p", { class: "meta ia-msg" }, "Nenhum exame ainda. Ponha o ZIP na pasta entrada\\ da IA de imagem."));
       if (casos.length > 1) {
-        const lista = ui.el("div", { class: "ia-casos", role: "group", "aria-label": "Últimos exames" });
-        for (const k of casos) lista.append(ui.button(rotulo(k.caso_id), () => { atualId = k.caso_id; dados = null; dadosAssin = ""; assinRender = ""; poll(); },
-          { "aria-pressed": String(k.caso_id === atualId), title: "Exame " + k.caso_id }));
-        out.push(lista);
+        const busca = ui.el("input", { type: "search", placeholder: "Buscar por acesso ou achado (cisto, litíase…)", "aria-label": "Buscar exame", value: filtro });
+        const lista = ui.el("div", { class: "ia-lista", role: "group", "aria-label": "Exames" });
+        const monta = () => {
+          const q = fold(busca.value);
+          lista.replaceChildren(...casos.filter(k => !q || fold([k.acesso, ...(k.tipos || []).map(t => t.replace(/_/g, " "))].join(" ")).includes(q)).map(linhaCaso));
+        };
+        busca.addEventListener("input", () => { filtro = busca.value; assinRender = ""; monta(); });
+        monta(); out.push(busca, lista);
       }
       if (c && c.etapa === "erro") out.push(ui.el("p", { class: "ia-aviso" }, "A IA não conseguiu processar: " + (c.mensagem || "erro")));
       else if (c && c.etapa !== "pronto") out.push(ui.el("p", { class: "ia-proc", role: "status" }, `Processando… (${ETAPAS[c.etapa] || c.etapa || "iniciando"})`));
@@ -6282,4 +6334,285 @@ window.tutuSite.appReady = true;
     setInterval(poll, POLL_MS);
   }
   ui.iaViu = { poll, render, inserirNaFolha, painel: panel, tab };
+})();
+
+/* Rascunho do laudo a partir da IA de imagem (docs/IA-IMAGEM.md): com um clique, a máscara de TC de abdome total é preenchida
+   com os achados do caso (frases prontas no estilo do Artur); órgão sem achado fica com o texto normal da máscara.
+   Parte 1 (pura, testada em Node): escolhe a máscara, troca a linha normal de cada órgão, monta a conclusão (pares/banco do site primeiro).
+   Parte 2 (tela): botão "Montar rascunho" ao lado do painel "IA viu" (sem mexer no arquivo dele). Só preenche a folha: nada vai para o PACS. */
+(function (root) {
+  "use strict";
+  const fold = s => String(s == null ? "" : s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const dep = () => (typeof module !== "undefined" && module.exports ? require("./110-v2-conclusao.js") : root.TutuConclusao);
+  const capitalizar = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+  /* órgão -> linha normal da máscara (texto sem acento, minúsculo); a ordem da lista é a ordem das frases dentro da linha */
+  const LINHAS = [
+    { tipos: ["esteatose"], re: /^figado\b/ },
+    { tipos: ["colelitiase", "colecistectomia"], re: /^vesicula\b/ },
+    { tipos: ["calculo_renal", "cisto_renal"], re: /^rins?\b/, porLado: true },
+    { tipos: ["hidronefrose", "litiase_ureteral"], re: /^(ausencia de dilatacao dos sistemas|sistemas? (uretero|pielo))/, porLado: true },
+    { tipos: ["diverticulose"], re: /^alcas (do trato gastrointestinal|intestinais)/ },
+    { tipos: ["ateromatose_aortica", "aorta_ectasia", "aorta_aneurisma"], re: /^aorta\b/ }
+  ];
+  const ORDEM_LADO = { direito: 0, esquerdo: 1 };
+  const MARCA = "SUGESTÃO DA IA, revisar: ";
+
+  /* “aceito” pela IA = confiança média/alta. Sugestão (confiança baixa, detalhe “sugestão…”, colecistectomia) entra marcada para revisão. */
+  const ehSugestao = a => a.tipo === "colecistectomia" || a.confianca === "baixa" || /^sugest/i.test(String(a.detalhe || ""));
+  /* Achados que entram no rascunho: [{a, frase, sugestao}]. Veredito do painel: rejeitado sai; aceito/editado vira firme (já revisado). */
+  function selecionar(caso, revisao) {
+    const rev = (revisao && revisao.achados) || {}, out = [], ignorados = [];
+    for (const a of (caso && caso.achados) || []) {
+      const v = rev[a.id], vered = v && v.veredito;
+      if (vered === "rejeitado") { ignorados.push({ id: a.id, motivo: "rejeitado" }); continue; }
+      const frase = String((vered === "editado" && v.frase_final) || a.frase || "").trim();
+      if (!frase) { ignorados.push({ id: a.id, motivo: "sem frase" }); continue; }
+      out.push({ a, frase, sugestao: !(vered === "aceito" || vered === "editado") && ehSugestao(a) });
+    }
+    return { itens: out, ignorados };
+  }
+
+  /* Com contraste? true se o caso tem série contrastada (ou fase diferente de pré); false se a IA só achou a fase pré. */
+  function temContraste(caso) {
+    if (caso && caso.serie_contrastada) return true;
+    const f = caso && caso.serie && caso.serie.fase;
+    return !!f && f !== "pre";
+  }
+
+  /* Máscara de TC de abdome total: com contraste -> a padrão; sem contraste -> uma máscara “sem contraste” se existir. */
+  function escolherMascara(exames, contraste) {
+    const abd = (exames || []).filter(e => e && e.tipo !== "parecer" && /abdome total|abdomen total/.test(fold(e.name)));
+    if (!abd.length) return null;
+    const semC = e => /sem contraste|sem a injecao/.test(fold([e.name, e.proto, e.mask].join(" ")));
+    if (contraste === false) { const s = abd.find(semC); if (s) return s; }
+    return abd.find(e => e.id === "abdome") || abd.find(e => !semC(e)) || abd[0];
+  }
+
+  /* ---------- máscara em linhas ---------- */
+  const lerLinha = raw => {
+    const t = String(raw).trim(), al = (t.match(/^\{\{[^}]*\}\}/) || [""])[0], r = t.slice(al.length);
+    const m = r.match(/^\[<(.*)>\]$/) || r.match(/^\[(.*)\]$/);
+    return { al, texto: (m ? m[1] : r).replace(/<\/?[bui]>/gi, "").trim() };
+  };
+  const chaveTitulo = raw => fold(lerLinha(raw).texto).replace(/[:\s]+$/, "");
+  const linhaNova = (al, texto) => al + "[<" + texto + ">]";
+  const marcar = frase => "[" + MARCA + frase + "]";
+
+  /* ---------- conclusão ---------- */
+  const lado1 = a => (a.lado === "direito" ? "D" : a.lado === "esquerdo" ? "E" : "");
+  /* Pares/banco do site primeiro (frase direta, com a trava contra gravidade/subtipo/lado inventados); senão a conclusão da própria IA sem medida. */
+  function concluirUm(it, ctx) {
+    const C = dep();
+    let c = "";
+    if (ctx && (ctx.idx || ctx.pares)) {
+      try {
+        const s = C.sugerir(ctx.idx || { entradas: [], idf: new Map(), maxIdf: 0 }, [it.frase], { aprendido: ctx.aprendido, pares: ctx.pares, max: 1 });
+        if (s && s[0] && s[0].frase) c = s[0].frase;
+      } catch (_) { /* cai na conclusão da IA */ }
+    }
+    if (!c && it.a.conclusao) c = C.limparMedidas(it.a.conclusao);
+    c = String(c || "").replace(/^\s*achados?\s+compat[ií]ve\w+\s+com\s+/i, "").replace(/[\s.]+$/, "").trim();
+    return c ? capitalizar(c) + "." : "";
+  }
+  /* mesmo texto exceto “à direita”/“à esquerda” no fim -> uma só, “bilateral” */
+  function unirBilateral(lista) {
+    const fim = /\s+à\s+(direita|esquerda)\.$/, vistos = new Map(), out = [];
+    for (const x of lista) {
+      const m = x.texto.match(fim);
+      if (!m) { out.push(x); continue; }
+      const base = fold(x.texto.replace(fim, "")) + "|" + x.sugestao, ant = vistos.get(base);
+      if (ant && ant.lado !== m[1]) { ant.item.texto = x.texto.replace(fim, " bilateral."); ant.lado = "ambos"; continue; }
+      if (ant) continue;                                                 // igual: não duplica
+      const item = { ...x }; vistos.set(base, { item, lado: m[1] }); out.push(item);
+    }
+    return out;
+  }
+  function montarConclusao(itens, ctx) {
+    const base = [], chaves = new Set();
+    for (const it of [...itens.filter(i => !i.sugestao), ...itens.filter(i => i.sugestao)]) {
+      const texto = concluirUm(it, ctx); if (!texto) continue;
+      const k = fold(texto).replace(/[^a-z0-9]+/g, " ").trim() + "|" + it.sugestao + "|" + lado1(it.a);
+      if (chaves.has(k)) continue; chaves.add(k);
+      base.push({ texto, sugestao: it.sugestao });
+    }
+    return unirBilateral(base);
+  }
+
+  /* Linha com mais de uma estrutura: o que o achado não tocou mantém o texto normal da máscara (lado oposto, ilíacas...). */
+  function completarNormal(def, normal, ord) {
+    const lados = new Set(ord.map(x => x.a.lado)), um = lados.size === 1 && ORDEM_LADO[[...lados][0]] != null;
+    const contra = um && ([...lados][0] === "direito" ? "esquerdo" : "direito");
+    const f = fold(normal);
+    if (def.tipos[0] === "calculo_renal" && um && /^rins\b/.test(f)) return " " + normal.replace(/^rins\b/i, "Rim " + contra);
+    if (def.tipos[0] === "hidronefrose" && um && /^ausencia de dilatacao dos sistemas?\b/.test(f))
+      return " " + normal.replace(/dos sistemas\s+/i, "do sistema ").replace(/-caliciais\b/i, "-calicinal").replace(/\.?$/, " à " + (contra === "direito" ? "direita" : "esquerda") + ".");
+    if (def.tipos[0] === "ateromatose_aortica") {
+      const m = normal.match(/^aorta abdominal e (art[eé]rias il[ií]acas)\s+(.*)$/i);
+      if (!m) return "";
+      const txt = fold(ord.map(x => x.frase).join(" ")), aorta = /aort/.test(txt), ilia = /iliac/.test(txt);
+      return (aorta ? "" : " Aorta abdominal " + m[2]) + (ilia ? "" : " " + capitalizar(m[1]) + " " + m[2]);
+    }
+    return "";
+  }
+
+  /* ---------- montagem ---------- */
+  /* maskText: texto da máscara (mesmo formato de DEFAULT_EXAMS); caso: achados.json; opts: { revisao, idx, pares, aprendido }.
+     Devolve { mask, colocados, semLinha, ignorados, conclusoes, contraste, tecnicaAjustada, nAfirmados, nSugestoes }. */
+  function montar(maskText, caso, opts) {
+    opts = opts || {};
+    const { itens, ignorados } = selecionar(caso, opts.revisao), contraste = temContraste(caso);
+    let linhas = String(maskText).split("\n");
+    const iAch = linhas.findIndex(l => chaveTitulo(l) === "achados"), iConc = linhas.findIndex(l => chaveTitulo(l) === "conclusao");
+    const iTec = linhas.findIndex(l => chaveTitulo(l) === "tecnica de exame");
+    let tecnicaAjustada = false;
+    if (!contraste && iTec >= 0) {                                      // só a fase pré: técnica sem contraste
+      const re = /antes,?\s*durante\s*e\s*ap[óo]s\s*a\s*inje[çc][ãa]o/i;
+      for (let i = iTec + 1; i < linhas.length && !(iAch >= 0 && i >= iAch); i++) {
+        if (re.test(linhas[i])) { linhas[i] = linhas[i].replace(re, "sem a injeção"); tecnicaAjustada = true; break; }
+      }
+    }
+    const colocados = [], semLinha = [], extras = [];                    // extras: frases sem linha própria na máscara
+    const dentro = iAch >= 0 ? (i => i > iAch && (iConc < 0 || i < iConc)) : (() => false);
+    const porLinha = new Map();
+    for (const it of itens) {
+      const def = LINHAS.find(d => d.tipos.includes(it.a.tipo));
+      let alvo = -1;
+      if (def) for (let i = 0; i < linhas.length; i++) if (dentro(i) && def.re.test(fold(lerLinha(linhas[i]).texto))) { alvo = i; break; }
+      if (alvo < 0) { semLinha.push({ id: it.a.id, frase: it.frase, sugestao: it.sugestao }); extras.push(it); continue; }
+      (porLinha.get(alvo) || porLinha.set(alvo, { def, itens: [] }).get(alvo)).itens.push(it);
+    }
+    const saida = linhas.map(l => [l]);
+    for (const [i, { def, itens: its }] of porLinha) {
+      const { al, texto: normal } = lerLinha(linhas[i]);
+      const ordem = it => [(def.porLado && ORDEM_LADO[it.a.lado]) || 0, def.tipos.indexOf(it.a.tipo)];
+      const ord = its.slice().sort((x, y) => { const p = ordem(x), q = ordem(y); return p[0] - q[0] || p[1] - q[1]; });
+      const firmes = ord.filter(x => !x.sugestao), sug = ord.filter(x => x.sugestao);
+      const novas = [];
+      if (firmes.length) {
+        let t = firmes.map(x => x.frase).join(" ");
+        t += completarNormal(def, normal, ord);
+        novas.push(linhaNova(al, t));
+      } else novas.push(linhas[i]);                                      // só sugestão: a linha normal fica e a sugestão vem marcada logo abaixo
+      for (const x of sug) novas.push(linhaNova(al, marcar(x.frase)));
+      saida[i] = novas;
+      for (const x of ord) colocados.push({ id: x.a.id, tipo: x.a.tipo, linha: normal, sugestao: x.sugestao });
+    }
+    // sem linha própria (máscara editada): vai antes da Conclusão
+    if (extras.length) {
+      const pos = iConc >= 0 ? iConc : linhas.length;
+      saida[pos] = [...extras.map(x => linhaNova("", x.sugestao ? marcar(x.frase) : x.frase)), ...(saida[pos] || [])];
+    }
+    // conclusão: troca os números soltos (“1.”) pelos itens
+    const conclusoes = montarConclusao(itens, opts);
+    let mask;
+    if (iConc >= 0 && conclusoes.length) {
+      const fim = (() => { for (let i = iConc + 1; i < linhas.length; i++) if (/^(achados adicionais|informacoes clinicas|tecnica de exame|achados)$/.test(chaveTitulo(linhas[i]))) return i; return linhas.length; })();
+      const novos = conclusoes.map((c, n) => (n + 1) + ". " + (c.sugestao ? marcar(c.texto) : c.texto));
+      for (let i = iConc + 1; i < fim; i++) if (/^\d+\s*[.)]?$/.test(lerLinha(linhas[i]).texto)) saida[i] = [];
+      saida[iConc] = [...saida[iConc], ...novos];
+    }
+    mask = saida.flat().join("\n");
+    return { mask, colocados, semLinha, ignorados, conclusoes, contraste, tecnicaAjustada,
+      nAfirmados: itens.filter(x => !x.sugestao).length, nSugestoes: itens.filter(x => x.sugestao).length };
+  }
+
+  const api = { selecionar, ehSugestao, temContraste, escolherMascara, montar, montarConclusao, unirBilateral, MARCA };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TutuRascunho = api;
+})(globalThis);
+
+/* ====================== Tela ====================== */
+(() => {
+  "use strict";
+  if (typeof document === "undefined" || !window.tutuV2 || typeof sheet === "undefined" || !window.tutuV2.iaViu) return;
+  const ui = window.tutuV2, R = window.TutuRascunho, C = window.TutuConclusao, BASE = "http://127.0.0.1:47831";
+  let busy = false, ultimo = null;                 // ultimo: { exId, html } do rascunho montado (para “Voltar ao normal”)
+  let idx = null, idxRef = null, ipar = null, iparRef = null;
+
+  async function ponte(rota) {
+    const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 5000);
+    try { const r = await fetch(BASE + rota, { signal: ctl.signal }); return r.ok ? await r.json() : null; }
+    catch (_) { return null; } finally { clearTimeout(t); }
+  }
+  /* Caso mostrado no painel: o botão marcado da lista (title “Exame <id>”) ou o mais novo. Se o painel passar a expor dados(), usa direto. */
+  async function fonte() {
+    if (typeof ui.iaViu.dados === "function") { const d = ui.iaViu.dados(); if (d && d.achados) return d; }
+    const casos = await ponte("/imagem/casos");
+    if (!Array.isArray(casos) || !casos.length) return null;
+    const marcado = ui.iaViu.painel.querySelector('.ia-casos [aria-pressed="true"]');
+    const id = marcado && /^Exame (\S+)/.exec(marcado.title || "")?.[1];
+    const c = casos.find(k => k.caso_id === id) || casos[0];
+    if (c.etapa !== "pronto") return { processando: true };
+    const d = await ponte("/imagem/caso?id=" + encodeURIComponent(c.caso_id));
+    return d && d.achados ? d : null;
+  }
+  const indices = () => {
+    if (!idx || idxRef !== window.BANK_TC) { idx = C.indexar(window.BANK_TC); idxRef = window.BANK_TC; }
+    if (!ipar || iparRef !== window.BANK_PARES) { ipar = C.indexarPares(window.BANK_PARES); iparRef = window.BANK_PARES; }
+    return { idx, pares: ipar };
+  };
+
+  /* Troca o conteúdo da folha de um jeito que o Ctrl+Z nativo desfaz; se o navegador deformar o HTML, grava direto (e há as Versões/“Voltar”). */
+  function trocarFolha(html) {
+    const tmp = document.createElement("div"); tmp.innerHTML = html;
+    sheet.focus({ preventScroll: true });
+    let ok = false;
+    try { document.execCommand("selectAll"); ok = document.execCommand("insertHTML", false, html); } catch (_) {}
+    if (!ok || sheet.children.length !== tmp.children.length || sheet.textContent !== tmp.textContent) sheet.innerHTML = html;
+  }
+
+  async function montarRascunho() {
+    if (busy) return;
+    busy = true;
+    try {
+      const d = await fonte();
+      if (!d) { setStatus("Não consegui ler o exame da IA: a ponte local está aberta e há um exame pronto?", "err"); return; }
+      if (d.processando) { setStatus("A IA ainda está processando esse exame.", "err"); return; }
+      const caso = d.achados, contraste = R.temContraste(caso), ex = R.escolherMascara(EXAMS, contraste);
+      if (!ex) { setStatus("Não achei a máscara de TC de abdome total.", "err"); return; }
+      const dirty = sheetHasContent() && !modelIntact();
+      if (current.id !== ex.id) selectExam(ex.id, false);
+      else if (dirty || !sheetHasContent()) { if (dirty) { saveCaseNow(); newCase(); } clearReviewState(); loadModel(ex); }
+      if (extras.length) { extras = []; updMaskChip(); }
+      const r = R.montar(ex.mask, caso, { revisao: d.revisao, ...indices(), aprendido: ui.conclusao && ui.conclusao.aprendido ? ui.conclusao.aprendido() : undefined });
+      const html = modelSheetHtml({ ...ex, mask: r.mask });
+      pushVersion("Antes do rascunho da IA");
+      trocarFolha(html);
+      ultimo = { exId: ex.id, html: sheet.innerHTML };
+      pushVersion("Rascunho da IA");
+      updateCount(); renderAlerts(); scheduleCaseSave(); atualizarBarra();
+      const partes = [`Rascunho montado (${ex.name}${contraste ? "" : ", sem contraste"}): ${r.nAfirmados} ${r.nAfirmados === 1 ? "achado" : "achados"}`];
+      if (r.nSugestoes) partes.push(`${r.nSugestoes} ${r.nSugestoes === 1 ? "sugestão marcada" : "sugestões marcadas"} entre colchetes`);
+      if (r.semLinha.length) partes.push(`${r.semLinha.length} sem linha na máscara (antes da Conclusão)`);
+      if (r.tecnicaAjustada) partes.push("técnica ajustada para sem contraste: confira");
+      setStatus(partes.join("; ") + ". Revise; Ctrl+Z desfaz.", "ok");
+    } finally { busy = false; }
+  }
+  function voltarAoNormal() {
+    if (!ultimo) return;
+    const ex = EXAMS.find(e => e.id === ultimo.exId); if (!ex) return;
+    if (sheet.innerHTML !== ultimo.html && !window.confirm("Você editou o rascunho. Voltar ao normal apaga essas edições (as Versões guardam o que havia). Continuar?")) return;
+    pushVersion("Antes de voltar ao normal");
+    trocarFolha(modelSheetHtml(ex));
+    pushVersion("Máscara normal");
+    ultimo = null; updateCount(); renderAlerts(); scheduleCaseSave(); atualizarBarra();
+    setStatus("Voltou ao texto normal da máscara.", "ok");
+  }
+
+  /* ---------- botões no painel “IA viu” (o painel apaga e refaz o conteúdo; um observador recoloca a barra) ---------- */
+  const barra = ui.el("div", { class: "ia-acoes ia-rascunho" });
+  const bMontar = ui.button("Montar rascunho", montarRascunho, { class: "ia-aceitar", title: "Preenche a máscara de TC de abdome total com os achados da IA · Alt+R" });
+  const bVoltar = ui.button("Voltar ao normal", voltarAoNormal, { class: "ia-rejeitar", title: "Restaura o texto normal da máscara" });
+  barra.append(bMontar, bVoltar);
+  function atualizarBarra() { bVoltar.hidden = !ultimo; }
+  atualizarBarra();
+  const painel = ui.iaViu.painel;
+  const colocarBarra = () => { if (!painel.contains(barra)) { const h = painel.firstElementChild; if (h) h.after(barra); else painel.append(barra); } };
+  new MutationObserver(colocarBarra).observe(painel, { childList: true });
+  colocarBarra();
+
+  ui.actions.rascunhoia = { label: "Montar rascunho (IA)", run: montarRascunho };
+  if (!ui.shortcuts["Alt+R"]) { ui.shortcuts["Alt+R"] = "rascunhoia"; ui.renderShortcuts(); }
+  ui.rascunho = { montar: montarRascunho, voltar: voltarAoNormal };
 })();

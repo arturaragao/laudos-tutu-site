@@ -2,4 +2,4 @@
 
 Site estático: https://arturaragao.github.io/laudos-tutu-site/
 
-Gerado do commit privado `36b5692`.
+Gerado do commit privado `0a1bdc1`.
