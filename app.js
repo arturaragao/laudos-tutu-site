@@ -6632,8 +6632,10 @@ window.tutuSite.appReady = true;
         !["string", "number"].includes(typeof d.id) || !String(d.id).trim() ||
         (typeof d.id === "number" && !Number.isSafeInteger(d.id)) || !Number.isSafeInteger(d.seq) ||
         !/^\d{4}-\d\d-\d\dT/.test(d.capturado_em) || !Number.isFinite(Date.parse(d.capturado_em)) ||
-        !d.final.trim() || !d.preliminar.trim()) throw new Error("Par inválido");
+        !d.final.trim() || !d.preliminar.trim() || (d.acesso !== undefined &&
+        (typeof d.acesso !== "string" || (d.acesso !== "" && !/^\d{8}$/.test(d.acesso))))) throw new Error("Par inválido");
     return { id: String(d.id), seq: d.seq, capturado_em: d.capturado_em, final: d.final, preliminar: d.preliminar,
+      acesso: d.acesso ?? "",
       chefe: d.chefe.trim() || d.final.match(signature)?.[1].trim() || "",
       titulo: d.titulo.trim() || d.final.split(/\r?\n/).find(l => l.trim())?.trim() || "Sem título" };
   }
@@ -6718,14 +6720,26 @@ window.tutuSite.appReady = true;
       tx.onerror = tx.onabort = () => reject(new Error("Falha ao salvar os pares neste navegador"));
     });
   }
-  async function receber(res, origem) {
-    const mapa = new Map(pares.map(p => [p.id, p]));
-    for (const p of res.pares) {
-      const old = mapa.get(p.id);
-      if (!old || Date.parse(p.capturado_em) > Date.parse(old.capturado_em) ||
-          (Date.parse(p.capturado_em) === Date.parse(old.capturado_em) && p.seq >= old.seq)) mapa.set(p.id, p);
+  function maisRecente(a, b) {
+    return Date.parse(a.capturado_em) > Date.parse(b.capturado_em) ||
+      (Date.parse(a.capturado_em) === Date.parse(b.capturado_em) && a.seq >= b.seq);
+  }
+  function deduplicar(lista) {
+    const porId = new Map();
+    for (const p of lista) {
+      const old = porId.get(p.id);
+      if (!old || maisRecente(p, old)) porId.set(p.id, p);
     }
-    pares = [...mapa.values()];
+    const semAcesso = [], porAcesso = new Map();
+    for (const p of porId.values()) {
+      if (!p.acesso) { semAcesso.push(p); continue; }
+      const old = porAcesso.get(p.acesso);
+      if (!old || maisRecente(p, old)) porAcesso.set(p.acesso, p);
+    }
+    return [...semAcesso, ...porAcesso.values()];
+  }
+  async function receber(res, origem) {
+    pares = deduplicar([...pares, ...res.pares]);
     let salvo = demo ? "Demonstração: só em memória." : "Salvo neste navegador.";
     try { await armazenamento(pares); } catch (_) { salvo = "Só em memória: não foi possível salvar neste navegador."; }
     status.textContent = `${origem}: ${res.pares.length} pares; ${res.puladas} linha(s) pulada(s). ${salvo}`;
@@ -6773,6 +6787,9 @@ window.tutuSite.appReady = true;
   const chefe = select("corretorChefe", "Chefe", [["", "Todos"]]);
   const exame = select("corretorTipo", "Tipo", [["", "Todos"], ...["USG", "TC", "RM", "Outros"].map(x => [x, x])]);
   const ordem = select("corretorOrdem", "Ordenar", [["data", "Data (recentes)"], ["mudado", "% mudado (maior)"]]);
+  const acesso = el("input", { id: "corretorAcesso", type: "search", size: "8", inputmode: "numeric", placeholder: "Acesso", "aria-label": "Buscar por acesso" });
+  acesso.oninput = render;
+  const buscaAcesso = el("label", {}, "Acesso "); buscaAcesso.append(acesso); filters.append(buscaAcesso);
   const lista = el("div", { id: "corretorLista" }), detalhe = el("div", { id: "corretorDetalhe" });
   const amplo = el("dialog", { id: "corretorAmplo", class: "corretor-amplo", "aria-labelledby": "corretorAmploTitulo" });
   const amploConteudo = el("div", { id: "corretorAmploConteudo" });
@@ -6809,7 +6826,7 @@ window.tutuSite.appReady = true;
     host.replaceChildren();
     const mostrarLados = larga ? ladoAmplo : lado;
     host.append(el("h3", larga ? { id: "corretorAmploTitulo" } : {}, p.titulo),
-      el("p", { class: "meta" }, p.chefe || semChefe),
+      el("p", { class: "meta" }, `${p.chefe || semChefe}${p.acesso ? ` · Acesso ${p.acesso}` : ""}`),
       button(mostrarLados ? "Mostrar correção aplicada" : "Lado a lado", () => {
         if (larga) {
           ladoAmplo = !ladoAmplo; correcao(host, p, true);
@@ -6833,12 +6850,14 @@ window.tutuSite.appReady = true;
     return d.toISOString().slice(0, 10);
   }
   function render() {
-    const filtrados = pares.filter(p => (!chefe.value || (p.chefe || "__sem__") === chefe.value) && (!exame.value || tipo(p) === exame.value));
+    const termoAcesso = acesso.value.trim();
+    const filtrados = pares.filter(p => (!chefe.value || (p.chefe || "__sem__") === chefe.value) && (!exame.value || tipo(p) === exame.value) &&
+      (!termoAcesso || p.acesso.includes(termoAcesso)));
     filtrados.sort((a, b) => (ordem.value === "mudado" ? analisar(b).pct - analisar(a).pct : 0) || Date.parse(b.capturado_em) - Date.parse(a.capturado_em) || b.seq - a.seq);
     lista.replaceChildren(el("h3", {}, `${filtrados.length} pares`));
     if (!filtrados.some(p => p.id === selecionado)) selecionado = filtrados[0]?.id || "";
     for (const p of filtrados) {
-      const b = button(`${new Date(p.capturado_em).toLocaleDateString("pt-BR")} · ${p.titulo} · ${p.chefe || semChefe} · ${analisar(p).pct.toFixed(1)}%`,
+      const b = button(`${new Date(p.capturado_em).toLocaleDateString("pt-BR")} · ${p.titulo} · ${p.chefe || semChefe}${p.acesso ? ` · Acesso ${p.acesso}` : ""} · ${analisar(p).pct.toFixed(1)}%`,
         () => { selecionado = p.id; render(); }, { class: "corretor-par", "aria-pressed": String(p.id === selecionado) });
       lista.append(b);
     }
@@ -6866,7 +6885,7 @@ window.tutuSite.appReady = true;
       ["USG Doppler venoso", "Veias compressíveis. Fluxo normal.", "Veias compressíveis. Fluxo preservado.", "Sem trombose."],
       ["TC abdome", "Fígado de contornos normais. Parênquima normal.", "Fígado de contornos normais. Parênquima preservado.", "Sem alterações abdominais."],
       ["TC crânio", "Ventrículos de dimensões habituais. Parênquima normal.", "Ventrículos de dimensões habituais. Parênquima preservado.", "Sem alterações agudas."]
-    ].map(([titulo, antes, depois, conc], i) => normalizar({ id: "demo-" + i, seq: i + 1, capturado_em: `2026-11-0${8 - i * 2}T12:00:00Z`, chefe: "", titulo: "",
+    ].map(([titulo, antes, depois, conc], i) => normalizar({ id: "demo-" + i, seq: i + 1, acesso: `9900000${i + 1}`, capturado_em: `2026-11-0${8 - i * 2}T12:00:00Z`, chefe: "", titulo: "",
       preliminar: `${titulo}\nAchados\n${antes}\nConclusão\n${conc}`,
       final: `${titulo}\nAchados\n${depois}\nConclusão\n${conc}\nDr(a).:Chefe sintético ${i % 2 + 1}` }));
   }
@@ -6876,7 +6895,7 @@ window.tutuSite.appReady = true;
     if (panel.hidden || iniciado) return;
     iniciado = true;
     if (demo) { atualizar.disabled = true; await receber({ pares: demonstracao(), puladas: 0 }, "Demonstração"); return; }
-    try { pares = (await armazenamento()).map(normalizar); filtros(); render(); }
+    try { pares = deduplicar((await armazenamento()).map(normalizar)); filtros(); render(); }
     catch (_) { status.textContent = "Armazenamento local indisponível; importações ficarão só em memória."; }
     await carregar();
   });
