@@ -3623,7 +3623,6 @@ window.tutuSite.appReady = true;
   const app = ui.app = document.querySelector(".app");
   app.id = "tutuApp";
   const top = el("header", { id: "v2Top" });
-  top.append(el("span", { class: "v2-brand" }, "Tutu"));
   const tabs = el("nav", { id: "caseTabs", role: "tablist", "aria-label": "Casos abertos" });
   top.append(tabs, button("+", () => ui.newTab(), { id: "newCaseTab", title: "Novo caso", "aria-label": "Novo caso" }),
     button("Histórico", () => openHistory(), { id: "histTopBtn", title: "Todos os exames salvos (os 4 mais recentes ficam nas abas)" }));
@@ -3683,7 +3682,7 @@ window.tutuSite.appReady = true;
   const settings = $("setModal"); settings.classList.add("v2-settings"); settings.removeAttribute("aria-modal"); settings.setAttribute("role", "region");
   const settingsExtras = el("div", { class: "v2-settings-extras" });
   settings.querySelector(".calc-body").prepend(settingsExtras);
-  settingsExtras.append(el("h2", {}, "Tutu · Configurações"));
+  settingsExtras.append(el("h2", {}, "Laudos · Configurações"));
   settingsExtras.append(button("Sépia noite", () => ui.night(), { id: "nightToggle", "aria-pressed": "false" }));
   settingsExtras.append(button("Compacto · Ctrl ⇧ L", () => ui.compact()), button("Buscar tudo · Ctrl K", () => ui.openPalette()));
   const oldFooter = document.querySelector(".sb");
@@ -4222,7 +4221,7 @@ window.tutuSite.appReady = true;
       }, { once: true });
       $("hudNotice")?.remove();
       const doc = pip.document;
-      doc.title = "Tutu · sobre o PACS"; doc.documentElement.lang = "pt-BR";
+      doc.title = "Laudos · sobre o PACS"; doc.documentElement.lang = "pt-BR";
       // Só CSS local já carregado; não busca fontes ou estilos externos.
       for (const sheet of document.styleSheets) {
         try { doc.head.append(ui.el("style", {}, [...sheet.cssRules].map(r => r.cssText).join("\n"))); }
@@ -4231,7 +4230,7 @@ window.tutuSite.appReady = true;
       doc.body.className = "tutu-v2 v2-hud";
       const card = ui.el("main", { id: "hudCard", "aria-label": "Laudo ativo" });
       const header = ui.el("header", { class: "hud-header" });
-      header.append(ui.el("span", { class: "hud-brand" }, "Tutu"), ui.el("strong", { id: "hudExam" }));
+      header.append(ui.el("span", { class: "hud-brand" }, "Laudos"), ui.el("strong", { id: "hudExam" }));
       const footer = ui.el("footer", { class: "hud-footer" });
       footer.append(ui.el("span", { id: "hudPending", role: "status" }),
         ui.button("Copiar laudo", () => $("copiar").click(), { id: "hudCopy" }));
@@ -6615,4 +6614,272 @@ window.tutuSite.appReady = true;
   ui.actions.rascunhoia = { label: "Montar rascunho (IA)", run: montarRascunho };
   if (!ui.shortcuts["Alt+R"]) { ui.shortcuts["Alt+R"] = "rascunhoia"; ui.renderShortcuts(); }
   ui.rascunho = { montar: montarRascunho, voltar: voltarAoNormal };
+})();
+
+/* Corretor local: sem IA, sem sincronização e sem envio dos laudos. */
+(() => {
+  "use strict";
+  const ui = window.tutuV2, demo = new URLSearchParams(location.search).get("demo") === "corretor";
+  const $ = id => document.getElementById(id), el = ui.el, button = ui.button;
+  const foldText = t => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const signature = /^\s*Dr(?:\(a\)|a)?\.?\s*:\s*([^\r\n]+)/im;
+  const semChefe = "chefe não identificado";
+  let pares = [], selecionado = "", lado = false, ladoAmplo = false, busy = false, banco;
+  const cache = new WeakMap();
+
+  function normalizar(d) {
+    if (!d || typeof d !== "object" || !["capturado_em", "final", "preliminar", "chefe", "titulo"].every(k => typeof d[k] === "string") ||
+        !["string", "number"].includes(typeof d.id) || !String(d.id).trim() ||
+        (typeof d.id === "number" && !Number.isSafeInteger(d.id)) || !Number.isSafeInteger(d.seq) ||
+        !/^\d{4}-\d\d-\d\dT/.test(d.capturado_em) || !Number.isFinite(Date.parse(d.capturado_em)) ||
+        !d.final.trim() || !d.preliminar.trim()) throw new Error("Par inválido");
+    return { id: String(d.id), seq: d.seq, capturado_em: d.capturado_em, final: d.final, preliminar: d.preliminar,
+      chefe: d.chefe.trim() || d.final.match(signature)?.[1].trim() || "",
+      titulo: d.titulo.trim() || d.final.split(/\r?\n/).find(l => l.trim())?.trim() || "Sem título" };
+  }
+  function lerJSONL(texto) {
+    const res = { pares: [], puladas: 0 };
+    const linhas = texto.replace(/^\uFEFF/, "").split(/\r?\n/);
+    if (linhas.at(-1) === "") linhas.pop(); // quebra final de arquivo não é uma linha inválida
+    for (const linha of linhas) {
+      try { res.pares.push(normalizar(JSON.parse(linha))); } catch (_) { res.puladas++; }
+    }
+    return res;
+  }
+  function tipo(p) {
+    const t = foldText(p.titulo);
+    if (/\b(usg|us|ultrassom|ultrassonografia|doppler)\b/.test(t)) return "USG";
+    if (/\b(tc|tomografia)\b/.test(t)) return "TC";
+    if (/\b(rm|ressonancia)\b/.test(t)) return "RM";
+    return "Outros";
+  }
+  function secoes(texto) {
+    const out = {}, linhas = texto.replace(/\r/g, "").split("\n");
+    let nome = "Texto";
+    for (const linha of linhas) {
+      if (signature.test(linha)) break; // assinatura não é correção do conteúdo clínico
+      // Tags simples e marcação Markdown dos cabeçalhos são opcionais.
+      const heading = foldText(linha.replace(/<\/?[bui]>/gi, "").replace(/[*_#]/g, "").trim()).replace(/:$/, "").trim();
+      if (["achados", "conclusao", "achados adicionais"].includes(heading)) {
+        nome = heading === "conclusao" ? "Conclusão" : heading === "achados" ? "Achados" : "Achados adicionais";
+        out[nome] ||= [];
+      } else { (out[nome] ||= []).push(linha); }
+    }
+    return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.join("\n").trim()]));
+  }
+  const palavras = t => t.trim().split(/\s+/).filter(Boolean).length;
+  function vizinho(n, direcao) {
+    let v = n[direcao];
+    while (v?.nodeType === Node.TEXT_NODE && !v.textContent.trim()) v = v[direcao];
+    return v?.nodeType === Node.ELEMENT_NODE ? v : null;
+  }
+  function analisar(p) {
+    if (cache.has(p)) return cache.get(p);
+    const a = secoes(p.preliminar), b = secoes(p.final), sections = [], changes = [];
+    let removidas = 0, adicionadas = 0, total = 0;
+    for (const nome of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const antes = a[nome] || "", depois = b[nome] || "";
+      if (!antes && !depois) continue;
+      // O mesmo diff por palavra da folha, com seu LCS e agrupamento de edições.
+      const seqAntes = editSeq, host = document.createElement("div");
+      try { host.innerHTML = wordDiffHtml(antes, depois); } finally { editSeq = seqAntes; }
+      let rm = 0, ins = 0;
+      for (const n of host.querySelectorAll("del.rm, .chg")) {
+        n.removeAttribute("data-e"); n.removeAttribute("title");
+        const de = n.matches("del") ? n.textContent.trim() : "";
+        const proximo = vizinho(n, "nextSibling"), anterior = vizinho(n, "previousSibling");
+        const para = de ? (proximo?.matches(".chg") ? proximo.textContent.trim() : "") : n.textContent.trim();
+        if (de) rm += palavras(de); else ins += palavras(para);
+        if (de || !anterior?.matches("del")) changes.push({ secao: nome, de, para });
+      }
+      removidas += rm; adicionadas += ins; total += palavras(antes) + palavras(depois);
+      sections.push({ nome, antes, depois, html: host.innerHTML, rm, ins });
+    }
+    const res = { sections, changes, removidas, adicionadas, pct: total ? 100 * (removidas + adicionadas) / total : 0 };
+    cache.set(p, res); return res;
+  }
+
+  // Banco exclusivo: não entra no backup/sync do app nem em qualquer serviço externo.
+  async function armazenamento(gravar) {
+    if (demo) return [];
+    banco ||= new Promise((resolve, reject) => {
+      const r = indexedDB.open("tutu-corretor", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("pares", { keyPath: "id" });
+      r.onsuccess = () => { r.result.onversionchange = () => r.result.close(); resolve(r.result); };
+      r.onerror = r.onblocked = () => reject(new Error("Armazenamento local indisponível"));
+    });
+    const db = await banco;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("pares", gravar ? "readwrite" : "readonly"), store = tx.objectStore("pares");
+      let resultado = [];
+      if (gravar) gravar.forEach(p => store.put(p));
+      else store.getAll().onsuccess = e => { resultado = e.target.result; };
+      tx.oncomplete = () => resolve(resultado);
+      tx.onerror = tx.onabort = () => reject(new Error("Falha ao salvar os pares neste navegador"));
+    });
+  }
+  async function receber(res, origem) {
+    const mapa = new Map(pares.map(p => [p.id, p]));
+    for (const p of res.pares) {
+      const old = mapa.get(p.id);
+      if (!old || Date.parse(p.capturado_em) > Date.parse(old.capturado_em) ||
+          (Date.parse(p.capturado_em) === Date.parse(old.capturado_em) && p.seq >= old.seq)) mapa.set(p.id, p);
+    }
+    pares = [...mapa.values()];
+    let salvo = demo ? "Demonstração: só em memória." : "Salvo neste navegador.";
+    try { await armazenamento(pares); } catch (_) { salvo = "Só em memória: não foi possível salvar neste navegador."; }
+    status.textContent = `${origem}: ${res.pares.length} pares; ${res.puladas} linha(s) pulada(s). ${salvo}`;
+    filtros(); render();
+  }
+  async function carregar() {
+    if (demo || busy) return;
+    busy = true; atualizar.disabled = true;
+    const ctl = new AbortController(), timeout = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const r = await fetch("http://127.0.0.1:47831/corretor/pares", { signal: ctl.signal, cache: "no-store" });
+      if (!r.ok) throw new Error("Ponte indisponível");
+      const d = await r.json();
+      if (!Array.isArray(d.pares) || !Number.isSafeInteger(d.puladas) || d.puladas < 0) throw new Error("Resposta inválida");
+      const res = { pares: [], puladas: d.puladas };
+      for (const p of d.pares) { try { res.pares.push(normalizar(p)); } catch (_) { res.puladas++; } }
+      await receber(res, "Ponte local");
+    } catch (_) { status.textContent = "Ponte indisponível. Os pares salvos continuam disponíveis; use Importar pares.jsonl."; }
+    finally { clearTimeout(timeout); busy = false; atualizar.disabled = false; }
+  }
+
+  const tab = button("Corretor", () => ui.panel("Corretor"), { id: "rightTabCorretor", role: "tab", "aria-controls": "rightPanelCorretor", "aria-selected": "false" });
+  const panel = ui.panels.Corretor = el("section", { id: "rightPanelCorretor", role: "tabpanel", "aria-labelledby": tab.id, class: "v2-panel" });
+  panel.hidden = true;
+  $("rightTabs").append(tab); ui.right.append(panel);
+  panel.append(el("h2", {}, "Corretor · preliminar × definitivo"));
+  const actions = el("div", { class: "corretor-actions" });
+  const atualizar = button("Carregar da ponte", carregar, { id: "corretorCarregar" });
+  const input = el("input", { type: "file", accept: ".jsonl,application/json,text/plain", id: "corretorArquivo", hidden: "" });
+  input.onchange = async () => {
+    const file = input.files[0]; if (!file || busy) return;
+    busy = true; atualizar.disabled = true;
+    try { await receber(lerJSONL(await file.text()), "Importação"); }
+    catch (_) { status.textContent = "Não foi possível ler o arquivo selecionado."; }
+    finally { input.value = ""; busy = false; atualizar.disabled = false; }
+  };
+  actions.append(atualizar, button("Importar pares.jsonl", () => input.click(), { id: "corretorImportar" }), input);
+  const status = el("p", { id: "corretorStatus", role: "status" }, "Nenhum par carregado.");
+  const filters = el("div", { class: "corretor-actions" });
+  function select(id, label, options) {
+    const wrapper = el("label", {}, label + " "), s = el("select", { id });
+    options.forEach(([v, t]) => s.append(el("option", { value: v }, t)));
+    s.onchange = render; wrapper.append(s); filters.append(wrapper); return s;
+  }
+  const chefe = select("corretorChefe", "Chefe", [["", "Todos"]]);
+  const exame = select("corretorTipo", "Tipo", [["", "Todos"], ...["USG", "TC", "RM", "Outros"].map(x => [x, x])]);
+  const ordem = select("corretorOrdem", "Ordenar", [["data", "Data (recentes)"], ["mudado", "% mudado (maior)"]]);
+  const lista = el("div", { id: "corretorLista" }), detalhe = el("div", { id: "corretorDetalhe" });
+  const amplo = el("dialog", { id: "corretorAmplo", class: "corretor-amplo", "aria-labelledby": "corretorAmploTitulo" });
+  const amploConteudo = el("div", { id: "corretorAmploConteudo" });
+  amplo.append(button("Fechar", () => amplo.close(), { id: "corretorAmploFechar" }), amploConteudo);
+  panel.append(amplo);
+  const panorama = el("div", { id: "corretorPanorama" });
+  panel.append(actions, status, filters, el("p", { class: "meta" },
+    "% mudado = palavras apagadas + adicionadas / total de palavras dos dois textos. Assinatura excluída. Frequência de edição não indica erro clínico."), lista, detalhe, panorama);
+  function filtros() {
+    const atual = chefe.value; chefe.replaceChildren(el("option", { value: "" }, "Todos"));
+    [...new Set(pares.map(p => p.chefe))].sort().forEach(n => chefe.append(el("option", { value: n || "__sem__" }, n || semChefe)));
+    chefe.value = [...chefe.options].some(o => o.value === atual) ? atual : "";
+  }
+  function tabela(host, titulo, headers, rows) {
+    host.append(el("h3", {}, titulo));
+    if (!rows.length) { host.append(el("p", { class: "meta" }, "Sem alterações neste recorte.")); return; }
+    const table = el("table"), head = el("thead"), tr = el("tr"), body = el("tbody");
+    headers.forEach(h => tr.append(el("th", { scope: "col" }, h))); head.append(tr);
+    for (const row of rows) { const r = el("tr"); row.forEach(t => r.append(el("td", {}, String(t)))); body.append(r); }
+    table.append(head, body); host.append(table);
+  }
+  function abrir(p) {
+    detalhe.replaceChildren();
+    if (!p) { if (amplo.open) amplo.close(); return; }
+    correcao(detalhe, p, false);
+    detalhe.querySelector("h3").after(button("Tela larga", () => {
+      ladoAmplo = lado;
+      correcao(amploConteudo, p, true);
+      amplo.showModal();
+    }, { id: "corretorTelaLarga" }));
+    if (amplo.open) correcao(amploConteudo, p, true);
+  }
+  function correcao(host, p, larga) {
+    host.replaceChildren();
+    const mostrarLados = larga ? ladoAmplo : lado;
+    host.append(el("h3", larga ? { id: "corretorAmploTitulo" } : {}, p.titulo),
+      el("p", { class: "meta" }, p.chefe || semChefe),
+      button(mostrarLados ? "Mostrar correção aplicada" : "Lado a lado", () => {
+        if (larga) {
+          ladoAmplo = !ladoAmplo; correcao(host, p, true);
+          host.querySelector("#corretorAmploLado").focus();
+        }
+        else { lado = !lado; abrir(p); }
+      }, { id: larga ? "corretorAmploLado" : "corretorLado", "aria-pressed": String(mostrarLados) }));
+    for (const s of analisar(p).sections) {
+      host.append(el("h4", {}, s.nome));
+      if (mostrarLados) {
+        const cols = el("div", { class: "corretor-lados" });
+        for (const [label, t] of [["Preliminar", s.antes], ["Definitivo", s.depois]]) {
+          const c = el("div"); c.append(el("strong", {}, label), el("pre", {}, t)); cols.append(c);
+        }
+        host.append(cols);
+      } else { const d = el("div", { class: "corretor-diff" }); d.innerHTML = s.html; host.append(d); }
+    }
+  }
+  function semana(iso) {
+    const d = new Date(iso); d.setUTCHours(0, 0, 0, 0); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7);
+    return d.toISOString().slice(0, 10);
+  }
+  function render() {
+    const filtrados = pares.filter(p => (!chefe.value || (p.chefe || "__sem__") === chefe.value) && (!exame.value || tipo(p) === exame.value));
+    filtrados.sort((a, b) => (ordem.value === "mudado" ? analisar(b).pct - analisar(a).pct : 0) || Date.parse(b.capturado_em) - Date.parse(a.capturado_em) || b.seq - a.seq);
+    lista.replaceChildren(el("h3", {}, `${filtrados.length} pares`));
+    if (!filtrados.some(p => p.id === selecionado)) selecionado = filtrados[0]?.id || "";
+    for (const p of filtrados) {
+      const b = button(`${new Date(p.capturado_em).toLocaleDateString("pt-BR")} · ${p.titulo} · ${p.chefe || semChefe} · ${analisar(p).pct.toFixed(1)}%`,
+        () => { selecionado = p.id; render(); }, { class: "corretor-par", "aria-pressed": String(p.id === selecionado) });
+      lista.append(b);
+    }
+    abrir(filtrados.find(p => p.id === selecionado));
+    panorama.replaceChildren(el("h2", {}, "Panorama do recorte"));
+    const apagados = new Map(), adicionados = new Map(), trocas = new Map(), sections = new Map(), grupos = new Map(), semanas = new Map();
+    const inc = (map, key) => map.set(key, (map.get(key) || 0) + 1);
+    for (const p of filtrados) {
+      const a = analisar(p);
+      for (const c of a.changes) { if (c.de) inc(apagados, c.de); if (c.para) inc(adicionados, c.para); if (c.de && c.para) inc(trocas, `${c.de} → ${c.para}`); }
+      for (const s of a.sections) { const n = sections.get(s.nome) || [0, 0]; n[0] += s.rm; n[1] += s.ins; sections.set(s.nome, n); }
+      const key = JSON.stringify([p.chefe || semChefe, tipo(p)]), g = grupos.get(key) || [0, 0]; g[0]++; g[1] += a.pct; grupos.set(key, g);
+      const week = semana(p.capturado_em), w = semanas.get(week) || [0, 0]; w[0]++; w[1] += a.pct; semanas.set(week, w);
+    }
+    const top = map => [...map].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 15);
+    tabela(panorama, "Trocas mais frequentes", ["A → B", "Vezes"], top(trocas));
+    tabela(panorama, "Trechos mais apagados", ["Trecho", "Vezes"], top(apagados));
+    tabela(panorama, "Trechos mais adicionados", ["Trecho", "Vezes"], top(adicionados));
+    tabela(panorama, "Conclusão × Achados", ["Seção", "Palavras apagadas", "Adicionadas"], [...sections].map(([k, n]) => [k, ...n]));
+    tabela(panorama, "Por chefe e tipo", ["Chefe", "Tipo", "Pares", "% médio"], [...grupos].map(([k, n]) => [...JSON.parse(k), n[0], (n[1] / n[0]).toFixed(1) + "%"]));
+    tabela(panorama, "Evolução semanal (início segunda, UTC)", ["Semana", "Pares", "% médio"], [...semanas].sort().map(([k, n]) => [k, n[0], (n[1] / n[0]).toFixed(1) + "%"]));
+  }
+  function demonstracao() {
+    return [
+      ["USG Doppler venoso", "Veias compressíveis. Fluxo normal.", "Veias compressíveis. Fluxo preservado.", "Sem trombose."],
+      ["TC abdome", "Fígado de contornos normais. Parênquima normal.", "Fígado de contornos normais. Parênquima preservado.", "Sem alterações abdominais."],
+      ["TC crânio", "Ventrículos de dimensões habituais. Parênquima normal.", "Ventrículos de dimensões habituais. Parênquima preservado.", "Sem alterações agudas."]
+    ].map(([titulo, antes, depois, conc], i) => normalizar({ id: "demo-" + i, seq: i + 1, capturado_em: `2026-11-0${8 - i * 2}T12:00:00Z`, chefe: "", titulo: "",
+      preliminar: `${titulo}\nAchados\n${antes}\nConclusão\n${conc}`,
+      final: `${titulo}\nAchados\n${depois}\nConclusão\n${conc}\nDr(a).:Chefe sintético ${i % 2 + 1}` }));
+  }
+  // Carrega o disco local apenas ao abrir a aba; demo não lê nem grava IndexedDB.
+  let iniciado = false;
+  const observer = new MutationObserver(async () => {
+    if (panel.hidden || iniciado) return;
+    iniciado = true;
+    if (demo) { atualizar.disabled = true; await receber({ pares: demonstracao(), puladas: 0 }, "Demonstração"); return; }
+    try { pares = (await armazenamento()).map(normalizar); filtros(); render(); }
+    catch (_) { status.textContent = "Armazenamento local indisponível; importações ficarão só em memória."; }
+    await carregar();
+  });
+  observer.observe(panel, { attributes: true, attributeFilter: ["hidden"] });
+  if (demo) ui.panel("Corretor");
 })();

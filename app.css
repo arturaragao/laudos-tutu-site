@@ -595,3 +595,21 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
   background:var(--panel); color:var(--muted); font:500 11.5px var(--f-body); cursor:pointer; box-shadow:0 2px 8px #30271914; }
 #ghostAviso[hidden] { display:none; }
 #ghostAviso:hover { color:var(--accent); }
+#rightTabs:has(#rightTabCorretor) { flex-wrap:wrap; }
+#rightPanelCorretor { min-width:0; }
+.corretor-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.corretor-actions label { display:flex; flex-direction:column; gap:3px; }
+#corretorLista { max-height:280px; overflow:auto; }
+.tutu-v2 .corretor-par { display:block; width:100%; text-align:left; margin-bottom:5px; white-space:normal; }
+.tutu-v2 .corretor-par[aria-pressed="true"] { border-color:var(--changed); background:var(--paper); }
+#corretorDetalhe, #corretorPanorama { background:var(--paper); padding:12px; border:1px solid var(--line); border-radius:12px; overflow-wrap:anywhere; }
+.corretor-diff { white-space:pre-wrap; line-height:1.6; }
+.corretor-diff .chg { background:var(--p-green); color:var(--changed); border-bottom:1px solid #6f9e6a; }
+.corretor-diff del.rm { background:var(--p-red); color:var(--crit); text-decoration:line-through; }
+.corretor-lados { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; }
+.corretor-lados pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+.corretor-amplo { box-sizing:border-box; width:calc(100vw - 40px); max-width:1600px; max-height:calc(100dvh - 40px); overflow:auto; padding:24px; color:var(--text); background:var(--paper); border:1px solid var(--line); border-radius:12px; overflow-wrap:anywhere; }
+.corretor-amplo::backdrop { background:rgb(0 0 0 / .45); }
+#corretorAmploFechar { float:right; }
+#corretorPanorama table { width:100%; border-collapse:collapse; font-size:12px; }
+#corretorPanorama th, #corretorPanorama td { padding:5px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
