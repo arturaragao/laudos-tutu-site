@@ -4087,7 +4087,34 @@ globalThis.usgVoice = { bestAlternative, posTexto, punct };
     [/\bpopl[ií]te(a|o)\b/gi, "poplíte$1"],
   ];
   const fixFala = t => FALA_FIX.reduce((s, [re, to]) => s.replace(re, to), String(t));
-  const api = { normalize, speechDelta, fixFala, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
+  /* Máscara dita no áudio (12/11/2026): "parecer de tomografia de abdome total", "doppler arterial de membro inferior".
+     Compara as palavras do nome de cada máscara com o começo do ditado; "parecer" só casa com máscara de parecer. */
+  const SINONIMOS = [[/tomografias? computadorizadas?|tomografias?/g, "tc"], [/angio ?tc|angiotomografias?/g, "angiotc"],
+    [/ultrassonografias?|ultrassons?|ultra sons?|ultrasom|ecografias?/g, "usg"], [/membros? inferior(?:es)?/g, "mmii"],
+    [/membros? superior(?:es)?/g, "mmss"], [/ressonancias?(?: magneticas?)?/g, "rm"], [/radiografias?|raio ?x/g, "rx"]];
+  const PARADAS = new Set(["de", "do", "da", "dos", "das", "e", "com", "o", "a", "os", "as", "em", "no", "na", "parecer", "exame", "vou", "fazer", "agora", "um", "uma"]);
+  const termosExame = t => {
+    let s = normalize(t).replace(/[^a-z0-9 ]+/g, " ");
+    for (const [re, to] of SINONIMOS) s = s.replace(re, to);
+    const out = new Set(s.split(/\s+/).filter(w => w && !PARADAS.has(w)));
+    if (out.has("doppler")) out.add("usg");
+    return out;
+  };
+  function exameDoTexto(texto, exames) {
+    const inicio = String(texto || "").split(/\s+/).slice(0, 30).join(" ");
+    const ts = termosExame(inicio), parecer = /\bparecer\b/.test(normalize(inicio));
+    let melhor = null, nota = 0;
+    for (const e of exames || []) {
+      const ehParecer = e.tipo === "parecer" || /^parecer/i.test(e.name || "");
+      if (ehParecer !== parecer) continue;
+      const ns = [...termosExame(e.name || "")].filter(w => w !== "doppler");
+      if (!ns.length) continue;
+      const hit = ns.filter(w => ts.has(w)).length, n = hit / ns.length + ns.length / 1000;   // empate: o nome mais específico
+      if (hit >= Math.min(2, ns.length) && hit / ns.length >= 0.6 && n > nota) { melhor = e; nota = n; }
+    }
+    return melhor;
+  }
+  const api = { normalize, speechDelta, fixFala, exameDoTexto, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
     lastSentence, buildCompletionIndex, completeSentence, laudosToNotion };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuV2Core = api;
@@ -7636,12 +7663,17 @@ window.tutuSite.appReady = true;
     iniciar.style.pointerEvents = ouvindo ? "none" : ""; parar.style.pointerEvents = ouvindo ? "" : "none";
   }
   texto.addEventListener("input", () => { enviado = false; atualizarUI(); });
+  let escolhaManual = false;
+  exame.addEventListener("change", () => { escolhaManual = !!exame.value; exame.classList.toggle("sem-selecao", !exame.value); });
+  const exameEscolhido = () => EXAMS.find(e => e.id === exame.value) || TutuV2Core.exameDoTexto(texto.value, EXAMS);
   function preencher() {
     const selected = exame.value; exame.replaceChildren();
     const usg = U.examesUSG(EXAMS); /* USG primeiro, mas todas as máscaras: Áudio não é só ultrassom */
-    if (!usg.length) exame.append(el("option", { value: "" }, "Escolha a máscara…")); /* sem USG: não gravar numa máscara qualquer */
+    /* 12/11/2026: começa sem seleção; sem escolha manual, o exame vem do próprio áudio (TutuV2Core.exameDoTexto). */
+    exame.append(el("option", { value: "" }, "— diga o exame no áudio —"));
     for (const e of [...usg, ...EXAMS.filter(x => !usg.includes(x))]) exame.append(el("option", { value: e.id }, e.name));
-    if ([...exame.options].some(o => o.value === selected)) exame.value = selected;
+    exame.value = escolhaManual && [...exame.options].some(o => o.value === selected) ? selected : "";
+    exame.classList.toggle("sem-selecao", !exame.value);
     if (!exame.options.length) dizer("Nenhuma máscara de USG neste navegador. Sincronize nas Configurações.");
   }
   function config(ex) {
@@ -7664,7 +7696,7 @@ window.tutuSite.appReady = true;
     iniciar.focus();
   }
   function captar() {
-    const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara.");
+    const ex = exameEscolhido() || U.examesUSG(EXAMS)[0] || EXAMS[0]; if (!ex) throw Error("Nenhuma máscara neste navegador. Sincronize nas Configurações.");   // vocabulário; o exame final vem do áudio se não escolhido
     const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Speech) throw Error("Áudio indisponível neste navegador. Digite os achados ou use um navegador com Web Speech.");
     const s = speech = new Speech(); s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
@@ -7700,7 +7732,9 @@ window.tutuSite.appReady = true;
     busy = true; enviar.disabled = true;
     try {
       // Nenhuma consulta remota antes de filtrar o texto editado.
-      const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara.");
+      const ex = exameEscolhido();
+      if (!ex) throw Error("Não reconheci o exame. Diga no começo do áudio (ex.: \"doppler arterial de membro inferior\", \"parecer de TC de abdome total\") ou escolha no menu.");
+      if (!exame.value) dizer("Exame reconhecido no áudio: " + ex.name);
       const fresh = filtrar(texto.value, ex); if (!fresh) throw Error("Dite ou digite os achados.");
       if (!G.token) throw Error("Salve a chave em Configurações › Sincronização.");
       const r = await fetch("https://api.github.com/repos/" + G.repo, { cache: "no-store", headers: { Authorization: "Bearer " + G.token } });

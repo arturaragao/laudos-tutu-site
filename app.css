@@ -559,7 +559,7 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 .tutu-v2 #commandResults button.cmd-cont { align-items:flex-start; }
 #commandResults button.cmd-cont span { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; font-size:12.5px; line-height:1.35; }
 
-.tutu-v2 #settingsTop { font-size: 22px; line-height: 1; padding: 3px 8px; min-width: 40px; min-height: 36px; }
+.tutu-v2 #settingsTop { font-size: 17px; line-height: 1; padding: 3px 7px; min-width: 32px; min-height: 30px; }
 
 /* Conclusão sugerida (110-v2-conclusao.js): ghost fora da folha, nunca entra no laudo. */
 #ghostConc { position:fixed; z-index:20; box-sizing:border-box; background:var(--paper); cursor:pointer; font-style:italic; line-height:normal;
@@ -725,7 +725,7 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
   .tutu-v2 #tutuApp .v2-top-actions { order:5; flex:1; width:auto; min-width:0; gap:3px; justify-content:flex-end; }
   #tutuApp .v2-top-actions button { padding:3px 5px; font-size:11px; }
   #tutuApp #themeButton { order:6; padding:3px 7px; }
-  .tutu-v2 #tutuApp #settingsTop { min-width:40px; min-height:40px; font-size:24px; padding:0 8px; }
+  .tutu-v2 #tutuApp #settingsTop { min-width:32px; min-height:32px; font-size:18px; padding:0 6px; }
   #tutuApp #saveState, #tutuApp #syncState { min-width:0; max-width:76px; overflow:hidden; text-overflow:ellipsis; font-size:9px; }
   .tutu-v2 #tutuApp #v2Center { padding:0 0 24px; scrollbar-gutter:auto; }
   #tutuApp #v2Center > .fmt-bar { position:static; padding:6px; gap:3px; }
@@ -768,3 +768,6 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #v2Right::-webkit-scrollbar, #v2Left::-webkit-scrollbar { width:6px; }
 #v2Right::-webkit-scrollbar-thumb, #v2Left::-webkit-scrollbar-thumb { background:transparent; border-radius:3px; }
 #v2Right:hover::-webkit-scrollbar-thumb, #v2Left:hover::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--muted) 35%, transparent); }
+
+/* Áudio sem exame escolhido: tracejado e apagado; o exame vem do que for dito (12/11/2026) */
+.tutu-v2 #usgExame.sem-selecao { color:var(--muted); font-style:italic; border-style:dashed; }
