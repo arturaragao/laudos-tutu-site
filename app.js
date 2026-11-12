@@ -4282,17 +4282,6 @@ window.tutuSite.appReady = true;
   ui.night = () => { const night = document.body.classList.toggle("sepia-night"); store.set("v2Night", night ? "1" : "0"); $("nightToggle").textContent = night ? "Sépia dia" : "Sépia noite"; $("nightToggle").setAttribute("aria-pressed", String(night)); $("themeButton").textContent = night ? "☀" : "☾"; };
   top.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
   if (store.get("v2Night") === "1") ui.night();
-  /* Botão TEMPORÁRIO "Instalar app" (pedido do Artur, 12/11/2026; tirar depois que ele instalar no celular). */
-  let pedidoInstalar = null;
-  const instalar = button("⬇ Instalar app", async () => {
-    if (pedidoInstalar) { pedidoInstalar.prompt(); const r = await pedidoInstalar.userChoice.catch(() => null); if (r?.outcome === "accepted") instalar.hidden = true; pedidoInstalar = null; return; }
-    alert(matchMedia("(display-mode: standalone)").matches ? "O app já está instalado e aberto."
-      : "Se a instalação não abriu: 1) segure o ícone antigo do Laudos/Tutu na tela inicial e desinstale; 2) no Chrome, toque em ⋮ › Instalar app. O app foi renovado em 12/11 para destravar a instalação.");
-  }, { id: "installApp", title: "Instalar o Laudos como app" });
-  if (matchMedia("(display-mode: standalone)").matches) instalar.hidden = true;
-  top.prepend(instalar);
-  window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); pedidoInstalar = e; instalar.hidden = false; });
-  window.addEventListener("appinstalled", () => { instalar.hidden = true; });
   showLeft(leftPinned);
   showRight(rightPinned);
   // No celular os botões ficam no topo, acessíveis mesmo com as gavetas fechadas.
