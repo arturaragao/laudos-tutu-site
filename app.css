@@ -678,3 +678,14 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
   #usgDialog #usgParar { order:3; min-height:48px; }
   #usgDialog #usgEnviar, #usgDialog #usgEnviar ~ button { order:4; min-height:48px; }
 }
+
+/* × das abas: discreto, aparece no hover/aba ativa (12/11/2026) */
+.case-close { opacity:0; font-size:13px; line-height:1; padding:1px 3px; border-radius:4px; color:var(--muted); margin-left:-2px; }
+#caseTabs button:hover .case-close, #caseTabs button[aria-selected="true"] .case-close { opacity:.55; }
+.case-close:hover { opacity:1!important; background:var(--line); color:var(--text); }
+/* Barra de rolagem fina e quase invisível nas laterais; aparece ao passar o mouse (12/11/2026) */
+#v2Right, #v2Left, #v2Left #exams { scrollbar-width:thin; scrollbar-color:transparent transparent; }
+#v2Right:hover, #v2Left:hover, #v2Left #exams:hover { scrollbar-color:color-mix(in srgb, var(--muted) 35%, transparent) transparent; }
+#v2Right::-webkit-scrollbar, #v2Left::-webkit-scrollbar { width:6px; }
+#v2Right::-webkit-scrollbar-thumb, #v2Left::-webkit-scrollbar-thumb { background:transparent; border-radius:3px; }
+#v2Right:hover::-webkit-scrollbar-thumb, #v2Left:hover::-webkit-scrollbar-thumb { background:color-mix(in srgb, var(--muted) 35%, transparent); }

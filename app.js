@@ -4450,7 +4450,10 @@ window.tutuSite.appReady = true;
       const b = ui.button("", () => ui.switchTab(t.id), { role: "tab", "data-case": t.id,
         "aria-selected": String(t.id === active), "aria-controls": "v2Center", title: fullName(t.exam || { name: t.examId }) + " · Ctrl+Tab", tabindex: t.id === active ? "0" : "-1" });
       const dot = ui.el("i", { class: "case-rec", "aria-label": "Ditado neste caso" }); dot.hidden = ui.voiceCase !== t.id;
-      b.append(dot, ui.el("span", {}, shortName(t.exam || { name: t.examId })));
+      // × discreto (pedido do Artur, 12/11/2026): tira a aba da fileira; o laudo editado continua no Histórico.
+      const x = ui.el("small", { class: "case-close", role: "button", "aria-label": "Fechar esta aba", title: "Fechar aba (continua no Histórico)" }, "×");
+      x.addEventListener("click", e => { e.stopPropagation(); e.preventDefault(); ui.closeTab(t.id); });
+      b.append(dot, ui.el("span", {}, shortName(t.exam || { name: t.examId })), x);
       nav.append(b);
     }
     nav.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -4503,6 +4506,11 @@ window.tutuSite.appReady = true;
     persist(); const index = tabs.findIndex(t => t.id === active); tabs.splice(index, 1);
     if (!tabs.length) { const ex = current; tabs.push({ id: newId(), examId: ex.id, exam: clone(ex), html: modelSheetHtml(ex), started: stamp(), versions: [] }); }
     load(tabs[Math.min(index, tabs.length - 1)]); persist();
+  };
+  ui.closeTab = id => {
+    if (id === active) return ui.closeCurrent();
+    const i = tabs.findIndex(t => t.id === id); if (i < 0 || !canSwitch()) return;
+    tabs.splice(i, 1); renderTabs(); persist();
   };
   const originalSelect = selectExam;
   selectExam = (id, focus, add) => {
@@ -7661,8 +7669,8 @@ window.tutuSite.appReady = true;
       if (!G.token) throw Error("Salve a chave em Configurações › Sincronização.");
       const r = await fetch("https://api.github.com/repos/" + G.repo, { cache: "no-store", headers: { Authorization: "Bearer " + G.token } });
       if (!r.ok || !(await r.json()).private) throw Error("A fila exige o repositório privado de dados.");
-      await G.putJson("fila-usg/" + crypto.randomUUID() + ".json", { exame: ex.id, modo: "audio", texto: fresh, criado: new Date().toISOString() }, null, "USG: texto anônimo");
-      texto.value = ""; dizer("Enviado. Abra em Laudos Áudio neste aparelho ou em qualquer PC sincronizado."); await atualizar();
+      await G.putJson("fila-usg/" + crypto.randomUUID() + ".json", { exame: ex.id, nome: ex.name, mascara: maskOf(ex), modo: "audio", texto: fresh, ia: "pendente", criado: new Date().toISOString() }, null, "USG: texto anônimo");
+      texto.value = ""; dizer("Enviado. A IA organiza em cerca de 1 minuto; o laudo aparece em Laudos Áudio aqui e nos PCs."); await atualizar();
     } catch (e) { dizer(/fetch/i.test(e.message) ? "Rede indisponível. O texto permanece nesta tela para tentar novamente." : e.message); }
     finally { busy = false; enviar.disabled = false; }
   }
@@ -7744,6 +7752,14 @@ window.tutuSite.appReady = true;
       const fresh = filtrar(d.texto, ex), antes = ui.activeId(); ui.newTab(ex.id);
       const caso = ui.activeId(), pedido = id;
       if (caso === antes) throw Error("Aguarde a operação na folha.");
+      if (d.laudo) {   // laudo organizado pela IA (tools/ia_laudo.py no repo de dados)
+        sheet.innerHTML = modelSheetHtml({ ...ex, mask: d.laudo });
+        updateCount(); renderAlerts();
+        await mudarVinculos(vinculos => { vinculos[caso] = pedido; });
+        await ui.flush();
+        setStatus("Laudo organizado pela IA. Confira os trechos [<conferir>] e copie.", "ok");
+        return;
+      }
       const n = organizar(fresh);
       updateCount(); renderAlerts();
       await mudarVinculos(vinculos => { vinculos[caso] = pedido; });
@@ -7787,7 +7803,7 @@ window.tutuSite.appReady = true;
         const d = r.json, id = f.name.slice(0, -5), criado = Date.parse(d.criado);
         const expirado = Number.isFinite(criado) && Date.now() - criado >= 30 * 86400000;
         const row = el("div", { class: "usg-pedido", "data-id": id, "data-state": expirado ? "expirado" : "recebido" }), ex = EXAMS.find(e => e.id === d.exame);
-        row.append(el("span", {}, (ex?.name || "Exame") + (expirado ? " · expirado" : " · recebido")), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
+        row.append(el("span", {}, (ex?.name || "Exame") + (expirado ? " · expirado" : d.laudo ? " · laudo pronto (IA) ✓" : d.ia === "erro" ? " · IA falhou (abre organizado localmente)" : d.ia === "pendente" ? " · IA organizando…" : " · recebido")), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
           try { await apagar(id, r.sha); await atualizar(); }
           catch (e) { inboxMsg.textContent = e.message; }
         })); rows.push(row);
