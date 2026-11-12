@@ -4287,7 +4287,7 @@ window.tutuSite.appReady = true;
   const instalar = button("⬇ Instalar app", async () => {
     if (pedidoInstalar) { pedidoInstalar.prompt(); const r = await pedidoInstalar.userChoice.catch(() => null); if (r?.outcome === "accepted") instalar.hidden = true; pedidoInstalar = null; return; }
     alert(matchMedia("(display-mode: standalone)").matches ? "O app já está instalado e aberto."
-      : "Se a janela de instalação não abriu: use o Chrome (não o navegador Samsung), toque em ⋮ no canto de cima e escolha \"Instalar app\" ou \"Adicionar à tela inicial\".");
+      : "Se a instalação não abriu: 1) segure o ícone antigo do Laudos/Tutu na tela inicial e desinstale; 2) no Chrome, toque em ⋮ › Instalar app. O app foi renovado em 12/11 para destravar a instalação.");
   }, { id: "installApp", title: "Instalar o Laudos como app" });
   if (matchMedia("(display-mode: standalone)").matches) instalar.hidden = true;
   top.prepend(instalar);
@@ -7777,7 +7777,7 @@ window.tutuSite.appReady = true;
   }
   const antigoClipboard = copyToClipboard;
   copyToClipboard = async (...args) => {
-    const caso = ui.activeId(), vinculo = T.sync.kvGet("_usg/vinculos").then(v => ({ id: v?.[caso] }), () => ({ erro: true }));
+    const caso = ui.activeId(), finalTexto = laudoTagged(), vinculo = T.sync.kvGet("_usg/vinculos").then(v => ({ id: v?.[caso] }), () => ({ erro: true }));
     // Inicia a cópia na folha atual antes que qualquer await permita trocar de aba.
     const ok = await antigoClipboard(...args);
     if (ok) {
@@ -7785,7 +7785,13 @@ window.tutuSite.appReady = true;
         const { id, erro } = await vinculo;
         if (erro) throw Error("Vínculo indisponível.");
         if (id) {
-          const r = await G.getJson("fila-usg/" + id + ".json"); if (r) await apagar(id, r.sha);
+          const r = await G.getJson("fila-usg/" + id + ".json");
+          // Aprendizado: proposta da IA → laudo que o Artur copiou (tools/ia_laudo.py usa nas próximas e no guia).
+          if (r?.json?.laudo && /^[a-z0-9-]{1,60}$/.test(r.json.exame || "")) {
+            await G.putJson("ia/correcoes/" + r.json.exame + "/" + id + ".json",
+              { exame: r.json.exame, proposta: r.json.laudo, final: finalTexto, quando: new Date().toISOString() }, null, "IA: correção do Artur").catch(() => {});
+          }
+          if (r) await apagar(id, r.sha);
           await mudarVinculos(vinculos => { if (vinculos[caso] === id) delete vinculos[caso]; }); await atualizar();
         }
       } catch (_) { inboxMsg.textContent = "Laudo copiado; remoção da fila pendente. Copie de novo quando a rede voltar."; }
