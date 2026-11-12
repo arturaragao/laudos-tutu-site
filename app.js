@@ -4117,10 +4117,11 @@ window.tutuSite.appReady = true;
   const actions = el("div", { class: "v2-top-actions" });
   actions.append(el("span", { id: "saveState", role: "status" }, "salvo agora"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }),
     button("⚙", () => ui.settings(true), { id: "settingsTop", title: "Configurações · Ctrl+,", "aria-label": "Configurações" }));
-  move("copiar", actions); $("copiar").textContent = "Copiar laudo";
+  const footerActions = ui.footerActions = el("div", { class: "v2-footer-actions" });
+  move("copiar", footerActions); $("copiar").textContent = "Copiar laudo";
   $("copiar").append(el("kbd", {}, "Ctrl C")); top.append(actions);
   const left = ui.left = el("aside", { id: "v2Left", "aria-label": "Máscaras e histórico" });
-  const leftToggle = button("Máscaras · Ctrl E", () => ui.toggleLeft(), { id: "leftToggle", "aria-expanded": "true", title: "Minimizar/restaurar máscaras · Ctrl+E" });
+  const leftToggle = button("≡", () => ui.toggleLeft(), { id: "leftToggle", "aria-label": "Fixar ou recolher máscaras", "aria-expanded": "true", title: "Máscaras · Ctrl E" });
   const leftBody = el("div", { id: "leftBody" });
   left.append(leftToggle, leftBody);
   leftBody.append(el("input", { id: "maskSearch", type: "search", placeholder: "Buscar máscara…", "aria-label": "Buscar máscara" }));
@@ -4142,7 +4143,7 @@ window.tutuSite.appReady = true;
     ui.panels[name] = el("section", { id: "rightPanel" + i, role: "tabpanel", "aria-labelledby": b.id, class: "v2-panel" });
     ui.panels[name].hidden = i !== 0;
   });
-  right.append(button("Recolher · Ctrl ]", () => ui.toggleRight(), { id: "rightToggle", "aria-expanded": "true" }), rnav, ...Object.values(ui.panels));
+  right.append(button("≡", () => ui.toggleRight(), { id: "rightToggle", "aria-label": "Fixar ou recolher ferramentas", title: "Ferramentas · Ctrl ]", "aria-expanded": "true" }), rnav, ...Object.values(ui.panels));
   const rev = ui.panels.Revisar, ia = ui.panels.IA, learned = ui.panels.Aprendido;
   ["revisar", "alertBox", "status"].forEach(id => move(id, rev)); rev.append(document.querySelector(".review"));
   rev.append($("verBtn").closest(".ver-wrap")); move("undoBtn", rev);
@@ -4165,6 +4166,7 @@ window.tutuSite.appReady = true;
   ui.panels.Classificar.append(el("p", { class: "meta" }, "Escolha a ferramenta para preencher os critérios e inserir o resultado na folha."));
   ui.calculator = key => { openModal("calcModal"); showCalc(key); };
   const footer = el("footer", { id: "v2Footer" });
+  footer.append(footerActions);
   const voice = el("div", { id: "voicePill", role: "status", "aria-live": "polite" });
   voice.append(el("span", { id: "voiceDot", "aria-hidden": "true" }, "●"), el("span", { id: "voiceLabel" }, "Voz · Alt S"), button("F1 · Ditar", () => ui.dictate(), { id: "voiceToggle" }));
   const settings = $("setModal"); settings.classList.add("v2-settings"); settings.removeAttribute("aria-modal"); settings.setAttribute("role", "region");
@@ -4192,7 +4194,7 @@ window.tutuSite.appReady = true;
   closeModal = id => id === "setModal" ? ui.settings(false) : oldClose(id);
   ui.panel = name => {
     if (app.classList.contains("focus-mode")) setFoco(false);
-    app.classList.remove("right-mini"); store.set("v2RightMini", "0");
+    setRightPinned(true);
     Object.entries(ui.panels).forEach(([n, p]) => { p.hidden = n !== name; $(p.getAttribute("aria-labelledby")).setAttribute("aria-selected", String(n === name)); });
     $("rightToggle").setAttribute("aria-expanded", "true");
   };
@@ -4213,18 +4215,36 @@ window.tutuSite.appReady = true;
   };
   ui.toggleLeft = () => setLeftPinned(!leftPinned);
   leftToggle.addEventListener("mouseenter", () => { clearTimeout(leftPeekTimer); showLeft(true); });
-  left.addEventListener("mouseenter", () => clearTimeout(leftPeekTimer));
+  left.addEventListener("mouseenter", () => { clearTimeout(leftPeekTimer); showLeft(true); });
   left.addEventListener("mouseleave", () => {
     clearTimeout(leftPeekTimer);
     if (!leftPinned) leftPeekTimer = setTimeout(() => showLeft(false), 250);
   });
-  ui.toggleRight = () => { const mini = app.classList.toggle("right-mini"); store.set("v2RightMini", mini ? "1" : "0"); $("rightToggle").setAttribute("aria-expanded", String(!mini)); };
+  let rightPinned = store.get("v2RightMini") !== "1" && innerWidth >= 760;
+  let rightPeekTimer = null;
+  const rightToggle = $("rightToggle");
+  const showRight = open => {
+    app.classList.toggle("right-mini", !open);
+    rightToggle.setAttribute("aria-expanded", String(open));
+    rightToggle.setAttribute("aria-pressed", String(rightPinned));
+    rightToggle.title = rightPinned ? "Desafixar ferramentas · Ctrl ]" : "Fixar ferramentas · Ctrl ]";
+  };
+  const setRightPinned = pinned => {
+    clearTimeout(rightPeekTimer); rightPinned = pinned;
+    store.set("v2RightMini", pinned ? "0" : "1"); showRight(pinned);
+  };
+  ui.toggleRight = () => setRightPinned(!rightPinned);
+  right.addEventListener("mouseenter", () => { clearTimeout(rightPeekTimer); showRight(true); });
+  right.addEventListener("mouseleave", () => {
+    clearTimeout(rightPeekTimer);
+    if (!rightPinned) rightPeekTimer = setTimeout(() => showRight(false), 250);
+  });
   ui.compact = () => { app.classList.toggle("compact"); ui.settings(false); ui.positionPalette?.(); };
   ui.night = () => { const night = document.body.classList.toggle("sepia-night"); store.set("v2Night", night ? "1" : "0"); $("nightToggle").textContent = night ? "Sépia dia" : "Sépia noite"; $("nightToggle").setAttribute("aria-pressed", String(night)); $("themeButton").textContent = night ? "☀" : "☾"; };
   top.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
   if (store.get("v2Night") === "1") ui.night();
   showLeft(leftPinned);
-  if (store.get("v2RightMini") === "1" || innerWidth < 760) ui.toggleRight();
+  showRight(rightPinned);
   $("maskSearch").oninput = () => { document.querySelectorAll("#exams .exam").forEach(b => b.hidden = !TutuV2Core.score($("maskSearch").value, b.textContent)); };
   const render = renderExams;
   renderExams = () => { render(); $("maskSearch").oninput(); };
@@ -4500,6 +4520,7 @@ window.tutuSite.appReady = true;
       const b = ui.button("", () => ui.actions[action].run(), { title: ui.actions[action].label + " · " + key });
       b.append(ui.el("kbd", {}, key), ui.el("span", {}, ui.actions[action].label)); foot.append(b);
     }
+    if (ui.footerActions) foot.append(ui.footerActions);
   };
   ui.renderShortcuts();
   const keyEditor = ui.el("div", { class: "v2-key-editor" });
@@ -5784,7 +5805,7 @@ window.tutuSite.appReady = true;
 
   /* ---------- bancos ---------- */
   const selo = el("span", { id: "bancoState", class: "v2-banco-selo", role: "status" });
-  selo.hidden = true; ind.before(selo);
+  selo.hidden = true; ui.footerActions.append(selo);
   let seloEpoch = 0;
   async function bancoStatus() {
     const epoch = ++seloEpoch;
@@ -7494,7 +7515,7 @@ window.tutuSite.appReady = true;
   const msg = el("p", { id: "usgMsg", role: "status", "aria-live": "polite" });
   const dizer = t => { msg.textContent = t; };
   const dialog = el("dialog", { id: "usgDialog", "aria-labelledby": "usgTitulo" });
-  const exame = el("select", { id: "usgExame", "aria-label": "Exame de USG" });
+  const exame = el("select", { id: "usgExame", "aria-label": "Exame" });
   const texto = el("textarea", { id: "usgTexto", rows: "9", "aria-label": "Achados ditados", placeholder: "Dite somente os achados, sem identificação do paciente. Você pode editar aqui." });
   const parcial = el("p", { id: "usgParcial", "aria-live": "polite" });
   const iniciar = button("Iniciar áudio", () => { try { captar(); } catch (e) { stop(); dizer(e.message); } }, { id: "usgIniciar" });
@@ -7502,9 +7523,9 @@ window.tutuSite.appReady = true;
   const enviar = button("Enviar", () => enviarPedido(), { id: "usgEnviar" });
   function preencher() {
     const selected = exame.value; exame.replaceChildren();
-    for (const e of U.examesUSG(EXAMS)) exame.append(el("option", { value: e.id }, e.name));
+    for (const e of EXAMS) exame.append(el("option", { value: e.id }, e.name));
     if ([...exame.options].some(o => o.value === selected)) exame.value = selected;
-    if (!exame.options.length) dizer("Nenhuma máscara USG neste navegador. Sincronize nas Configurações.");
+    if (!exame.options.length) dizer("Nenhuma máscara neste navegador. Sincronize nas Configurações.");
   }
   function config(ex) {
     publishVoice();
@@ -7521,7 +7542,7 @@ window.tutuSite.appReady = true;
     iniciar.disabled = false; parar.disabled = true; exame.disabled = false;
   }
   function captar() {
-    const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara USG.");
+    const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara.");
     const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Speech) throw Error("Áudio indisponível neste navegador. Digite os achados ou use um navegador com Web Speech.");
     const s = speech = new Speech(); s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
@@ -7550,26 +7571,26 @@ window.tutuSite.appReady = true;
     busy = true; enviar.disabled = true;
     try {
       // Nenhuma consulta remota antes de filtrar o texto editado.
-      const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara USG.");
+      const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara.");
       const fresh = filtrar(texto.value, ex); if (!fresh) throw Error("Dite ou digite os achados.");
       if (!G.token) throw Error("Salve a chave em Configurações › Sincronização.");
       const r = await fetch("https://api.github.com/repos/" + G.repo, { cache: "no-store", headers: { Authorization: "Bearer " + G.token } });
       if (!r.ok || !(await r.json()).private) throw Error("A fila exige o repositório privado de dados.");
       await G.putJson("fila-usg/" + crypto.randomUUID() + ".json", { exame: ex.id, modo: "audio", texto: fresh, criado: new Date().toISOString() }, null, "USG: texto anônimo");
-      texto.value = ""; dizer("Enviado. Abra em USG do celular neste aparelho ou em qualquer PC sincronizado."); await atualizar();
+      texto.value = ""; dizer("Enviado. Abra em Laudos Áudio neste aparelho ou em qualquer PC sincronizado."); await atualizar();
     } catch (e) { dizer(/fetch/i.test(e.message) ? "Rede indisponível. O texto permanece nesta tela para tentar novamente." : e.message); }
     finally { busy = false; enviar.disabled = false; }
   }
-  dialog.append(el("h2", { id: "usgTitulo" }, "Ditar USG"), el("label", { for: "usgExame" }, "Exame"), exame,
+  dialog.append(el("h2", { id: "usgTitulo" }, "Audio"), el("label", { for: "usgExame" }, "Exame"), exame,
     el("p", { id: "usgModo" }, "Áudio"), iniciar, parar, texto, parcial, enviar, button("Fechar", () => { stop(); dialog.close(); }), msg);
   document.body.append(dialog);
   const abrirDialog = () => { preencher(); dialog.showModal(); };
-  document.querySelector(".v2-top-actions").prepend(button("Ditar USG", abrirDialog, { id: "usgOpen" }));
+  $("copiar").after(button("Audio", abrirDialog, { id: "usgOpen" }));
   dialog.addEventListener("cancel", stop); window.addEventListener("pagehide", stop);
   const painel = el("details", { id: "usgInbox" }), cachePedidos = new Map();
   const lista = el("div", { id: "usgLista" }), inboxMsg = el("p", { id: "usgInboxMsg", role: "status" });
   const sugestoes = el("details", { id: "usgSugestoes" });
-  painel.append(el("summary", {}, "USG do celular"), button("Atualizar pedidos", () => atualizar()), inboxMsg, lista, sugestoes); ui.center.prepend(painel);
+  painel.append(el("summary", {}, "Laudos Áudio"), button("Atualizar pedidos", () => atualizar()), inboxMsg, lista, sugestoes); ui.center.append(painel);
   let vinculosPendentes = Promise.resolve();
   function mudarVinculos(fn) {
     const tarefa = vinculosPendentes.then(async () => {
@@ -7620,7 +7641,7 @@ window.tutuSite.appReady = true;
       updateCount(); renderAlerts();
       await mudarVinculos(vinculos => { vinculos[caso] = pedido; });
       await ui.flush();
-      setStatus("USG organizado localmente. Revise os destaques e a conclusão." + (n ? " Há " + n + " achado(s) sem encaixe ao fim de Achados." : ""), "ok");
+      setStatus("Laudo organizado localmente. Revise os destaques e a conclusão." + (n ? " Há " + n + " achado(s) sem encaixe ao fim de Achados." : ""), "ok");
     } catch (e) { inboxMsg.textContent = e.message; }
   }
   async function apagar(id, sha) {
@@ -7659,7 +7680,7 @@ window.tutuSite.appReady = true;
         const d = r.json, id = f.name.slice(0, -5), criado = Date.parse(d.criado);
         const expirado = Number.isFinite(criado) && Date.now() - criado >= 30 * 86400000;
         const row = el("div", { class: "usg-pedido", "data-id": id, "data-state": expirado ? "expirado" : "recebido" }), ex = EXAMS.find(e => e.id === d.exame);
-        row.append(el("span", {}, (ex?.name || "USG") + (expirado ? " · expirado" : " · recebido")), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
+        row.append(el("span", {}, (ex?.name || "Exame") + (expirado ? " · expirado" : " · recebido")), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
           try { await apagar(id, r.sha); await atualizar(); }
           catch (e) { inboxMsg.textContent = e.message; }
         })); rows.push(row);
@@ -7670,5 +7691,5 @@ window.tutuSite.appReady = true;
   }
   T.onChave(atualizar); setInterval(() => { if (!document.hidden) atualizar(); }, 15000);
   window.addEventListener("focus", atualizar); document.addEventListener("visibilitychange", () => { if (!document.hidden) atualizar(); }); atualizar();
-  ui.actions.ditarusg = { label: "Ditar USG", run: abrirDialog }; ui.usg = { atualizar, preencher };
+  ui.actions.ditarusg = { label: "Audio", run: abrirDialog }; ui.usg = { atualizar, preencher };
 })();

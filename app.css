@@ -473,7 +473,8 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 .tutu-v2 #laudo .chg, .tutu-v2 #laudo ins { background:var(--p-green); color:var(--changed); text-decoration:none; border-bottom:1px solid #6f9e6a; }
 .tutu-v2 #laudo del.rm, .tutu-v2 #laudo .rmline { background:var(--p-red); color:var(--crit); text-decoration:line-through; }
 #v2Right { grid-area:right; padding:12px; border-left:1px solid var(--line); overflow:auto; display:flex; flex-direction:column; gap:10px; }
-#rightToggle { align-self:end; font-size:11px!important; }
+#leftToggle, #rightToggle { align-self:start; font-size:22px!important; line-height:1; min-width:32px; }
+#rightToggle { align-self:end; }
 #rightTabs { display:flex; gap:2px; background:var(--panel); border-radius:12px; padding:3px; flex-shrink:0; }
 .tutu-v2 #rightTabs button { flex:1; padding:5px 2px; font-size:12px; border-color:transparent; background:transparent; }
 #rightTabs button b { display:none; }
@@ -487,6 +488,8 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 .v2-panel .legend { display:flex; flex-wrap:wrap; }
 .v2-panel .ver-menu { width:100%; position:relative; }
 .tutu-v2 #v2Footer { grid-area:foot; display:flex; align-items:center; gap:5px; padding:5px 10px; border-top:1px solid var(--line); overflow-x:auto; }
+.v2-footer-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; margin-left:auto; }
+.v2-footer-actions .v2-banco-selo { max-width:240px; }
 .tutu-v2 #v2Footer button { display:flex; align-items:center; gap:5px; white-space:nowrap; font-size:11px; flex-shrink:0; }
 #v2Footer kbd { color:var(--accent); padding:0; border:0; background:transparent; font-size:10px; }
 #voicePill { position:fixed; bottom:62px; left:50%; transform:translateX(-50%); max-width:calc(100vw - 24px); border:1px solid var(--line); border-radius:99px; background:var(--panel); color:var(--text); box-shadow:0 8px 24px #0002; padding:7px 12px; display:flex; align-items:center; gap:10px; z-index:8; font-size:12px; white-space:nowrap; }
@@ -499,13 +502,13 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 .tutu-v2 #tutuApp.left-mini.right-mini { grid-template-columns:56px minmax(0,1fr) 64px; }
 #tutuApp.left-mini #v2Left { padding:10px 8px; overflow:hidden; }
 #tutuApp.left-mini #leftBody { display:none; }
-#tutuApp.left-mini #leftToggle { writing-mode:vertical-rl; transform:rotate(180deg); padding:12px 6px; align-self:center; }
+#tutuApp.left-mini #leftToggle { padding:4px 6px; align-self:center; }
 #tutuApp.right-mini #v2Right { padding:10px 4px; }
 #tutuApp.right-mini .v2-panel { display:none; }
-#tutuApp.right-mini #rightTabs { flex-direction:column; gap:10px; }
+#tutuApp.right-mini #rightTabs { display:none; }
 #tutuApp.right-mini #rightTabs button b { display:block; font-size:18px; }
 #tutuApp.right-mini #rightTabs button span { font-size:9px; }
-#tutuApp.right-mini #rightToggle { font-size:10px!important; padding:4px 1px; }
+#tutuApp.right-mini #rightToggle { padding:4px 6px; align-self:center; }
 .tutu-v2 #setModal.v2-settings { grid-area:center; position:relative; inset:auto; display:block; z-index:4; padding:20px; overflow:auto; background:var(--ground); backdrop-filter:none; }
 .tutu-v2 #setModal .modal-card { width:100%; max-width:100%; max-height:none; box-shadow:none; border:0; background:transparent; }
 .tutu-v2 #setModal .calc-body { display:flex; flex-direction:column; gap:14px; padding:16px 0; overflow:visible; }
@@ -536,7 +539,9 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 #tutuApp.compact #caseTabs { flex-basis:65%; height:33px; }
 #tutuApp.compact .v2-top-actions { order:2; width:100%; justify-content:space-between; }
 #tutuApp.compact #copiar { padding:4px 8px; }
-#tutuApp.compact #copiar kbd { display:none; }
+#tutuApp.compact #v2Footer { min-width:0; overflow-x:hidden; }
+#tutuApp.compact #v2Footer > button { display:none; }
+#tutuApp.compact .v2-footer-actions .v2-banco-selo { max-width:115px; }
 #tutuApp.compact #v2Center { padding:0 12px 100px; }
 #tutuApp.compact #laudo { padding:24px 22px; }
 #tutuApp.compact #v2Center > .fmt-bar { position:static; }
@@ -544,9 +549,11 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 .tutu-v2 #tutuApp.focus-mode { grid-template-columns:0 minmax(0,1fr) 0; }
 #tutuApp.focus-mode #v2Left, #tutuApp.focus-mode #v2Right { visibility:hidden; }
 @media(max-width:1100px) { .tutu-v2 #tutuApp:not(.compact) { grid-template-columns:190px minmax(0,1fr) 280px; } .tutu-v2 #tutuApp.left-mini:not(.compact) { grid-template-columns:56px minmax(0,1fr) 280px; } .tutu-v2 #tutuApp.right-mini:not(.compact) { grid-template-columns:190px minmax(0,1fr) 64px; } .tutu-v2 #tutuApp.left-mini.right-mini:not(.compact) { grid-template-columns:56px minmax(0,1fr) 64px; } #v2Center { padding-inline:12px; } .tutu-v2 #laudo { padding-inline:28px; } }
-@media(max-width:760px) { .tutu-v2 #tutuApp:not(.compact) { grid-template-columns:56px minmax(0,1fr) 64px; } #v2Left { padding:8px 4px; } #leftBody { display:none; } #leftToggle { writing-mode:vertical-rl; } #v2Right { padding:8px 2px; } #rightTabs { flex-direction:column; } #rightTabs button b { display:block; } #rightTabs button span { font-size:9px; } .v2-panel { display:none; } #rightToggle { font-size:9px!important; padding:2px!important; } .v2-brand, #copiar kbd { display:none; } #saveState { font-size:9px; } .v2-top-actions { gap:3px; } .tutu-v2 #setModal { padding:8px; } }
+@media(max-width:760px) { .tutu-v2 #tutuApp:not(.compact) { grid-template-columns:56px minmax(0,1fr) 64px; } #v2Left { padding:8px 4px; } #leftBody { display:none; } #v2Right { padding:8px 2px; } #rightTabs { flex-direction:column; } #rightTabs button b { display:block; } #rightTabs button span { font-size:9px; } .v2-panel { display:none; } .v2-brand { display:none; } #saveState { font-size:9px; } .v2-top-actions { gap:3px; } .tutu-v2 #setModal { padding:8px; } }
 @media(prefers-reduced-motion:reduce) { .tutu-v2 *, .tutu-v2 *::before, .tutu-v2 *::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
 @media(max-width:760px) {
+  .tutu-v2 #v2Footer { min-width:0; overflow-x:hidden; }
+  .tutu-v2 #v2Footer > button { display:none; }
   #tutuApp:not(.compact):not(.left-mini) #v2Left { position:fixed; inset:48px auto 48px 0; width:240px; background:var(--panel); z-index:20; padding:12px; box-shadow:8px 0 20px #0002; }
   #tutuApp:not(.compact):not(.left-mini) #leftBody { display:flex; }
   #tutuApp:not(.compact):not(.left-mini) #leftToggle { writing-mode:horizontal-tb; }
@@ -622,9 +629,9 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #usgMsg,#usgInboxMsg{overflow-wrap:anywhere}#usgInbox{margin:8px;padding:8px;border:1px solid var(--line,#aaa);border-radius:8px}
 #usgInbox summary{cursor:pointer;font-weight:600}.usg-pedido{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0}.usg-pedido span{flex:1;min-width:160px}
 .usg-nao-encaixado{background:#fff0a6!important;color:#694300!important;border-bottom:2px solid #b37500}#usgSugestoes blockquote{margin:8px;padding-left:10px;border-left:3px solid var(--line,#aaa)}
-@media(max-width:600px){.tutu-v2 #tutuApp:has(#usgOpen){grid-template-rows:auto minmax(0,1fr) 48px}#usgOpen{min-height:44px}#usgInbox{font-size:14px}#usgDialog{margin:12px auto}#v2Top:has(#usgOpen){flex-wrap:wrap;padding-block:6px}#v2Top .v2-top-actions:has(#usgOpen){flex-wrap:wrap;justify-content:flex-start;min-width:0}}
+@media(max-width:600px){.tutu-v2 #tutuApp{grid-template-rows:86px minmax(0,1fr) 48px}#v2Top{flex-wrap:wrap;padding-block:5px}#caseTabs{flex-basis:60%;height:33px}.v2-top-actions{order:2;flex:1;justify-content:space-between}#usgInbox{font-size:14px}#usgDialog{margin:12px auto}.v2-footer-actions .v2-banco-selo{max-width:100px}#tutuApp:not(.compact):not(.left-mini) #v2Left,#tutuApp:not(.compact):not(.right-mini) #v2Right{top:86px}}
 /* Estado compacto dos bancos de frases. */
 .v2-banco-selo{font-size:10px;line-height:1.3;padding:3px 6px;border-radius:5px;max-width:340px;color:var(--muted,#666);background:#8881;white-space:normal}
-.v2-banco-selo[data-state="ok"]{color:#287043;background:#58a66b18}
-.v2-banco-selo[data-state="erro"]{color:#946000;background:#d59b2820}
+.v2-banco-selo[data-state="ok"]{color:var(--muted);background:transparent}
+.v2-banco-selo[data-state="erro"]{color:var(--warn);background:#d59b2820}
 .v2-banco-selo[hidden]{display:none}
