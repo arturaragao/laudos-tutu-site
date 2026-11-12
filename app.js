@@ -4065,7 +4065,19 @@ globalThis.usgVoice = { bestAlternative, posTexto, punct };
     }
     return reports.filter(r => r.length).map(r => "<summary>000000</summary>\n" + r.join("\n") + "\n</details>").join("\n");
   }
-  const api = { normalize, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
+  /* Chrome no Android: com continuous=true cada resultado final repete o acumulado da sessão ("segmento", "segmento médio",
+     "segmento médio da"...). sessao = texto já escrito nesta sessão de voz. Devolve {novo, sessao}: novo = só o trecho
+     inédito ("" se for repetição). No PC (finais sem acúmulo) devolve a frase inteira. (12/11/2026) */
+  function speechDelta(sessao, atual) {
+    const a = String(sessao || "").trim(), b = String(atual || "").trim();
+    if (!b) return { novo: "", sessao: a };
+    if (!a) return { novo: b, sessao: b };
+    const na = normalize(a), nb = normalize(b);
+    if (na === nb || na.endsWith(" " + nb) || na.startsWith(nb + " ")) return { novo: "", sessao: a };
+    if (nb.startsWith(na + " ")) return { novo: b.split(/\s+/).slice(a.split(/\s+/).length).join(" "), sessao: b };
+    return { novo: b, sessao: a + " " + b };
+  }
+  const api = { normalize, speechDelta, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
     lastSentence, buildCompletionIndex, completeSentence, laudosToNotion };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuV2Core = api;
@@ -4240,7 +4252,8 @@ window.tutuSite.appReady = true;
   };
   ui.toggleLeft = () => setLeftPinned(!leftPinned);
   leftToggle.addEventListener("mouseenter", () => { if (!mobile.matches) { clearTimeout(leftPeekTimer); showLeft(true); } });
-  left.addEventListener("mouseenter", () => { if (!mobile.matches) { clearTimeout(leftPeekTimer); showLeft(true); } });
+  // Abre só ao passar perto do ≡ (pedido do Artur, 12/11/2026); a lateral aberta segura aberta enquanto o mouse estiver nela.
+  left.addEventListener("mouseenter", () => { if (!mobile.matches && !app.classList.contains("left-mini")) clearTimeout(leftPeekTimer); });
   left.addEventListener("mouseleave", () => {
     clearTimeout(leftPeekTimer);
     if (!leftPinned) leftPeekTimer = setTimeout(() => showLeft(false), 250);
@@ -4259,28 +4272,27 @@ window.tutuSite.appReady = true;
     store.set("v2RightMini", pinned ? "0" : "1"); showRight(pinned);
   };
   ui.toggleRight = () => setRightPinned(!rightPinned);
-  right.addEventListener("mouseenter", () => { if (!mobile.matches) { clearTimeout(rightPeekTimer); showRight(true); } });
+  rightToggle.addEventListener("mouseenter", () => { if (!mobile.matches) { clearTimeout(rightPeekTimer); showRight(true); } });
+  right.addEventListener("mouseenter", () => { if (!mobile.matches && !app.classList.contains("right-mini")) clearTimeout(rightPeekTimer); });
   right.addEventListener("mouseleave", () => {
     clearTimeout(rightPeekTimer);
     if (!rightPinned) rightPeekTimer = setTimeout(() => showRight(false), 250);
   });
-  // Borda inteira abre a lateral pela posição do mouse, mesmo com outro elemento por cima da faixa (12/11/2026).
-  const naFaixa = (el, e) => { const r = el.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; };
-  document.addEventListener("mousemove", e => {
-    if (mobile.matches || app.classList.contains("compact") || app.classList.contains("focus-mode")) return;
-    if (!leftPinned) {
-      if (naFaixa(left, e)) { clearTimeout(leftPeekTimer); leftPeekTimer = null; if (app.classList.contains("left-mini")) showLeft(true); }
-      else if (!app.classList.contains("left-mini") && !leftPeekTimer) leftPeekTimer = setTimeout(() => { leftPeekTimer = null; showLeft(false); }, 250);
-    }
-    if (!rightPinned) {
-      if (naFaixa(right, e)) { clearTimeout(rightPeekTimer); rightPeekTimer = null; if (app.classList.contains("right-mini")) showRight(true); }
-      else if (!app.classList.contains("right-mini") && !rightPeekTimer) rightPeekTimer = setTimeout(() => { rightPeekTimer = null; showRight(false); }, 250);
-    }
-  }, { passive: true });
   ui.compact = () => { app.classList.toggle("compact"); ui.settings(false); ui.positionPalette?.(); };
   ui.night = () => { const night = document.body.classList.toggle("sepia-night"); store.set("v2Night", night ? "1" : "0"); $("nightToggle").textContent = night ? "Sépia dia" : "Sépia noite"; $("nightToggle").setAttribute("aria-pressed", String(night)); $("themeButton").textContent = night ? "☀" : "☾"; };
   top.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
   if (store.get("v2Night") === "1") ui.night();
+  /* Botão TEMPORÁRIO "Instalar app" (pedido do Artur, 12/11/2026; tirar depois que ele instalar no celular). */
+  let pedidoInstalar = null;
+  const instalar = button("⬇ Instalar app", async () => {
+    if (pedidoInstalar) { pedidoInstalar.prompt(); const r = await pedidoInstalar.userChoice.catch(() => null); if (r?.outcome === "accepted") instalar.hidden = true; pedidoInstalar = null; return; }
+    alert(matchMedia("(display-mode: standalone)").matches ? "O app já está instalado e aberto."
+      : "Se a janela de instalação não abriu: use o Chrome (não o navegador Samsung), toque em ⋮ no canto de cima e escolha \"Instalar app\" ou \"Adicionar à tela inicial\".");
+  }, { id: "installApp", title: "Instalar o Laudos como app" });
+  if (matchMedia("(display-mode: standalone)").matches) instalar.hidden = true;
+  top.prepend(instalar);
+  window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); pedidoInstalar = e; instalar.hidden = false; });
+  window.addEventListener("appinstalled", () => { instalar.hidden = true; });
   showLeft(leftPinned);
   showRight(rightPinned);
   // No celular os botões ficam no topo, acessíveis mesmo com as gavetas fechadas.
@@ -7565,6 +7577,12 @@ window.tutuSite.appReady = true;
   if (typeof document === "undefined") return;
   const ui = window.tutuV2, T = window.tutuSite, G = T.gh, U = window.TutuUSG, el = ui.el, button = ui.button;
   let speech = null, ouvindo = false, busy = false, listBusy = false;
+  const ANDROID = /Android/i.test(navigator.userAgent);
+  /* Tela acesa enquanto grava (Wake Lock); o navegador solta ao trocar de app, então pede de novo ao voltar. */
+  let tela = null;
+  const manterTela = async () => { try { if (ouvindo && !tela && navigator.wakeLock && document.visibilityState === "visible") { tela = await navigator.wakeLock.request("screen"); tela.addEventListener("release", () => { tela = null; }); } } catch (_) { tela = null; } };
+  const soltarTela = () => { try { tela?.release(); } catch (_) {} tela = null; };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") manterTela(); });
   const msg = el("p", { id: "usgMsg", role: "status", "aria-live": "polite" });
   const dizer = t => { msg.textContent = t; };
   const dialog = el("dialog", { id: "usgDialog", "aria-labelledby": "usgTitulo" });
@@ -7593,7 +7611,7 @@ window.tutuSite.appReady = true;
     return U.anonimizar(t, { ...config(ex), mask: ex.mask, banco: BANK.map(r => r[3] || "") });
   }
   function stop() {
-    ouvindo = false; const s = speech; speech = null; s?.stop();
+    ouvindo = false; const s = speech; speech = null; s?.stop(); soltarTela();
     iniciar.disabled = false; parar.disabled = true; exame.disabled = false;
   }
   function pedirToque(motivo) {
@@ -7610,11 +7628,15 @@ window.tutuSite.appReady = true;
     if (window.SpeechRecognitionPhrase && "phrases" in s) {
       try { s.phrases = [...new Set([...cfg.vocabExame, ...cfg.vocab])].slice(0, 300).map(w => new SpeechRecognitionPhrase(w, cfg.vocabExame.includes(w) ? 5 : 2.5)); } catch (_) {}
     }
+    let sessao = "";   // Android repete o acumulado da sessão em cada final: só entra o trecho novo (TutuV2Core.speechDelta)
+    s.onstart = () => { sessao = ""; };
     s.onresult = ev => {
       let interim = "";
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const r = ev.results[i], cfg = config(ex), alts = Array.from(r, a => a.transcript);
-        const t = U.normalizar(usgVoice.bestAlternative(alts[0], alts, cfg), cfg);
+        let best = usgVoice.bestAlternative(alts[0], alts, cfg);
+        if (r.isFinal && ANDROID) { const d = TutuV2Core.speechDelta(sessao, best); sessao = d.sessao; best = d.novo; if (!best) continue; }
+        const t = U.normalizar(best, cfg);
         if (r.isFinal) texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + t;
         else interim += t;
       }
@@ -7625,7 +7647,7 @@ window.tutuSite.appReady = true;
       if (/not-allowed|audio-capture|service-not-allowed/.test(ev.error)) { stop(); pedirToque("Voz: " + ev.error + "."); }
     };
     s.onend = () => { parcial.textContent = ""; if (ouvindo && speech === s) { try { s.start(); } catch (_) { stop(); } } };
-    s.start(); ouvindo = true; iniciar.disabled = true; parar.disabled = false; exame.disabled = true;
+    s.start(); ouvindo = true; manterTela(); iniciar.disabled = true; parar.disabled = false; exame.disabled = true;
     dizer("Ouvindo em pt-BR. Dite só achados: o reconhecimento pode usar o serviço de voz do navegador.");
   }
   async function enviarPedido() {
@@ -7798,6 +7820,10 @@ window.tutuSite.appReady = true;
   const source = "ditado-site", pingTimeout = 180;
   let extension = pill.hasAttribute("data-mic"), checked = extension, engaged = false;
   let on = false, paused = false, speech = null, restart = null, anchor = null, pendingToggle = false;
+  const ANDROID = /Android/i.test(navigator.userAgent);
+  let tela = null;   // tela acesa enquanto dita (Wake Lock)
+  const manterTela = async () => { try { if (on && !tela && navigator.wakeLock && document.visibilityState === "visible") { tela = await navigator.wakeLock.request("screen"); tela.addEventListener("release", () => { tela = null; }); } } catch (_) { tela = null; } };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") manterTela(); });
   let fails = 0, ignoreUntil = 0, lastInsert = null, lastReached = null;
   const note = ui.el("small", { id: "siteDictationNote", title: "Extensão não detectada: o reconhecimento roda nesta página." }, "ditado do site (sem extensão)");
   note.style.cssText = "color:var(--muted);font-size:11px;margin-left:6px"; note.hidden = true; label.after(note);
@@ -7826,7 +7852,7 @@ window.tutuSite.appReady = true;
   function stop(publish = true) {
     const was = on || !!speech;
     on = false; paused = false; pendingToggle = false; clearTimeout(restart); restart = null;
-    const s = speech; speech = null;
+    const s = speech; speech = null; try { tela?.release(); } catch (_) {} tela = null;
     // Desliga os callbacks antes de abortar: finais atrasados não entram na folha.
     if (s) { s.onresult = s.onend = s.onerror = null; try { s.abort(); } catch (_) {} }
     if (was) clearInterim(); anchor = null;
@@ -7981,6 +8007,8 @@ window.tutuSite.appReady = true;
     const s = speech = new Speech();
     s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
     phrases(s, config()); on = true;
+    let sessao = "";   // Android repete o acumulado da sessão em cada final (TutuV2Core.speechDelta)
+    s.onstart = () => { sessao = ""; manterTela(); };
     s.onresult = ev => {
       if (!on || extension || speech !== s) return;
       fails = 0;
@@ -7990,7 +8018,8 @@ window.tutuSite.appReady = true;
         // Mesma ordem da extensão: pontuação falada nas alternativas (mic.js), depois a melhor pelo vocabulário (content.js).
         const alts = []; for (const a of Array.from(r, x => voice.punct(x.transcript || ""))) if (a && !alts.includes(a)) alts.push(a);
         if (!alts.length) continue;
-        const best = voice.bestAlternative(alts[0], alts, cfg);
+        let best = voice.bestAlternative(alts[0], alts, cfg);
+        if (r.isFinal && ANDROID) { const d = TutuV2Core.speechDelta(sessao, best); sessao = d.sessao; best = d.novo; if (!best) { clearInterim(); continue; } }
         if (!r.isFinal) { if (!paused && Date.now() >= ignoreUntil) { remember(); interim += (interim ? " " : "") + best; } continue; }
         if (Date.now() < ignoreUntil) { ignoreUntil = 0; clearInterim(); continue; }
         if (command(best, cfg) || paused) { if (paused) clearInterim(); continue; }
