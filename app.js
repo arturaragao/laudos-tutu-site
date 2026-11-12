@@ -4077,7 +4077,17 @@ globalThis.usgVoice = { bestAlternative, posTexto, punct };
     if (nb.startsWith(na + " ")) return { novo: b.split(/\s+/).slice(a.split(/\s+/).length).join(" "), sessao: b };
     return { novo: b, sessao: a + " " + b };
   }
-  const api = { normalize, speechDelta, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
+  /* Erros fonéticos frequentes do reconhecimento do Chrome no ditado médico (12/11/2026, áudio arterial do Artur).
+     "sem" sai como "onze" e o conversor de números vira "11": "11 estenoses" -> "sem estenoses". */
+  const SEM_DEPOIS = "estenos|altera|sinai|evid[eê]nci|les[õo]|placa|trombo|cole[çc]|l[ií]quido|dilata|fluxo|calcifica|n[oó]dulo|cisto|espessa|refluxo|sinal|particularidade|anormalidade|ectasia|aneurisma|oclus|deformidade|irregularidade";
+  const FALA_FIX = [
+    [new RegExp("\\b(?:11|onze)(\\s+)(?=(?:" + SEM_DEPOIS + "))", "gi"), "sem$1"],
+    [/\bvps\b/gi, "VPS"], [/\bvd\b/g, "VD"], [/\bir\b/g, "IR"],
+    [/\bp[eé]rvi(o|a|os|as)\b/gi, "pérvi$1"], [/\btrif[aá]sic/gi, "trifásic"], [/\bbif[aá]sic/gi, "bifásic"], [/\bmonof[aá]sic/gi, "monofásic"],
+    [/\bpopl[ií]te(a|o)\b/gi, "poplíte$1"],
+  ];
+  const fixFala = t => FALA_FIX.reduce((s, [re, to]) => s.replace(re, to), String(t));
+  const api = { normalize, speechDelta, fixFala, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
     lastSentence, buildCompletionIndex, completeSentence, laudosToNotion };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuV2Core = api;
@@ -4135,7 +4145,7 @@ window.tutuSite.appReady = true;
     button("Histórico", () => openHistory(), { id: "histTopBtn", title: "Todos os exames salvos (os 4 mais recentes ficam nas abas)" }));
   const actions = el("div", { class: "v2-top-actions" });
   actions.append(el("span", { id: "saveState", role: "status" }, "salvo agora"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }),
-    button("⚙", () => ui.settings(true), { id: "settingsTop", title: "Configurações · Ctrl+,", "aria-label": "Configurações" }));
+    button("⚙", () => ui.settings(!app.classList.contains("settings-open")), { id: "settingsTop", title: "Configurações · Ctrl+,", "aria-label": "Configurações" }));
   const footerActions = ui.footerActions = el("div", { class: "v2-footer-actions" });
   move("copiar", footerActions); $("copiar").textContent = "Copiar laudo";
   $("copiar").append(el("kbd", {}, "Ctrl C")); top.append(actions);
@@ -5867,7 +5877,8 @@ window.tutuSite.appReady = true;
 
   /* ---------- bancos ---------- */
   const selo = el("span", { id: "bancoState", class: "v2-banco-selo", role: "status" });
-  selo.hidden = true; ui.footerActions.append(selo);
+  // 12/11/2026: o selo do banco fica dentro de Configurações › Sincronização (fora da tela principal).
+  selo.hidden = true; if (!document.querySelector(".v2-settings-extras")) ui.footerActions.append(selo);
   let seloEpoch = 0;
   async function bancoStatus() {
     const epoch = ++seloEpoch;
@@ -5959,7 +5970,7 @@ window.tutuSite.appReady = true;
     const ajuda = el("p", { class: "meta" }, "Seus dados (correções, autotextos, regras, casos, bancos) ficam no repositório privado laudos-tutu-dados e acompanham você em todos os PCs. Para ligar: ");
     ajuda.append(link, document.createTextNode(" (fine-grained token, só o repositório laudos-tutu-dados, permissões Contents e Actions em Read and write) e cole abaixo. Em outro PC com o mesmo perfil do Chrome a chave chega sozinha pela extensão. Nunca vai para o git."));
     const sec = el("section", { id: "syncSec" });
-    sec.append(el("h2", {}, "Sincronização entre PCs"), ajuda, campo, salvar, agora, notion, msg, infoEl);
+    sec.append(el("h2", {}, "Sincronização entre PCs"), selo, ajuda, campo, salvar, agora, notion, msg, infoEl);
     host.append(sec);
   }
   ui.actions.notion = { label: "Atualizar do Notion agora", run: notionAgora };
@@ -7382,8 +7393,17 @@ window.tutuSite.appReady = true;
   const tab = button("Corretor", () => ui.panel("Corretor"), { id: "rightTabCorretor", role: "tab", "aria-controls": "rightPanelCorretor", "aria-selected": "false" });
   const panel = ui.panels.Corretor = el("section", { id: "rightPanelCorretor", role: "tabpanel", "aria-labelledby": tab.id, class: "v2-panel" });
   panel.hidden = true;
-  $("rightTabs").append(tab); ui.right.append(panel);
-  panel.append(el("h2", {}, "Corretor · preliminar × definitivo"));
+  /* Painel flutuante grande (<dialog> modal): a aba continua existindo, mas o conteúdo abre sobre a tela. Esc/× fecham e voltam à 1ª aba. */
+  const flutuante = el("dialog", { id: "corretorFlutuante", class: "corretor-flutuante", "aria-labelledby": "corretorTitulo" });
+  $("rightTabs").append(tab); flutuante.append(panel); document.body.append(flutuante);
+  const outraAba = () => Object.keys(ui.panels).find(n => ui.panels[n] !== panel);
+  const fecharFlutuante = () => { if (!panel.hidden && outraAba()) ui.panel(outraAba()); else if (flutuante.open) flutuante.close(); };
+  const cabecalho = el("header", { class: "corretor-cab" });
+  cabecalho.append(el("h2", { id: "corretorTitulo" }, "Corretor · preliminar × definitivo"), button("×", fecharFlutuante, { id: "corretorFechar", class: "corretor-fechar", "aria-label": "Fechar Corretor", title: "Fechar (Esc)" }));
+  flutuante.addEventListener("close", () => { if (!panel.hidden) fecharFlutuante(); });
+  flutuante.addEventListener("click", ev => { if (ev.target === flutuante) fecharFlutuante(); });
+  const sincronizar = () => { if (!panel.hidden && !flutuante.open) flutuante.showModal(); else if (panel.hidden && flutuante.open) flutuante.close(); };
+  new MutationObserver(sincronizar).observe(panel, { attributes: true, attributeFilter: ["hidden"] });
   const actions = el("div", { class: "corretor-actions" });
   const atualizar = button("Carregar da ponte", carregar, { id: "corretorCarregar" });
   const input = el("input", { type: "file", accept: ".jsonl,application/json,text/plain", id: "corretorArquivo", hidden: "" });
@@ -7414,8 +7434,11 @@ window.tutuSite.appReady = true;
   amplo.append(button("Fechar", () => amplo.close(), { id: "corretorAmploFechar" }), amploConteudo);
   panel.append(amplo);
   const panorama = el("div", { id: "corretorPanorama" });
-  panel.append(actions, status, filters, el("p", { class: "meta" },
-    "% mudado = palavras apagadas + adicionadas / total de palavras dos dois textos. Assinatura excluída. Frequência de edição não indica erro clínico."), lista, detalhe, panorama);
+  const esq = el("div", { class: "corretor-esq" }), dir = el("div", { class: "corretor-dir" });
+  esq.append(actions, status, filters, el("p", { class: "meta" },
+    "% mudado = palavras apagadas + adicionadas / total de palavras dos dois textos. Assinatura excluída. Frequência de edição não indica erro clínico."), lista);
+  dir.append(detalhe, panorama);
+  panel.prepend(cabecalho); panel.append(esq, dir);
   function filtros() {
     const atual = chefe.value; chefe.replaceChildren(el("option", { value: "" }, "Todos"));
     [...new Set(pares.map(p => p.chefe))].sort().forEach(n => chefe.append(el("option", { value: n || "__sem__" }, n || semChefe)));
@@ -7452,12 +7475,13 @@ window.tutuSite.appReady = true;
         }
         else { lado = !lado; abrir(p); }
       }, { id: larga ? "corretorAmploLado" : "corretorLado", "aria-pressed": String(mostrarLados) }));
+    if (!mostrarLados) { const lg = el("p", { class: "corretor-legenda" }); lg.append(el("del", { class: "rm" }, "apagado pelo chefe"), " ", el("span", { class: "chg" }, "adicionado pelo chefe")); host.append(lg); }
     for (const s of analisar(p).sections) {
       host.append(el("h4", {}, s.nome));
       if (mostrarLados) {
         const cols = el("div", { class: "corretor-lados" });
         for (const [label, t] of [["Preliminar", s.antes], ["Definitivo", s.depois]]) {
-          const c = el("div"); c.append(el("strong", {}, label), el("pre", {}, t)); cols.append(c);
+          const c = el("div", { class: label === "Preliminar" ? "cl-pre" : "cl-def" }); c.append(el("strong", {}, label), el("pre", {}, t)); cols.append(c);
         }
         host.append(cols);
       } else { const d = el("div", { class: "corretor-diff" }); d.innerHTML = s.html; host.append(d); }
@@ -7475,8 +7499,10 @@ window.tutuSite.appReady = true;
     lista.replaceChildren(el("h3", {}, `${filtrados.length} pares`));
     if (!filtrados.some(p => p.id === selecionado)) selecionado = filtrados[0]?.id || "";
     for (const p of filtrados) {
-      const b = button(`${new Date(p.capturado_em).toLocaleDateString("pt-BR")} · ${p.titulo} · ${p.chefe || semChefe}${p.acesso ? ` · Acesso ${p.acesso}` : ""} · ${analisar(p).pct.toFixed(1)}%`,
-        () => { selecionado = p.id; render(); }, { class: "corretor-par", "aria-pressed": String(p.id === selecionado) });
+      const pct = analisar(p).pct, b = button("", () => { selecionado = p.id; render(); }, { class: "corretor-par", "aria-pressed": String(p.id === selecionado) });
+      b.append(el("span", { class: "cp-t" }, p.titulo),
+        el("span", { class: "cp-m" }, `${new Date(p.capturado_em).toLocaleDateString("pt-BR")} · ${p.chefe || semChefe}${p.acesso ? ` · Acesso ${p.acesso}` : ""}`),
+        el("span", { class: "cp-pct", "data-nivel": pct > 30 ? "alto" : pct > 10 ? "medio" : "baixo" }, `${pct.toFixed(1)}%`));
       lista.append(b);
     }
     abrir(filtrados.find(p => p.id === selecionado));
@@ -7546,22 +7572,25 @@ window.tutuSite.appReady = true;
       }
       return false;
     };
-    // Idade junto de palavras desconhecidas é identidade suspeita, em qualquer caixa.
-    for (const trecho of t.split(/[.!?;\n]/)) {
-      const idade = /\b\d{1,3}\s*(?:anos?|a)\b/gi;
-      for (const m of trecho.matchAll(idade)) {
-        if (desconhecidos(trecho.slice(0, m.index)) || desconhecidos(trecho.slice(m.index + m[0].length))) throw Error("bloqueado: possível dado de paciente");
-      }
-    }
+    // 12/11/2026: em vez de bloquear tudo, remove só a frase suspeita. Idade = "45 anos" ou "62a" colado ("50 a 69%" é faixa).
+    const limpa = f => f.replace(/\[(?:identificador|identidade|data|assinatura|removido)\]/g, "");
+    const remover = (texto, suspeita) => texto.split(/(?<=[.!?;\n])/).map(f => {
+      if (!suspeita(limpa(f))) return f;
+      const m = f.match(/^(\s*)[\s\S]*?([.!?;]?\s*)$/);
+      return m[1] + "[removido]" + m[2];
+    }).join("");
+    t = remover(t, f => {
+      for (const m of f.matchAll(/\b\d{1,3}(?:\s*anos?\b|a\b)/gi))
+        if (desconhecidos(f.slice(0, m.index)) || desconhecidos(f.slice(m.index + m[0].length))) return true;
+      return [...f.replace(/Informações Clínicas|Técnica de exame|Achados|Conclusão/g, "").matchAll(/\b[A-ZÀ-Ý][a-zà-ÿ]+\s+(?:(?:da|de|do|dos|das)\s+)?[A-ZÀ-Ý][a-zà-ÿ]+\b/g)].some(m => desconhecidos(m[0]));
+    });
     t = t.replace(/\b(?=[a-z\d-]*[a-z])(?=[a-z\d-]*\d)[a-z\d]+(?:-[a-z\d]+)*\b/gi, "[identificador]")
       .replace(/(?:\+?55[\s-]*)?\(?\b\d{2}\)?[\s-]*\d{4,5}[\s-]?\d{4}\b|\b\d{3}\.\d{3}\.\d{3}-\d{2}\b|\d{6,}/g, "[identificador]")
       .replace(/\b(?:acesso|prontu[aá]rio|cpf)\s*[:#=-]?\s*(?:\[identificador\]|[\d .-]+)/gi, "[identificador]");
-    const semTitulos = t.replace(/Informações Clínicas|Técnica de exame|Achados|Conclusão/g, "");
-    if (/@|\b(?:nome|identifica[cç][aã]o|benefici[aá]rio|nascimento|telefone|celular|endere[cç]o|rg|cns|acesso|prontu[aá]rio|cpf)\s*[:#=]?\s*\S|\b\d{6,}\b|\b\d{2,}(?:[ .-]\d{2,}){2,}\b/i.test(t) ||
-        [...semTitulos.matchAll(/\b[A-ZÀ-Ý][a-zà-ÿ]+\s+(?:(?:da|de|do|dos|das)\s+)?[A-ZÀ-Ý][a-zà-ÿ]+\b/g)].some(m => desconhecidos(m[0]))) throw Error("bloqueado: possível dado de paciente");
+    t = remover(t, f => /@|\b(?:nome|identifica[cç][aã]o|benefici[aá]rio|nascimento|telefone|celular|endere[cç]o|rg|cns|acesso|prontu[aá]rio|cpf)\s*[:#=]?\s*\S|\b\d{6,}\b|\b\d{2,}(?:[ .-]\d{2,}){2,}\b/i.test(f));
     return t.trim();
   }
-  const normalizar = (t, cfg) => root.usgVoice.posTexto(root.usgVoice.punct(t), cfg);
+  const normalizar = (t, cfg) => (root.TutuV2Core?.fixFala || String)(root.usgVoice.posTexto(root.usgVoice.punct(t), cfg));
   const prioridade = e => /arterial.*(?:inferior|mmii)/i.test(e.name) ? 0 : /car[oó]tid/i.test(e.name) ? 1 : /abd[oô]m/i.test(e.name) ? 2 : 3;
   const examesUSG = list => list.filter(e => /\busg\b|ultrass|doppler|ecograf/i.test([e.name, e.code, e.mask?.split("\n")[0]].join(" "))).sort((a, b) => prioridade(a) - prioridade(b));
   const api = { anonimizar, normalizar, examesUSG };
@@ -7586,9 +7615,27 @@ window.tutuSite.appReady = true;
   const exame = el("select", { id: "usgExame", "aria-label": "Exame" });
   const texto = el("textarea", { id: "usgTexto", rows: "9", "aria-label": "Achados ditados", placeholder: "Dite somente os achados, sem identificação do paciente. Você pode editar aqui." });
   const parcial = el("p", { id: "usgParcial", "aria-live": "polite" });
-  const iniciar = button("Iniciar áudio", () => { try { captar(); } catch (e) { stop(); dizer(e.message); } }, { id: "usgIniciar" });
-  const parar = button("Parar", () => stop(), { id: "usgParar" }); parar.disabled = true;
-  const enviar = button("Enviar", () => enviarPedido(), { id: "usgEnviar" });
+  const ICONE_MIC = '<svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>';
+  const ICONE_PARAR = '<svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
+  const iniciar = button("", () => { try { captar(); } catch (e) { stop(); dizer(e.message); } }, { id: "usgIniciar", class: "usg-mic-btn", "aria-label": "Iniciar áudio", title: "Iniciar áudio" }); iniciar.innerHTML = ICONE_MIC;
+  const parar = button("", () => stop(), { id: "usgParar", class: "usg-mic-btn usg-parar", "aria-label": "Parar", title: "Parar" }); parar.innerHTML = ICONE_PARAR; parar.disabled = true;
+  const enviar = button("Enviar para a IA", () => enviarPedido(), { id: "usgEnviar" });
+  const estado = el("p", { id: "usgEstado", "aria-live": "polite" }), contador = el("span", { id: "usgContador" });
+  const legenda = el("p", { id: "usgLegenda" }), fechar = button("×", () => { stop(); dialog.close(); }, { id: "usgFechar", "aria-label": "Fechar", title: "Fechar" });
+  let enviado = false;
+  /* Estado visual único: ouvindo / pausado (com texto) / vazio / enviado. Só estilo e rótulos; a lógica de áudio não passa por aqui. */
+  function atualizarUI() {
+    const t = texto.value.trim(), n = t ? t.split(/\s+/).length : 0;
+    const k = ouvindo ? "ouvindo" : enviado && !t ? "enviado" : t ? "pausado" : "vazio";
+    dialog.dataset.estado = k;
+    estado.textContent = { ouvindo: "Ouvindo…", pausado: "Pausado · pronto para enviar", enviado: "Enviado ✓", vazio: "Pronto para ditar" }[k];
+    legenda.textContent = ouvindo ? "Toque para parar" : "Toque para ditar";
+    contador.textContent = n ? n + (n === 1 ? " palavra" : " palavras") : "";
+    enviar.hidden = !t;
+    iniciar.style.visibility = ouvindo ? "hidden" : ""; parar.style.visibility = ouvindo ? "" : "hidden";
+    iniciar.style.pointerEvents = ouvindo ? "none" : ""; parar.style.pointerEvents = ouvindo ? "" : "none";
+  }
+  texto.addEventListener("input", () => { enviado = false; atualizarUI(); });
   function preencher() {
     const selected = exame.value; exame.replaceChildren();
     const usg = U.examesUSG(EXAMS); /* USG primeiro, mas todas as máscaras: Áudio não é só ultrassom */
@@ -7609,7 +7656,7 @@ window.tutuSite.appReady = true;
   }
   function stop() {
     ouvindo = false; const s = speech; speech = null; s?.stop(); soltarTela();
-    iniciar.disabled = false; parar.disabled = true; exame.disabled = false;
+    iniciar.disabled = false; parar.disabled = true; exame.disabled = false; parcial.textContent = ""; if (msg.textContent.startsWith("Ouvindo")) dizer(""); atualizarUI();
   }
   function pedirToque(motivo) {
     if (!dialog.open || !dialog.classList.contains("usg-full")) return;
@@ -7634,17 +7681,17 @@ window.tutuSite.appReady = true;
         let best = usgVoice.bestAlternative(alts[0], alts, cfg);
         if (r.isFinal && ANDROID) { const d = TutuV2Core.speechDelta(sessao, best); sessao = d.sessao; best = d.novo; if (!best) continue; }
         const t = U.normalizar(best, cfg);
-        if (r.isFinal) texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + t;
+        if (r.isFinal) { texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + t; enviado = false; }
         else interim += t;
       }
-      parcial.textContent = interim;
+      parcial.textContent = interim; atualizarUI(); texto.scrollTop = texto.scrollHeight;
     };
     s.onerror = ev => {
       dizer("Voz: " + ev.error);
       if (/not-allowed|audio-capture|service-not-allowed/.test(ev.error)) { stop(); pedirToque("Voz: " + ev.error + "."); }
     };
     s.onend = () => { parcial.textContent = ""; if (ouvindo && speech === s) { try { s.start(); } catch (_) { stop(); } } };
-    s.start(); ouvindo = true; manterTela(); iniciar.disabled = true; parar.disabled = false; exame.disabled = true;
+    s.start(); ouvindo = true; manterTela(); iniciar.disabled = true; parar.disabled = false; exame.disabled = true; atualizarUI();
     dizer("Ouvindo em pt-BR. Dite só achados: o reconhecimento pode usar o serviço de voz do navegador.");
   }
   async function enviarPedido() {
@@ -7659,12 +7706,17 @@ window.tutuSite.appReady = true;
       const r = await fetch("https://api.github.com/repos/" + G.repo, { cache: "no-store", headers: { Authorization: "Bearer " + G.token } });
       if (!r.ok || !(await r.json()).private) throw Error("A fila exige o repositório privado de dados.");
       await G.putJson("fila-usg/" + crypto.randomUUID() + ".json", { exame: ex.id, nome: ex.name, mascara: maskOf(ex), modo: "audio", texto: fresh, ia: "pendente", criado: new Date().toISOString() }, null, "USG: texto anônimo");
-      texto.value = ""; dizer("Enviado. A IA organiza em cerca de 1 minuto; o laudo aparece em Laudos Áudio aqui e nos PCs."); await atualizar();
+      texto.value = ""; enviado = true; atualizarUI(); dizer("Enviado ✓ — a IA organiza em ~1 min; o laudo aparece em Laudos Áudio aqui e nos PCs."); await atualizar();
     } catch (e) { dizer(/fetch/i.test(e.message) ? "Rede indisponível. O texto permanece nesta tela para tentar novamente." : e.message); }
-    finally { busy = false; enviar.disabled = false; }
+    finally { busy = false; enviar.disabled = false; atualizarUI(); }
   }
-  dialog.append(el("h2", { id: "usgTitulo" }, "Audio"), el("label", { for: "usgExame" }, "Exame"), exame,
-    el("p", { id: "usgModo" }, "Áudio"), iniciar, parar, texto, parcial, enviar, button("Fechar", () => { stop(); dialog.close(); }), msg);
+  const micSlot = el("div", { class: "usg-mic" }), leitura = el("div", { class: "usg-leitura" }), cab = el("div", { class: "usg-cab" }), meta = el("div", { class: "usg-meta" });
+  micSlot.append(el("span", { class: "usg-onda", "aria-hidden": "true" }), el("span", { class: "usg-onda usg-onda2", "aria-hidden": "true" }), iniciar, parar);
+  leitura.append(texto, parcial);
+  cab.append(el("h2", { id: "usgTitulo" }, "Audio"), el("label", { for: "usgExame", class: "usg-sr" }, "Exame"), exame, fechar);
+  meta.append(estado, contador);
+  dialog.append(cab, el("p", { id: "usgModo", class: "usg-sr" }, "Áudio"), meta, leitura, msg, enviar, micSlot, legenda);
+  atualizarUI();
   document.body.append(dialog);
   const abrirDialog = () => { preencher(); if (!dialog.open) dialog.showModal(); };
   $("copiar").after(button("Audio", abrirDialog, { id: "usgOpen" }));
@@ -7683,7 +7735,6 @@ window.tutuSite.appReady = true;
   dialog.addEventListener("cancel", stop); dialog.addEventListener("close", stop); window.addEventListener("pagehide", stop);
   if (new URLSearchParams(location.search).get("audio") === "1" || window.matchMedia("(max-width: 760px)").matches) {
     dialog.classList.add("usg-full");
-    Object.assign(iniciar.style, { minHeight: "64px", width: "100%", fontSize: "1.25rem" });
     const abrirAudio = () => {
       if (!ui.initialized) { requestAnimationFrame(abrirAudio); return; }
       abrirDialog();
@@ -7798,7 +7849,8 @@ window.tutuSite.appReady = true;
         const d = r.json, id = f.name.slice(0, -5), criado = Date.parse(d.criado);
         const expirado = Number.isFinite(criado) && Date.now() - criado >= 30 * 86400000;
         const row = el("div", { class: "usg-pedido", "data-id": id, "data-state": expirado ? "expirado" : "recebido" }), ex = EXAMS.find(e => e.id === d.exame);
-        row.append(el("span", {}, (ex?.name || "Exame") + (expirado ? " · expirado" : d.laudo ? " · laudo pronto (IA) ✓" : d.ia === "erro" ? " · IA falhou (abre organizado localmente)" : d.ia === "pendente" ? " · IA organizando…" : " · recebido")), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
+        const selo = expirado ? ["expirado", "expirado"] : d.laudo ? ["pronto", "laudo pronto (IA) ✓"] : d.ia === "erro" ? ["erro", "IA falhou (abre organizado localmente)"] : d.ia === "pendente" ? ["pendente", "IA organizando…"] : ["recebido", "recebido"];
+        row.append(el("span", { class: "usg-nome" }, ex?.name || "Exame"), el("span", { class: "usg-selo", "data-k": selo[0] }, selo[1]), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
           try { await apagar(id, r.sha); await atualizar(); }
           catch (e) { inboxMsg.textContent = e.message; }
         })); rows.push(row);
@@ -8034,7 +8086,7 @@ window.tutuSite.appReady = true;
         if (!r.isFinal) { if (!paused && Date.now() >= ignoreUntil) { remember(); interim += (interim ? " " : "") + best; } continue; }
         if (Date.now() < ignoreUntil) { ignoreUntil = 0; clearInterim(); continue; }
         if (command(best, cfg) || paused) { if (paused) clearInterim(); continue; }
-        const text = voice.posTexto(best, cfg).trim();
+        const text = TutuV2Core.fixFala(voice.posTexto(best, cfg)).trim();
         if (text) insert(text, best, alts, typeof r[0]?.confidence === "number" ? r[0].confidence : null); else clearInterim();
       }
       if (on && speech === s && interim) emit("laudos-provisorio", { texto: interim, destino: destination() });

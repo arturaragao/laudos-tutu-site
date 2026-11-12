@@ -559,7 +559,7 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 .tutu-v2 #commandResults button.cmd-cont { align-items:flex-start; }
 #commandResults button.cmd-cont span { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; font-size:12.5px; line-height:1.35; }
 
-.tutu-v2 #settingsTop { font-size: 18px; line-height: 1; padding: 3px 8px; }
+.tutu-v2 #settingsTop { font-size: 22px; line-height: 1; padding: 3px 8px; min-width: 40px; min-height: 36px; }
 
 /* Conclusão sugerida (110-v2-conclusao.js): ghost fora da folha, nunca entra no laudo. */
 #ghostConc { position:fixed; z-index:20; box-sizing:border-box; background:var(--paper); cursor:pointer; font-style:italic; line-height:normal;
@@ -598,9 +598,55 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #rightPanelCorretor { min-width:0; }
 .corretor-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .corretor-actions label { display:flex; flex-direction:column; gap:3px; }
-#corretorLista { max-height:280px; overflow:auto; }
-.tutu-v2 .corretor-par { display:block; width:100%; text-align:left; margin-bottom:5px; white-space:normal; }
-.tutu-v2 .corretor-par[aria-pressed="true"] { border-color:var(--changed); background:var(--paper); }
+/* Corretor: painel flutuante grande (113). Lista e filtros à esquerda; preliminar × definitivo à direita. */
+.corretor-flutuante { box-sizing:border-box; width:min(1500px,92vw); height:min(88vh,1000px); max-width:none; max-height:none; padding:0; border:1px solid var(--line); border-radius:18px; background:var(--paper); color:var(--text); box-shadow:0 24px 70px #0006; overflow:hidden; }
+.corretor-flutuante::backdrop { background:rgb(0 0 0 / .5); }
+.corretor-flutuante[open] { display:block; }
+#rightPanelCorretor { box-sizing:border-box; height:100%; display:grid; grid-template-columns:minmax(280px,360px) minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); gap:0; background:var(--paper); }
+#rightPanelCorretor[hidden] { display:none; }
+.corretor-cab { grid-column:1 / -1; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 18px; border-bottom:1px solid var(--line); background:var(--panel); }
+#rightPanelCorretor .corretor-cab h2 { margin:0; font:600 16px/1.3 var(--f-body); text-transform:none; letter-spacing:0; color:var(--text); }
+#rightPanelCorretor .corretor-fechar { width:44px; height:44px; padding:0; border-radius:50%; font-size:28px; line-height:1; background:transparent; color:var(--muted); border:1px solid transparent; }
+#rightPanelCorretor .corretor-fechar:hover { background:var(--panel-2); color:var(--text); }
+.corretor-esq, .corretor-dir { min-height:0; overflow:auto; padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+.corretor-esq { border-right:1px solid var(--line); background:var(--panel); }
+.corretor-esq .meta { font-size:11.5px; color:var(--muted); margin:0; }
+.corretor-esq #corretorStatus { margin:0; font-size:12.5px; color:var(--muted); }
+.corretor-esq .corretor-actions button, .corretor-esq select, .corretor-esq input[type=search] { min-height:36px; }
+#corretorLista h3 { margin:6px 0; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+#corretorLista { overflow:visible; display:flex; flex-direction:column; gap:6px; }
+.tutu-v2 .corretor-par { display:grid; width:100%; text-align:left; white-space:normal; grid-template-columns:minmax(0,1fr) auto; gap:2px 8px; align-items:center; margin:0; padding:9px 12px; border-radius:12px; background:var(--paper); }
+.corretor-par .cp-t { font-weight:600; font-size:13.5px; }
+.corretor-par .cp-m { grid-column:1; font-size:11.5px; color:var(--muted); }
+.corretor-par .cp-pct { grid-column:2; grid-row:1 / span 2; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; background:var(--p-green); color:var(--changed); }
+.corretor-par .cp-pct[data-nivel="medio"] { background:var(--p-yellow); color:var(--warn); }
+.corretor-par .cp-pct[data-nivel="alto"] { background:var(--p-red); color:var(--crit); }
+.tutu-v2 .corretor-par[aria-pressed="true"] { border-color:var(--changed); box-shadow:inset 3px 0 0 var(--changed); }
+.corretor-dir #corretorDetalhe, .corretor-dir #corretorPanorama { background:transparent; border:0; padding:0; }
+#corretorDetalhe h3 { margin:0; font-size:17px; }
+#corretorDetalhe h4 { margin:14px 0 6px; font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+.corretor-legenda { display:flex; gap:10px; margin:4px 0 0; font-size:12px; }
+.corretor-legenda .chg, .corretor-legenda del { padding:1px 6px; border-radius:4px; }
+.corretor-legenda .chg { background:var(--p-green); color:var(--changed); }
+.corretor-legenda del.rm { background:var(--p-red); color:var(--crit); }
+.corretor-diff { padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--panel); font-size:15px; line-height:1.75; }
+.corretor-diff .chg, .corretor-diff del.rm { padding:0 3px; border-radius:4px; }
+.corretor-lados > div { padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+.corretor-lados .cl-pre { box-shadow:inset 0 3px 0 var(--crit); }
+.corretor-lados .cl-def { box-shadow:inset 0 3px 0 var(--changed); }
+.corretor-lados strong { font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+.corretor-lados pre { margin:6px 0 0; font-size:15px; line-height:1.7; }
+#corretorPanorama { margin-top:12px; }
+#corretorPanorama h2 { margin:18px 0 4px; }
+#corretorPanorama h3 { margin:14px 0 4px; font-size:13px; }
+#corretorPanorama tbody tr:nth-child(even) { background:color-mix(in srgb, var(--panel) 70%, transparent); }
+#corretorPanorama th { position:sticky; top:0; background:var(--paper); color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+@media(max-width:900px) {
+  .corretor-flutuante { width:100vw; height:100dvh; max-height:100dvh; border-radius:0; border:0; }
+  #rightPanelCorretor { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto auto; overflow:auto; }
+  .corretor-esq, .corretor-dir { overflow:visible; border-right:0; }
+  #corretorLista { max-height:260px; overflow:auto; }
+}
 #corretorDetalhe, #corretorPanorama { background:var(--paper); padding:12px; border:1px solid var(--line); border-radius:12px; overflow-wrap:anywhere; }
 .corretor-diff { white-space:pre-wrap; line-height:1.6; }
 .corretor-diff .chg { background:var(--p-green); color:var(--changed); border-bottom:1px solid #6f9e6a; }
@@ -613,13 +659,49 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #corretorPanorama table { width:100%; border-collapse:collapse; font-size:12px; }
 #corretorPanorama th, #corretorPanorama td { padding:5px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
 /* Ditado USG: controles próprios que cabem em 375 px, sem mudar a folha do PC. */
-#usgDialog{box-sizing:border-box;width:min(540px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;border:1px solid var(--line,#aaa);border-radius:12px;background:var(--paper,#fffaf2);color:inherit;padding:16px}
+/* Modo Áudio (114): leitura confortável, microfone grande para o polegar, estados claros. */
+#usgDialog{box-sizing:border-box;width:min(560px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:hidden;border:1px solid var(--line,#aaa);border-radius:18px;background:var(--paper,#fffaf2);color:var(--text,inherit);padding:14px 16px 16px;box-shadow:0 18px 50px #0004}
 #usgDialog::backdrop{background:#0006}
-#usgDialog select,#usgTexto{box-sizing:border-box;display:block;width:100%;margin:8px 0 12px;font:inherit;font-size:16px}
-#usgDialog button{min-height:44px;margin:4px;white-space:normal}
-#usgDialog label{display:block}#usgTexto{padding:10px;resize:vertical}#usgParcial{opacity:.65;white-space:pre-wrap}
+#usgDialog[open]{display:flex;flex-direction:column;gap:10px}
+#usgDialog [hidden]{display:none!important}
+#usgDialog button{min-height:44px;margin:0;white-space:normal;font:inherit}
+#usgDialog p{margin:0}
+.usg-sr{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.usg-cab{display:flex;align-items:center;gap:10px}
+#usgTitulo{margin:0;font:600 13px var(--f-label,inherit);letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#777)}
+#usgDialog #usgExame{flex:1;min-width:0;min-height:44px;box-sizing:border-box;padding:0 10px;font:inherit;font-size:15px;color:var(--text);background:var(--panel,#f4ede0);border:1px solid var(--line,#ccc);border-radius:12px}
+#usgDialog #usgFechar{flex:0 0 44px;width:44px;padding:0;font-size:32px;line-height:1;border-radius:50%;background:transparent;color:var(--muted);border:1px solid transparent}
+#usgDialog #usgFechar:hover{background:var(--panel-2,#0001);color:var(--text)}
+.usg-meta{display:flex;align-items:baseline;justify-content:space-between;gap:10px;min-height:22px}
+#usgEstado{font-weight:600;font-size:14px;color:var(--muted)}
+#usgDialog[data-estado="ouvindo"] #usgEstado{color:var(--crit)}
+#usgDialog[data-estado="ouvindo"] #usgEstado::before{content:"";display:inline-block;width:9px;height:9px;margin-right:7px;border-radius:50%;background:var(--crit);animation:usg-pisca 1.2s ease-in-out infinite}
+#usgDialog[data-estado="pausado"] #usgEstado,#usgDialog[data-estado="enviado"] #usgEstado{color:var(--changed,var(--ok))}
+#usgContador{font-size:12px;color:var(--muted)}
+.usg-leitura{display:flex;flex-direction:column;min-height:0;flex:1 1 auto;background:var(--panel,#f4ede0);border:1px solid var(--line,#ccc);border-radius:14px;overflow:hidden}
+#usgDialog[data-estado="ouvindo"] .usg-leitura{border-color:var(--crit)}
+#usgTexto{box-sizing:border-box;display:block;flex:1 1 auto;width:100%;min-height:170px;margin:0;padding:14px 14px 6px;border:0;outline:0;background:transparent;color:var(--text);font:inherit;font-size:18px;line-height:1.6;resize:none;overflow:auto}
+#usgParcial{flex:0 0 auto;max-height:5.2em;overflow:auto;padding:0 14px 12px;font-size:18px;line-height:1.6;font-style:italic;color:var(--muted);white-space:pre-wrap}
+#usgParcial:empty{display:none}
+#usgDialog #usgEnviar{width:100%;min-height:52px;font-size:17px;font-weight:600;border-radius:14px;background:var(--accent);color:var(--accent-ink);border:0}
+.usg-mic{position:relative;display:grid;place-items:center;width:104px;height:104px;margin:0 auto;flex:0 0 auto}
+.usg-mic>*{grid-area:1/1}
+#usgDialog .usg-mic-btn{width:84px;height:84px;min-height:84px!important;padding:0;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--accent-ink);border:0;box-shadow:0 6px 18px #0003;transition:transform .15s,background .2s}
+#usgDialog .usg-mic-btn:active{transform:scale(.94)}
+#usgDialog .usg-mic-btn.usg-parar{background:var(--crit);color:var(--paper)}
+.usg-onda{width:84px;height:84px;border-radius:50%;border:2px solid var(--crit);opacity:0;pointer-events:none}
+#usgDialog[data-estado="ouvindo"] .usg-onda{animation:usg-onda 2s ease-out infinite}
+#usgDialog[data-estado="ouvindo"] .usg-onda2{animation-delay:1s}
+#usgLegenda{text-align:center;font-size:13px;color:var(--muted);margin-top:-4px!important}
+#usgMsg{font-size:13px;color:var(--muted);min-height:0}#usgMsg:empty{display:none}
+@keyframes usg-onda{0%{transform:scale(1);opacity:.55}100%{transform:scale(1.65);opacity:0}}
+@keyframes usg-pisca{50%{opacity:.25}}
+@media(prefers-reduced-motion:reduce){#usgDialog[data-estado="ouvindo"] .usg-onda{animation:none;opacity:.35;transform:scale(1.25)}#usgDialog[data-estado="ouvindo"] .usg-onda2{opacity:.2;transform:scale(1.5)}#usgDialog[data-estado="ouvindo"] #usgEstado::before{animation:none}}
 #usgMsg,#usgInboxMsg{overflow-wrap:anywhere}#usgInbox{margin:8px;padding:8px;border:1px solid var(--line,#aaa);border-radius:8px}
-#usgInbox summary{cursor:pointer;font-weight:600}.usg-pedido{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0}.usg-pedido span{flex:1;min-width:160px}
+#usgInbox summary{cursor:pointer;font-weight:600;min-height:32px}.usg-pedido{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}.usg-nome{flex:1;min-width:140px;font-weight:600}
+.usg-selo{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--p-blue);color:var(--info)}
+.usg-selo[data-k="pendente"]{background:var(--p-yellow);color:var(--warn)}.usg-selo[data-k="pronto"]{background:var(--p-green);color:var(--changed)}.usg-selo[data-k="erro"]{background:var(--p-red);color:var(--crit)}.usg-selo[data-k="expirado"]{background:var(--panel-2);color:var(--muted)}
+.usg-pedido button{min-height:44px}
 .usg-nao-encaixado{background:#fff0a6!important;color:#694300!important;border-bottom:2px solid #b37500}#usgSugestoes blockquote{margin:8px;padding-left:10px;border-left:3px solid var(--line,#aaa)}
 /* Estado compacto dos bancos de frases. */
 .v2-banco-selo{font-size:10px;line-height:1.3;padding:3px 6px;border-radius:5px;max-width:340px;color:var(--muted,#666);background:#8881;white-space:normal}
@@ -643,6 +725,7 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
   .tutu-v2 #tutuApp .v2-top-actions { order:5; flex:1; width:auto; min-width:0; gap:3px; justify-content:flex-end; }
   #tutuApp .v2-top-actions button { padding:3px 5px; font-size:11px; }
   #tutuApp #themeButton { order:6; padding:3px 7px; }
+  .tutu-v2 #tutuApp #settingsTop { min-width:40px; min-height:40px; font-size:24px; padding:0 8px; }
   #tutuApp #saveState, #tutuApp #syncState { min-width:0; max-width:76px; overflow:hidden; text-overflow:ellipsis; font-size:9px; }
   .tutu-v2 #tutuApp #v2Center { padding:0 0 24px; scrollbar-gutter:auto; }
   #tutuApp #v2Center > .fmt-bar { position:static; padding:6px; gap:3px; }
@@ -663,20 +746,16 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
   #usgInbox { font-size:14px; }
   #tutuApp .v2-footer-actions { justify-content:center; }
   .tutu-v2 #tutuApp #copiar, .tutu-v2 #tutuApp #usgOpen { flex:1; justify-content:center; min-width:44px; min-height:48px; font-size:16px; padding:8px 12px; }
+  /* "Copiar laudo" nunca corta: ocupa o espaço que precisa (nowrap) e o Audio fica com o resto, mesmo em tela estreita/fonte grande. */
+  .tutu-v2 #tutuApp #copiar { flex:2 0 auto; white-space:nowrap; padding:8px 18px; }
+  .tutu-v2 #tutuApp #usgOpen { flex:1 1 0; padding:8px 10px; }
+  #tutuApp .v2-footer-actions { padding-inline:10px; gap:8px; }
   #tutuApp #copiar kbd, #tutuApp #hudOpen { display:none; }
   #tutuApp .v2-footer-actions .v2-banco-selo { order:2; max-width:100%; }
-  #usgDialog, #usgDialog.usg-full { inset:0; width:100%; max-width:100%; height:100dvh; max-height:100dvh; margin:0; border:0; border-radius:0; padding:16px 16px max(16px,env(safe-area-inset-bottom)); background:var(--paper); color:var(--text); }
-  #usgDialog[open] { display:flex; flex-direction:column; gap:6px; }
-  #usgDialog h2 { margin:0 0 8px; }
-  #usgDialog p { margin:0; }
-  #usgDialog select { background:var(--panel); color:var(--text); border:1px solid var(--line); }
-  #usgDialog #usgTexto { flex:1; min-height:100px; margin:0; background:var(--panel); color:var(--text); border:1px solid var(--line); }
-  /* Ordem para o polegar: texto em cima; aviso, Iniciar/Parar e Enviar/Fechar embaixo. */
-  #usgDialog button { flex-shrink:0; margin:0; }
-  #usgDialog #usgMsg { order:1; }
-  #usgDialog #usgIniciar { order:2; align-self:stretch; width:auto!important; min-height:72px!important; font-size:22px!important; background:var(--accent); color:var(--accent-ink); }
-  #usgDialog #usgParar { order:3; min-height:48px; }
-  #usgDialog #usgEnviar, #usgDialog #usgEnviar ~ button { order:4; min-height:48px; }
+  #usgDialog, #usgDialog.usg-full { inset:0; width:100%; max-width:100%; height:100dvh; max-height:100dvh; margin:0; border:0; border-radius:0; padding:max(12px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom)); background:var(--paper); color:var(--text); box-shadow:none; }
+  #usgDialog[open] { gap:8px; }
+  #usgDialog .usg-leitura { border-radius:16px; }
+  #usgDialog #usgTexto { min-height:0; }
 }
 
 /* × das abas: discreto, aparece no hover/aba ativa (12/11/2026) */
