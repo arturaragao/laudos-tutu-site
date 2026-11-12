@@ -4109,6 +4109,7 @@ window.tutuSite.appReady = true;
   const move = (id, parent) => { const n = $(id); if (n) { moved[id] = n; parent.append(n); } return n; };
   document.body.classList.add("tutu-v2");
   const app = ui.app = document.querySelector(".app");
+  const mobile = matchMedia("(max-width:760px)");
   app.id = "tutuApp";
   const top = el("header", { id: "v2Top" });
   const tabs = el("nav", { id: "caseTabs", role: "tablist", "aria-label": "Casos abertos" });
@@ -4143,6 +4144,17 @@ window.tutuSite.appReady = true;
     ui.panels[name] = el("section", { id: "rightPanel" + i, role: "tabpanel", "aria-labelledby": b.id, class: "v2-panel" });
     ui.panels[name].hidden = i !== 0;
   });
+  // Abas opcionais (como Corretor) ganham ícone e nome no trilho recolhido.
+  const extraIcons = { Corretor: "✎" };
+  new MutationObserver(() => {
+    rnav.querySelectorAll("button").forEach(b => {
+      if (!b.querySelector("span")) {
+        const name = b.textContent.trim();
+        b.replaceChildren(el("b", { "aria-hidden": "true" }, extraIcons[name] || name.charAt(0)), el("span", {}, name));
+      }
+      if (!b.title) b.title = b.querySelector("span").textContent.trim();
+    });
+  }).observe(rnav, { childList:true });
   right.append(button("≡", () => ui.toggleRight(), { id: "rightToggle", "aria-label": "Fixar ou recolher ferramentas", title: "Ferramentas · Ctrl ]", "aria-expanded": "true" }), rnav, ...Object.values(ui.panels));
   const rev = ui.panels.Revisar, ia = ui.panels.IA, learned = ui.panels.Aprendido;
   ["revisar", "alertBox", "status"].forEach(id => move(id, rev)); rev.append(document.querySelector(".review"));
@@ -4187,6 +4199,13 @@ window.tutuSite.appReady = true;
   settings.querySelector(".calc-body").append(other);
   app.replaceChildren(top, left, center, right, footer, settings);
   document.body.append(voice);
+  // O rodapé cresce quando os atalhos quebram; a pílula fica sempre acima dele.
+  const footerSize = new ResizeObserver(() => {
+    const height = Math.ceil(footer.getBoundingClientRect().height) + "px";
+    voice.style.setProperty("--v2-footer-height", height);
+    app.style.setProperty("--v2-footer-height", height);
+  });
+  footerSize.observe(footer);
   ui.settings = on => { settings.hidden = !on; app.classList.toggle("settings-open", on); if (on) { renderKeys(); $("setTitle").focus(); } else focusSheet(); ui.updateOutline?.(); };
   $("setTitle").tabIndex = -1; $("setBtn").onclick = () => ui.settings(true);
   const oldOpen = openModal, oldClose = closeModal;
@@ -4198,7 +4217,7 @@ window.tutuSite.appReady = true;
     Object.entries(ui.panels).forEach(([n, p]) => { p.hidden = n !== name; $(p.getAttribute("aria-labelledby")).setAttribute("aria-selected", String(n === name)); });
     $("rightToggle").setAttribute("aria-expanded", "true");
   };
-  let leftPinned = store.get("v2LeftMini") !== "1" && innerWidth >= 760;
+  let leftPinned = store.get("v2LeftMini") !== "1" && !mobile.matches;
   let leftPeekTimer = null;
   const showLeft = open => {
     app.classList.toggle("left-mini", !open);
@@ -4214,13 +4233,13 @@ window.tutuSite.appReady = true;
     showLeft(pinned);
   };
   ui.toggleLeft = () => setLeftPinned(!leftPinned);
-  leftToggle.addEventListener("mouseenter", () => { clearTimeout(leftPeekTimer); showLeft(true); });
-  left.addEventListener("mouseenter", () => { clearTimeout(leftPeekTimer); showLeft(true); });
+  leftToggle.addEventListener("mouseenter", () => { if (!mobile.matches) { clearTimeout(leftPeekTimer); showLeft(true); } });
+  left.addEventListener("mouseenter", () => { if (!mobile.matches) { clearTimeout(leftPeekTimer); showLeft(true); } });
   left.addEventListener("mouseleave", () => {
     clearTimeout(leftPeekTimer);
     if (!leftPinned) leftPeekTimer = setTimeout(() => showLeft(false), 250);
   });
-  let rightPinned = store.get("v2RightMini") !== "1" && innerWidth >= 760;
+  let rightPinned = store.get("v2RightMini") !== "1" && !mobile.matches;
   let rightPeekTimer = null;
   const rightToggle = $("rightToggle");
   const showRight = open => {
@@ -4234,7 +4253,7 @@ window.tutuSite.appReady = true;
     store.set("v2RightMini", pinned ? "0" : "1"); showRight(pinned);
   };
   ui.toggleRight = () => setRightPinned(!rightPinned);
-  right.addEventListener("mouseenter", () => { clearTimeout(rightPeekTimer); showRight(true); });
+  right.addEventListener("mouseenter", () => { if (!mobile.matches) { clearTimeout(rightPeekTimer); showRight(true); } });
   right.addEventListener("mouseleave", () => {
     clearTimeout(rightPeekTimer);
     if (!rightPinned) rightPeekTimer = setTimeout(() => showRight(false), 250);
@@ -4245,6 +4264,21 @@ window.tutuSite.appReady = true;
   if (store.get("v2Night") === "1") ui.night();
   showLeft(leftPinned);
   showRight(rightPinned);
+  // No celular os botões ficam no topo, acessíveis mesmo com as gavetas fechadas.
+  const placeDrawers = () => {
+    clearTimeout(leftPeekTimer); clearTimeout(rightPeekTimer);
+    if (mobile.matches) {
+      top.prepend(leftToggle); top.append(rightToggle);
+      leftPinned = rightPinned = false;
+    } else {
+      left.prepend(leftToggle); right.prepend(rightToggle);
+      leftPinned = store.get("v2LeftMini") !== "1";
+      rightPinned = store.get("v2RightMini") !== "1";
+    }
+    showLeft(leftPinned); showRight(rightPinned);
+  };
+  mobile.addEventListener("change", placeDrawers);
+  placeDrawers();
   $("maskSearch").oninput = () => { document.querySelectorAll("#exams .exam").forEach(b => b.hidden = !TutuV2Core.score($("maskSearch").value, b.textContent)); };
   const render = renderExams;
   renderExams = () => { render(); $("maskSearch").oninput(); };
@@ -4515,12 +4549,12 @@ window.tutuSite.appReady = true;
   try { const saved = JSON.parse(store.get("v2Shortcuts") || "null"); if (saved && Object.values(saved).every(a => ui.actions[a])) Object.assign(ui.shortcuts, saved); } catch (_) {}
   const foot = $("v2Footer");
   ui.renderShortcuts = () => {
-    foot.replaceChildren();
+    const shortcuts = ui.el("div", { class: "v2-shortcuts" });
     for (const [key, action] of Object.entries(ui.shortcuts)) {
       const b = ui.button("", () => ui.actions[action].run(), { title: ui.actions[action].label + " · " + key });
-      b.append(ui.el("kbd", {}, key), ui.el("span", {}, ui.actions[action].label)); foot.append(b);
+      b.append(ui.el("kbd", {}, key), ui.el("span", {}, ui.actions[action].label)); shortcuts.append(b);
     }
-    if (ui.footerActions) foot.append(ui.footerActions);
+    foot.replaceChildren(ui.footerActions, shortcuts);
   };
   ui.renderShortcuts();
   const keyEditor = ui.el("div", { class: "v2-key-editor" });
@@ -7523,9 +7557,11 @@ window.tutuSite.appReady = true;
   const enviar = button("Enviar", () => enviarPedido(), { id: "usgEnviar" });
   function preencher() {
     const selected = exame.value; exame.replaceChildren();
-    for (const e of EXAMS) exame.append(el("option", { value: e.id }, e.name));
+    const usg = U.examesUSG(EXAMS); /* USG primeiro, mas todas as máscaras: Áudio não é só ultrassom */
+    if (!usg.length) exame.append(el("option", { value: "" }, "Escolha a máscara…")); /* sem USG: não gravar numa máscara qualquer */
+    for (const e of [...usg, ...EXAMS.filter(x => !usg.includes(x))]) exame.append(el("option", { value: e.id }, e.name));
     if ([...exame.options].some(o => o.value === selected)) exame.value = selected;
-    if (!exame.options.length) dizer("Nenhuma máscara neste navegador. Sincronize nas Configurações.");
+    if (!exame.options.length) dizer("Nenhuma máscara de USG neste navegador. Sincronize nas Configurações.");
   }
   function config(ex) {
     publishVoice();
@@ -7540,6 +7576,11 @@ window.tutuSite.appReady = true;
   function stop() {
     ouvindo = false; const s = speech; speech = null; s?.stop();
     iniciar.disabled = false; parar.disabled = true; exame.disabled = false;
+  }
+  function pedirToque(motivo) {
+    if (!dialog.open || !dialog.classList.contains("usg-full")) return;
+    dizer(motivo + " Toque em Iniciar áudio para gravar.");
+    iniciar.focus();
   }
   function captar() {
     const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara.");
@@ -7560,7 +7601,10 @@ window.tutuSite.appReady = true;
       }
       parcial.textContent = interim;
     };
-    s.onerror = ev => { dizer("Voz: " + ev.error); if (/not-allowed|audio-capture|service-not-allowed/.test(ev.error)) stop(); };
+    s.onerror = ev => {
+      dizer("Voz: " + ev.error);
+      if (/not-allowed|audio-capture|service-not-allowed/.test(ev.error)) { stop(); pedirToque("Voz: " + ev.error + "."); }
+    };
     s.onend = () => { parcial.textContent = ""; if (ouvindo && speech === s) { try { s.start(); } catch (_) { stop(); } } };
     s.start(); ouvindo = true; iniciar.disabled = true; parar.disabled = false; exame.disabled = true;
     dizer("Ouvindo em pt-BR. Dite só achados: o reconhecimento pode usar o serviço de voz do navegador.");
@@ -7584,9 +7628,31 @@ window.tutuSite.appReady = true;
   dialog.append(el("h2", { id: "usgTitulo" }, "Audio"), el("label", { for: "usgExame" }, "Exame"), exame,
     el("p", { id: "usgModo" }, "Áudio"), iniciar, parar, texto, parcial, enviar, button("Fechar", () => { stop(); dialog.close(); }), msg);
   document.body.append(dialog);
-  const abrirDialog = () => { preencher(); dialog.showModal(); };
+  const abrirDialog = () => { preencher(); if (!dialog.open) dialog.showModal(); };
   $("copiar").after(button("Audio", abrirDialog, { id: "usgOpen" }));
-  dialog.addEventListener("cancel", stop); window.addEventListener("pagehide", stop);
+  const temSelecao = () => !!window.getSelection()?.toString() || texto.selectionStart !== texto.selectionEnd;
+  const fora = ev => {
+    const r = dialog.getBoundingClientRect();
+    return ev.target === dialog && (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom);
+  };
+  let gestoFora = false;
+  dialog.addEventListener("pointerdown", ev => { gestoFora = ev.button === 0 && fora(ev) && !temSelecao(); });
+  dialog.addEventListener("pointercancel", () => { gestoFora = false; });
+  dialog.addEventListener("click", ev => {
+    const fechar = gestoFora && fora(ev) && !temSelecao(); gestoFora = false;
+    if (fechar) { stop(); dialog.close(); }
+  });
+  dialog.addEventListener("cancel", stop); dialog.addEventListener("close", stop); window.addEventListener("pagehide", stop);
+  if (new URLSearchParams(location.search).get("audio") === "1" || window.matchMedia("(max-width: 760px)").matches) {
+    dialog.classList.add("usg-full");
+    Object.assign(iniciar.style, { minHeight: "64px", width: "100%", fontSize: "1.25rem" });
+    const abrirAudio = () => {
+      if (!ui.initialized) { requestAnimationFrame(abrirAudio); return; }
+      abrirDialog();
+      try { captar(); } catch (e) { stop(); pedirToque(e.message); }
+    };
+    requestAnimationFrame(abrirAudio);
+  }
   const painel = el("details", { id: "usgInbox" }), cachePedidos = new Map();
   const lista = el("div", { id: "usgLista" }), inboxMsg = el("p", { id: "usgInboxMsg", role: "status" });
   const sugestoes = el("details", { id: "usgSugestoes" });
@@ -7692,4 +7758,271 @@ window.tutuSite.appReady = true;
   T.onChave(atualizar); setInterval(() => { if (!document.hidden) atualizar(); }, 15000);
   window.addEventListener("focus", atualizar); document.addEventListener("visibilitychange", () => { if (!document.hidden) atualizar(); }); atualizar();
   ui.actions.ditarusg = { label: "Audio", run: abrirDialog }; ui.usg = { atualizar, preencher };
+})();
+
+/* Ditado híbrido no PC: a extensão tem prioridade; sem ela, a própria página dita na folha (#laudo).
+   Detecção da extensão (sem alterar extensao/):
+   - content.js cancela Alt+S em CAPTURA no document (preventDefault + stopPropagation) e o atalho do Chrome
+     nem entrega a tecla à página. Por isso o site escuta Alt+S só na fase de BOLHA da window: com a extensão,
+     a tecla nunca chega aqui (sem ditado duplicado); se chegou cancelada sem passar pela bolha, é a extensão.
+   - qualquer evento laudos-mic/provisorio/final/voz/correcao/ditado sem a marca source=ditado-site vem da
+     extensão (ou da ponte): o ditado do site desliga e devolve tudo ao fluxo antigo.
+   - laudos-extensao-ping é opcional: se uma versão futura da extensão responder laudos-extensao-pong, a
+     detecção passa a valer desde a abertura, mesmo com o microfone desligado.
+   Pós-processamento: o mesmo usgVoice do modo Áudio (punct, bestAlternative, posTexto: correções, autotextos,
+   macros). Comandos da página saem pelo evento laudos-voz, tratado pelo handler já existente. */
+(() => {
+  "use strict";
+  const ui = window.tutuV2, pill = document.getElementById("voicePill");
+  if (!ui || !pill) return;
+  const label = document.getElementById("voiceLabel"), originalDictate = ui.dictate;
+  const source = "ditado-site", pingTimeout = 180;
+  let extension = pill.hasAttribute("data-mic"), checked = extension, engaged = false;
+  let on = false, paused = false, speech = null, restart = null, anchor = null, pendingToggle = false;
+  let fails = 0, ignoreUntil = 0, lastInsert = null, lastReached = null;
+  const note = ui.el("small", { id: "siteDictationNote", title: "Extensão não detectada: o reconhecimento roda nesta página." }, "ditado do site (sem extensão)");
+  note.style.cssText = "color:var(--muted);font-size:11px;margin-left:6px"; note.hidden = true; label.after(note);
+  const parse = e => { try { return typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return null; } };
+  const emit = (name, data) => document.dispatchEvent(new CustomEvent(name, { detail: JSON.stringify({ ...data, source }) }));
+  const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[.,;:!?"]/g, " ").replace(/\s+/g, " ").trim();
+  const config = () => { try { return JSON.parse(document.getElementById("voiceConfig").textContent) || {}; } catch (_) { return {}; } };
+  const destination = () => ({ id: "laudo", caso: anchor?.caseId || ui.activeId() });
+  const isAltS = e => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.code === "KeyS" || String(e.key || "").toLowerCase() === "s");
+
+  /* ---------- pílula ---------- */
+  function render() {
+    note.hidden = extension || !on;   // aviso só enquanto o motor do site está ligado
+    // Antes do primeiro uso do ditado do site a pílula fica inteiramente com 102/106 (fluxo da extensão).
+    if (extension || !engaged) return;
+    const text = !on ? "Voz · Alt S" : paused ? "Ditado pausado · Alt S" : "Ditando · Alt S", rec = on && !paused;
+    if (label.textContent !== text) label.textContent = text;
+    if (pill.classList.contains("recording") !== rec) pill.classList.toggle("recording", rec);
+    const vc = rec ? ui.activeId() : null;
+    if (ui.voiceCase !== vc) { ui.voiceCase = vc; ui.renderTabs?.(); }
+  }
+  // 102 escreve atividade na pílula ("Texto recebido na folha"...); enquanto o site detém o motor, vale o estado real.
+  new MutationObserver(render).observe(label, { childList: true, characterData: true, subtree: true });
+  function state() { emit("laudos-mic", { on, paused }); render(); ui.updateHUD?.(); }
+  function clearInterim() { emit("laudos-provisorio", { texto: "", destino: destination() }); anchor = null; }
+  function stop(publish = true) {
+    const was = on || !!speech;
+    on = false; paused = false; pendingToggle = false; clearTimeout(restart); restart = null;
+    const s = speech; speech = null;
+    // Desliga os callbacks antes de abortar: finais atrasados não entram na folha.
+    if (s) { s.onresult = s.onend = s.onerror = null; try { s.abort(); } catch (_) {} }
+    if (was) clearInterim(); anchor = null;
+    if (publish && was) state(); else render();
+  }
+  function foundExtension() {
+    if (extension) return;
+    if (on || speech) stop(true);   // publica "desligado" enquanto ainda é dono da pílula
+    extension = true; checked = true; pendingToggle = false; note.hidden = true;
+    ui.dictate = originalDictate;
+  }
+  for (const name of ["laudos-mic", "laudos-provisorio", "laudos-final", "laudos-voz", "laudos-correcao", "laudos-ditado", "laudos-chave", "laudos-tasy", "laudos-treino-status", "laudos-extensao-pong"]) {
+    document.addEventListener(name, e => { const d = parse(e); if (d && d.source !== source) foundExtension(); }, true);
+  }
+  const ping = () => { if (!extension) emit("laudos-extensao-ping", {}); };
+  ping();
+  setTimeout(() => { checked = true; if (pendingToggle && !extension) { pendingToggle = false; toggle(); } }, pingTimeout);
+  window.addEventListener("focus", ping);
+
+  /* ---------- vocabulário (SpeechRecognitionPhrase, como mic.js e o modo Áudio) ---------- */
+  function phrases(s, cfg) {
+    if (!window.SpeechRecognitionPhrase || !("phrases" in s)) return;
+    const exam = cfg.vocabExame || [];
+    try { s.phrases = [...new Set([...exam, ...(cfg.vocab || [])])].slice(0, 300)
+      .map(w => new SpeechRecognitionPhrase(w, exam.includes(w) ? 5 : 2.5)); } catch (_) {}
+  }
+  // Novo vocabulário vale a partir da próxima sessão do reconhecedor (reinício em onend).
+  const vc = document.getElementById("voiceConfig");
+  if (vc) new MutationObserver(() => { if (speech && on) phrases(speech, config()); })
+    .observe(vc, { childList: true, characterData: true, subtree: true });
+
+  /* ---------- comandos ---------- */
+  // Comandos do microfone (mic.js detectarComando; o build não o leva ao site): fala isolada, nunca no meio do laudo.
+  const MIC = { "pausar": "pausar", "pausa": "pausar", "retomar": "retomar", "continuar": "retomar", "reiniciar": "retomar",
+    "apagar isso": "apagar_isso", "apaga isso": "apagar_isso", "desfazer": "apagar_isso", "cancelar frase": "cancelar",
+    "apagar frase": "apagar_frase", "proximo campo": "proximo_campo", "gerar laudo": "gerar", "gerar o laudo": "gerar" };
+  function findExam(spoken, exams) {
+    const stop = ["de", "do", "da", "dos", "das", "e", "o", "a", "tc", "tomografia", "computadorizada", "exame", "com", "sem", "contraste"];
+    const words = spoken.split(" ").filter(w => w && !stop.includes(w));
+    const aliases = ex => [ex.id, ex.nome, ...(ex.voz || [])].filter(Boolean).map(norm);
+    return exams.find(e => aliases(e).includes(spoken)) ||
+      (words.length ? exams.find(e => aliases(e).some(a => words.every(w => a.split(" ").includes(w)))) : null);
+  }
+  function runLocal(acao) {
+    if (acao === "pausar" || acao === "retomar") { paused = acao === "pausar"; clearInterim(); state(); return true; }
+    if (acao === "cancelar") { clearInterim(); ignoreUntil = Date.now() + 4000; return true; }
+    if (acao === "apagar_isso") { undoLast(); return true; }
+    if (acao === "apagar_frase") {
+      const sel = getSelection();
+      if (selectLastSentence() && sel.rangeCount && !sel.isCollapsed && sheet.contains(sel.anchorNode)) document.execCommand("delete");
+      return true;
+    }
+    return false;
+  }
+  function command(text, cfg) {
+    const n = norm(text);
+    if (!n) return false;
+    const cmd = (cfg.commands || []).find(c => norm(c.fala) === n);
+    const acao = cmd ? cmd.acao : MIC[n];
+    if (acao) {
+      if (paused && acao !== "retomar" && acao !== "pausar") return true;   // pausado: só "retomar" vale (como mic.js)
+      clearInterim(); if (!runLocal(acao)) emit("laudos-voz", { acao }); return true;
+    }
+    if (paused) return false;
+    if (/^(corrigir|corrige|corrija)( |$)/.test(n)) { setStatus("Correção falada é da extensão. Selecione a palavra e use o ícone de corrigir."); return true; }
+    const m = n.match(/^(?:mascaras?|exames?|modelos?) (.+)$/);
+    if (!m) return false;
+    // "máscara X e máscara Y" / "máscaras X, Y": a primeira abre, as outras entram juntas (add), como na extensão.
+    const parts = m[1].split(/ (?:e|mais) (?:(?:a|o) )?(?:(?:mascaras?|exames?|modelos?) )?(?:(?:de|do) )?/).filter(Boolean);
+    const found = []; for (const p of parts) { const ex = findExam(p, cfg.exams || []); if (ex && !found.includes(ex)) found.push(ex); }
+    if (!found.length) { setStatus("Máscara não encontrada. Confira o nome no painel."); return true; }
+    clearInterim(); found.forEach((ex, i) => emit("laudos-voz", { acao: "exame", id: ex.id, add: i > 0 }));
+    return true;
+  }
+
+  /* ---------- escrita na folha (posição do cursor, como content.js) ---------- */
+  function caretRange() {
+    const sel = getSelection();
+    if (sel.rangeCount && sheet.contains(sel.anchorNode)) return sel.getRangeAt(0).cloneRange();
+    if (sheetRange && sheet.contains(sheetRange.startContainer) && sheet.contains(sheetRange.endContainer)) return sheetRange.cloneRange();
+    return sheet.lastElementChild ? rangeAtEnd(sheet.lastElementChild) : null;
+  }
+  function remember() {   // âncora no início da frase: o final entra onde o provisório começou
+    if (anchor) return;
+    const r = caretRange();
+    if (r) anchor = { range: r, caseId: ui.activeId() };
+  }
+  const MAIUSC = new Set(["hounsfield", "willis", "bosniak", "fleischner", "gleason", "glasgow", "tanner", "sylvius", "wirsung", "santorini", "meckel", "morgagni", "bochdalek",
+    "hartmann", "hashimoto", "crohn", "graves", "paget", "parkinson", "alzheimer", "chiari", "dandy", "walker", "borrmann", "tarlov", "rathke", "gerota", "douglas", "glisson",
+    "spiegel", "riedel", "caroli", "mirizzi", "zenker", "barrett", "baker", "bankart", "hill", "sachs", "morton", "lisfranc", "chopart", "salter", "harris", "colles", "pott",
+    "weber", "pugh", "child", "lauren", "forrest", "virchow", "schmorl", "retzius", "treitz", "kocher", "monro", "covid", "sars"]);
+  function pickOption(orig, text) {
+    const m = String(orig || "").match(/^\{([^{}]*\|[^{}]*)\}$/);
+    if (!m) return null;
+    const opts = m[1].split("|").map(o => o.trim()).filter(Boolean), said = norm(text);
+    return opts.find(o => norm(o) === said) || opts.find(o => said.includes(norm(o))) || null;
+  }
+  function insert(text, original, alts, confidence) {
+    remember();
+    if (!anchor || anchor.caseId !== ui.activeId() || !sheet.contains(anchor.range.commonAncestorContainer)) {
+      clearInterim(); setStatus("A folha mudou durante a frase. Posicione o cursor e continue ditando."); return;
+    }
+    const r = anchor.range, node = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+    const block = node.closest("p,div,li"), container = block && sheet.contains(block) ? block : sheet;
+    const before = document.createRange(); before.selectNodeContents(container); before.setEnd(r.startContainer, r.startOffset);
+    const after = document.createRange(); after.selectNodeContents(container); after.setStart(r.endContainer, r.endOffset);
+    const prior = before.toString().replace(/\u00a0/g, " "), opt = !r.collapsed ? pickOption(r.toString(), text) : null;
+    let t = opt !== null ? opt : text;
+    if (!prior.trim() || /[.!?:]\s*$/.test(prior)) t = t.charAt(0).toUpperCase() + t.slice(1);
+    else {
+      const w = (t.match(/^[\p{L}\p{N}][\p{L}\p{N}'’-]*/u) || [])[0] || "", f = norm(w);
+      const caps = (config().maiusculas || []).map(norm);
+      if (/^\p{Lu}\p{Ll}+$/u.test(w) && !MAIUSC.has(f) && !caps.includes(f)) t = t.charAt(0).toLowerCase() + t.slice(1);
+    }
+    t = t.replace(/([.!?]\s+|\n)([a-zà-ú])/g, (_, a, b) => a + b.toUpperCase());
+    if (prior && !/\s$/.test(prior) && !/^[.,;:!?\n]/.test(t)) t = " " + t;
+    if (/^[\p{L}\p{N}]/u.test(after.toString()) && !/\s$/.test(t)) t += " ";
+    const dest = destination(), start = offsetOf(sheet, r.startContainer, r.startOffset);
+    sheetRange = r.cloneRange();
+    insertAtCaret(t);   // execCommand: dispara o input nativo, entra no desfazer do navegador e nas versões
+    const sel = getSelection();
+    if (sel.rangeCount && sheet.contains(sel.anchorNode)) sheetRange = sel.getRangeAt(0).cloneRange();
+    lastInsert = sel.rangeCount && sheet.contains(sel.focusNode)
+      ? { caseId: ui.activeId(), start, end: offsetOf(sheet, sel.focusNode, sel.focusOffset) } : null;
+    scheduleCaseSave();
+    const T = globalThis.TextoV2;
+    emit("laudos-final", { texto: t.trim(), original, conf: confidence,
+      baixas: T?.palavrasBaixas ? T.palavrasBaixas(t.trim(), alts, original, confidence) : [], destino: dest });
+    clearInterim(); render();
+  }
+  function undoLast() {
+    const li = lastInsert; lastInsert = null;
+    if (!li || li.caseId !== ui.activeId() || li.end <= li.start) return;
+    const r = rangeFromOffsets(sheet, li.start, li.end); if (!r) return;
+    sheet.focus({ preventScroll: true });
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    document.execCommand("delete");
+    if (sel.rangeCount && sheet.contains(sel.anchorNode)) sheetRange = sel.getRangeAt(0).cloneRange();
+  }
+
+  /* ---------- motor ---------- */
+  function audioOpen() { return !!document.getElementById("usgDialog")?.open; }
+  function toggle() {
+    if (extension) return;
+    if (!checked) { pendingToggle = !pendingToggle; return; }
+    if (on) { stop(); return; }
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition, voice = window.usgVoice;
+    if (!Speech || !voice) { setStatus(!Speech ? "Ditado indisponível neste navegador. Use o Chrome (Web Speech) ou a extensão." : "Motor de voz não carregado. Reconstrua o site com tools/build_site.py."); return; }
+    if (audioOpen()) { setStatus("Feche o Áudio antes de ditar na folha."); return; }
+    engaged = true; fails = 0; paused = false;
+    ui.closePalette?.(); focusSheet();
+    const s = speech = new Speech();
+    s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
+    phrases(s, config()); on = true;
+    s.onresult = ev => {
+      if (!on || extension || speech !== s) return;
+      fails = 0;
+      let interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length && on && speech === s; i++) {
+        const r = ev.results[i], cfg = config();
+        // Mesma ordem da extensão: pontuação falada nas alternativas (mic.js), depois a melhor pelo vocabulário (content.js).
+        const alts = []; for (const a of Array.from(r, x => voice.punct(x.transcript || ""))) if (a && !alts.includes(a)) alts.push(a);
+        if (!alts.length) continue;
+        const best = voice.bestAlternative(alts[0], alts, cfg);
+        if (!r.isFinal) { if (!paused && Date.now() >= ignoreUntil) { remember(); interim += (interim ? " " : "") + best; } continue; }
+        if (Date.now() < ignoreUntil) { ignoreUntil = 0; clearInterim(); continue; }
+        if (command(best, cfg) || paused) { if (paused) clearInterim(); continue; }
+        const text = voice.posTexto(best, cfg).trim();
+        if (text) insert(text, best, alts, typeof r[0]?.confidence === "number" ? r[0].confidence : null); else clearInterim();
+      }
+      if (on && speech === s && interim) emit("laudos-provisorio", { texto: interim, destino: destination() });
+      render();
+    };
+    s.onerror = ev => {
+      if (speech !== s) return;
+      if (/not-allowed|audio-capture|service-not-allowed|language-not-supported/.test(ev.error)) { stop(); setStatus("Voz: " + ev.error + ". Libere o microfone para este site."); }
+      else if (ev.error !== "no-speech" && ev.error !== "aborted") fails++;
+    };
+    s.onend = () => {
+      if (speech !== s) return;
+      clearInterim();
+      if (!on || extension) return;
+      if (fails > 5) { stop(); setStatus("Ditado do site parou após erros seguidos. Alt+S para tentar de novo."); return; }
+      restart = setTimeout(() => {   // Chrome encerra sessões longas/silenciosas: religa enquanto estiver ligado
+        if (!on || extension || speech !== s) return;
+        try { phrases(s, config()); s.start(); } catch (e) { stop(); setStatus("Voz: " + e.message); }
+      }, 250);
+    };
+    try { s.start(); state(); } catch (e) { stop(); setStatus("Voz: " + e.message); }
+  }
+
+  /* ---------- Alt+S, F1, paleta e botão "F1 · Ditar" ---------- */
+  // Captura: só observa. Se a tecla foi cancelada e não chegou à bolha, outro dono (content.js) a consumiu.
+  window.addEventListener("keydown", e => {
+    if (extension || !isAltS(e)) return;
+    setTimeout(() => { if (!extension && lastReached !== e && e.defaultPrevented) foundExtension(); }, 0);
+  }, true);
+  window.addEventListener("keydown", e => {
+    if (extension || !isAltS(e)) return;
+    lastReached = e; checked = true;
+    // Sem checar defaultPrevented: o handler antigo da página (document, bolha) já cancela Alt+S só para
+    // manter o foco na folha. Quem consome a tecla de verdade (content.js) para a propagação e ela não chega aqui.
+    e.preventDefault();               // não insere caractere (ex.: Option+S no Mac)
+    if (!e.repeat) toggle();
+  });
+  ui.dictate = () => {
+    if (extension) return originalDictate();
+    ui.closePalette?.(); focusSheet();
+    // Mesmo caminho do 102: com a extensão (content.js) a tecla sintética liga o microfone dela.
+    const ev = new KeyboardEvent("keydown", { key: "s", code: "KeyS", altKey: true, bubbles: true, cancelable: true });
+    document.dispatchEvent(ev);
+    if (!extension && lastReached !== ev) { foundExtension(); label.textContent = "Comando enviado · Alt S"; }
+  };
+  // O modo Áudio usa outro reconhecedor: os dois não podem disputar o microfone.
+  document.addEventListener("click", e => { if (on && e.target.closest?.("#usgOpen")) stop(); }, true);
+  window.addEventListener("pagehide", () => { if (!extension) stop(false); });
+  ui.siteDictation = { get on() { return on; }, get extension() { return extension; }, toggle: () => ui.dictate() };
 })();

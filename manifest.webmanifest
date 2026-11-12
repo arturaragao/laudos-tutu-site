@@ -2,7 +2,43 @@
   "name": "Laudos",
   "short_name": "Laudos",
   "lang": "pt-BR",
+  "id": "./?app=laudos-v2",
   "start_url": "./",
   "scope": "./",
-  "display": "standalone"
+  "display": "standalone",
+  "theme_color": "#efe7da",
+  "background_color": "#efe7da",
+  "icons": [
+    {
+      "src": "icones/laudos-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/laudos-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icones/laudos-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Gravar áudio",
+      "url": "./?audio=1",
+      "icons": [
+        {
+          "src": "icones/laudos-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
 }

@@ -404,6 +404,7 @@
   #qfix .qf-sug button:hover,#qfix .qf-sug button[aria-selected="true"]{background:var(--panel-2);box-shadow:inset 2px 0 var(--accent)}
 
 /* Tutu v2 · sépia/pastéis. Sobreposição exclusiva do site. */
+html:has(body.tutu-v2) { overflow-x:hidden; }
 body.tutu-v2 {
   --ground:#efe7da; --panel:#f6f0e6; --panel-2:#eee5d6; --paper:#fcf8f0;
   --text:#3b342b; --paper-ink:#3b342b; --muted:#8b806f; --line:#e0d5c3;
@@ -433,7 +434,7 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 #hudPending { font-size:11px; color:var(--muted); }
 .tutu-v2 #hudCopy { border-radius:10px; padding:5px 9px; background:var(--accent); color:var(--accent-ink); font-size:12px; }
 .tutu-v2 button { cursor:pointer; }
-.tutu-v2 #tutuApp { height:100dvh; width:100%; display:grid; grid-template-columns:var(--v2-left-width,240px) minmax(0,1fr) var(--v2-right-width,330px); grid-template-rows:48px minmax(0,1fr) 48px; grid-template-areas:"top top top" "left center right" "foot foot foot"; background:var(--ground); overflow:hidden; }
+.tutu-v2 #tutuApp { box-sizing:border-box; min-width:0; height:100dvh; width:100%; display:grid; grid-template-columns:var(--v2-left-width,240px) minmax(0,1fr) var(--v2-right-width,330px); grid-template-rows:48px minmax(0,1fr) auto; grid-template-areas:"top top top" "left center right" "foot foot foot"; background:var(--ground); overflow:hidden; }
 #tutuApp > * { min-width:0; min-height:0; }
 .tutu-v2 button:not(.exam):not(.fmt-bar button) { border:1px solid var(--line); border-radius:9px; background:var(--panel); color:var(--text); padding:5px 9px; font:inherit; }
 .tutu-v2 button:hover { filter:brightness(.97); }
@@ -477,7 +478,7 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 #rightToggle { align-self:end; }
 #rightTabs { display:flex; gap:2px; background:var(--panel); border-radius:12px; padding:3px; flex-shrink:0; }
 .tutu-v2 #rightTabs button { flex:1; padding:5px 2px; font-size:12px; border-color:transparent; background:transparent; }
-#rightTabs button b { display:none; }
+#rightTabs button b { display:inline; margin-right:3px; }
 .tutu-v2 #rightTabs button[aria-selected="true"] { background:var(--paper); box-shadow:0 1px 2px #0001; font-weight:600; }
 .v2-panel { display:flex; flex-direction:column; gap:10px; }
 .v2-panel > .review, .v2-panel > .stylebox, .v2-panel > details, .v2-panel > .alerts, .v2-panel > .status { background:var(--paper); border:1px solid var(--line); border-radius:16px; padding:12px; }
@@ -487,12 +488,13 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 .v2-panel input, .v2-panel textarea, .v2-panel .field { width:100%; min-width:0; }
 .v2-panel .legend { display:flex; flex-wrap:wrap; }
 .v2-panel .ver-menu { width:100%; position:relative; }
-.tutu-v2 #v2Footer { grid-area:foot; display:flex; align-items:center; gap:5px; padding:5px 10px; border-top:1px solid var(--line); overflow-x:auto; }
-.v2-footer-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; margin-left:auto; }
-.v2-footer-actions .v2-banco-selo { max-width:240px; }
+.tutu-v2 #v2Footer { box-sizing:border-box; grid-area:foot; display:flex; flex-direction:column; align-items:stretch; min-height:48px; gap:5px; padding:5px 10px; border-top:1px solid var(--line); }
+.v2-footer-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; min-width:0; gap:6px; }
+.v2-footer-actions .v2-banco-selo { min-width:0; max-width:160px; overflow-wrap:anywhere; }
+.v2-shortcuts { display:flex; flex-wrap:wrap; min-width:0; gap:5px; }
 .tutu-v2 #v2Footer button { display:flex; align-items:center; gap:5px; white-space:nowrap; font-size:11px; flex-shrink:0; }
 #v2Footer kbd { color:var(--accent); padding:0; border:0; background:transparent; font-size:10px; }
-#voicePill { position:fixed; bottom:62px; left:50%; transform:translateX(-50%); max-width:calc(100vw - 24px); border:1px solid var(--line); border-radius:99px; background:var(--panel); color:var(--text); box-shadow:0 8px 24px #0002; padding:7px 12px; display:flex; align-items:center; gap:10px; z-index:8; font-size:12px; white-space:nowrap; }
+#voicePill { position:fixed; bottom:calc(var(--v2-footer-height,48px) + 14px); left:50%; transform:translateX(-50%); max-width:calc(100vw - 24px); border:1px solid var(--line); border-radius:99px; background:var(--panel); color:var(--text); box-shadow:0 8px 24px #0002; padding:7px 12px; display:flex; align-items:center; gap:10px; z-index:8; font-size:12px; white-space:nowrap; }
 #voiceLabel { max-width:250px; overflow:hidden; text-overflow:ellipsis; }
 #voiceDot { color:var(--muted); }
 #voicePill.recording #voiceDot { color:#d0605b; animation:v2-pulse 1s infinite; }
@@ -505,9 +507,10 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 #tutuApp.left-mini #leftToggle { padding:4px 6px; align-self:center; }
 #tutuApp.right-mini #v2Right { padding:10px 4px; }
 #tutuApp.right-mini .v2-panel { display:none; }
-#tutuApp.right-mini #rightTabs { display:none; }
-#tutuApp.right-mini #rightTabs button b { display:block; font-size:18px; }
-#tutuApp.right-mini #rightTabs button span { font-size:9px; }
+#tutuApp.right-mini #rightTabs { display:flex; flex-direction:column; align-items:stretch; }
+#tutuApp.right-mini #rightTabs button { flex:none; min-height:40px; }
+#tutuApp.right-mini #rightTabs button b { display:block; margin:0; font-size:18px; }
+#tutuApp.right-mini #rightTabs button span { display:none; }
 #tutuApp.right-mini #rightToggle { padding:4px 6px; align-self:center; }
 .tutu-v2 #setModal.v2-settings { grid-area:center; position:relative; inset:auto; display:block; z-index:4; padding:20px; overflow:auto; background:var(--ground); backdrop-filter:none; }
 .tutu-v2 #setModal .modal-card { width:100%; max-width:100%; max-height:none; box-shadow:none; border:0; background:transparent; }
@@ -532,7 +535,7 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 .tutu-v2 .modal:not(.v2-settings) { background:#30271966; z-index:100; }
 .tutu-v2 .modal-card { background:var(--panel); color:var(--text); border-color:var(--line); border-radius:16px; }
 .tutu-v2 .field, .tutu-v2 textarea { background:var(--paper); color:var(--text); border-color:var(--line); }
-.tutu-v2 #tutuApp.compact { width:min(440px,100vw); margin-left:auto; grid-template-columns:minmax(0,1fr); grid-template-areas:"top" "center" "foot"; grid-template-rows:86px minmax(0,1fr) 48px; border-left:1px solid var(--line); }
+.tutu-v2 #tutuApp.compact { width:min(440px,100vw); margin-left:auto; grid-template-columns:minmax(0,1fr); grid-template-areas:"top" "center" "foot"; grid-template-rows:86px minmax(0,1fr) auto; border-left:1px solid var(--line); }
 #tutuApp.compact #v2Left, #tutuApp.compact #v2Right { display:none; }
 #tutuApp.compact #v2Top { flex-wrap:wrap; gap:4px; padding:5px 8px; }
 #tutuApp.compact .v2-brand { display:none; }
@@ -540,7 +543,7 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 #tutuApp.compact .v2-top-actions { order:2; width:100%; justify-content:space-between; }
 #tutuApp.compact #copiar { padding:4px 8px; }
 #tutuApp.compact #v2Footer { min-width:0; overflow-x:hidden; }
-#tutuApp.compact #v2Footer > button { display:none; }
+#tutuApp.compact .v2-shortcuts { display:none; }
 #tutuApp.compact .v2-footer-actions .v2-banco-selo { max-width:115px; }
 #tutuApp.compact #v2Center { padding:0 12px 100px; }
 #tutuApp.compact #laudo { padding:24px 22px; }
@@ -549,18 +552,7 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 .tutu-v2 #tutuApp.focus-mode { grid-template-columns:0 minmax(0,1fr) 0; }
 #tutuApp.focus-mode #v2Left, #tutuApp.focus-mode #v2Right { visibility:hidden; }
 @media(max-width:1100px) { .tutu-v2 #tutuApp:not(.compact) { grid-template-columns:190px minmax(0,1fr) 280px; } .tutu-v2 #tutuApp.left-mini:not(.compact) { grid-template-columns:56px minmax(0,1fr) 280px; } .tutu-v2 #tutuApp.right-mini:not(.compact) { grid-template-columns:190px minmax(0,1fr) 64px; } .tutu-v2 #tutuApp.left-mini.right-mini:not(.compact) { grid-template-columns:56px minmax(0,1fr) 64px; } #v2Center { padding-inline:12px; } .tutu-v2 #laudo { padding-inline:28px; } }
-@media(max-width:760px) { .tutu-v2 #tutuApp:not(.compact) { grid-template-columns:56px minmax(0,1fr) 64px; } #v2Left { padding:8px 4px; } #leftBody { display:none; } #v2Right { padding:8px 2px; } #rightTabs { flex-direction:column; } #rightTabs button b { display:block; } #rightTabs button span { font-size:9px; } .v2-panel { display:none; } .v2-brand { display:none; } #saveState { font-size:9px; } .v2-top-actions { gap:3px; } .tutu-v2 #setModal { padding:8px; } }
 @media(prefers-reduced-motion:reduce) { .tutu-v2 *, .tutu-v2 *::before, .tutu-v2 *::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
-@media(max-width:760px) {
-  .tutu-v2 #v2Footer { min-width:0; overflow-x:hidden; }
-  .tutu-v2 #v2Footer > button { display:none; }
-  #tutuApp:not(.compact):not(.left-mini) #v2Left { position:fixed; inset:48px auto 48px 0; width:240px; background:var(--panel); z-index:20; padding:12px; box-shadow:8px 0 20px #0002; }
-  #tutuApp:not(.compact):not(.left-mini) #leftBody { display:flex; }
-  #tutuApp:not(.compact):not(.left-mini) #leftToggle { writing-mode:horizontal-tb; }
-  #tutuApp:not(.compact):not(.right-mini) #v2Right { position:fixed; inset:48px 0 48px auto; width:300px; background:var(--panel); z-index:20; padding:12px; box-shadow:-8px 0 20px #0002; }
-  #tutuApp:not(.compact):not(.right-mini) .v2-panel:not([hidden]) { display:flex; }
-  #tutuApp:not(.compact):not(.right-mini) #rightTabs { flex-direction:row; }
-}
 @media print { body.tutu-v2 { overflow:visible; } .tutu-v2 #laudo { font:11pt Arial!important; color:#000; background:#fff; box-shadow:none; } #v2Top,#v2Left,#v2Right,#v2Footer,#voicePill,#commandPalette { display:none!important; } }
 
 /* Ctrl+K: continuações da frase no topo da paleta */
@@ -629,9 +621,60 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #usgMsg,#usgInboxMsg{overflow-wrap:anywhere}#usgInbox{margin:8px;padding:8px;border:1px solid var(--line,#aaa);border-radius:8px}
 #usgInbox summary{cursor:pointer;font-weight:600}.usg-pedido{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0}.usg-pedido span{flex:1;min-width:160px}
 .usg-nao-encaixado{background:#fff0a6!important;color:#694300!important;border-bottom:2px solid #b37500}#usgSugestoes blockquote{margin:8px;padding-left:10px;border-left:3px solid var(--line,#aaa)}
-@media(max-width:600px){.tutu-v2 #tutuApp{grid-template-rows:86px minmax(0,1fr) 48px}#v2Top{flex-wrap:wrap;padding-block:5px}#caseTabs{flex-basis:60%;height:33px}.v2-top-actions{order:2;flex:1;justify-content:space-between}#usgInbox{font-size:14px}#usgDialog{margin:12px auto}.v2-footer-actions .v2-banco-selo{max-width:100px}#tutuApp:not(.compact):not(.left-mini) #v2Left,#tutuApp:not(.compact):not(.right-mini) #v2Right{top:86px}}
 /* Estado compacto dos bancos de frases. */
 .v2-banco-selo{font-size:10px;line-height:1.3;padding:3px 6px;border-radius:5px;max-width:340px;color:var(--muted,#666);background:#8881;white-space:normal}
 .v2-banco-selo[data-state="ok"]{color:var(--muted);background:transparent}
 .v2-banco-selo[data-state="erro"]{color:var(--warn);background:#d59b2820}
 .v2-banco-selo[hidden]{display:none}
+
+/* Celular: uma folha inteira e gavetas que não participam da grade. */
+@media(max-width:760px) {
+  body.tutu-v2 { min-width:0; width:100%; }
+  .tutu-v2 #tutuApp { width:100%; margin:0; border:0; grid-template-columns:minmax(0,1fr)!important; grid-template-areas:"top" "center" "foot"; grid-template-rows:86px minmax(0,1fr) auto; }
+  .tutu-v2 #tutuApp #v2Top { flex-wrap:wrap; gap:4px; padding:4px 6px; align-content:center; }
+  .tutu-v2 #tutuApp .v2-brand { display:none; }
+  .tutu-v2 #tutuApp #leftToggle, .tutu-v2 #tutuApp #rightToggle { box-sizing:border-box; align-self:center; flex:0 0 32px; min-width:32px; height:32px; padding:2px; }
+  #tutuApp #leftToggle { order:0; }
+  .tutu-v2 #tutuApp #caseTabs { order:1; flex:1 1 calc(100% - 112px); min-width:0; height:34px; overflow-x:auto; overflow-y:hidden; }
+  .tutu-v2 #caseTabs button { height:32px; max-width:180px; font-size:12px; }
+  #tutuApp #newCaseTab { order:2; width:32px; height:32px; padding:2px; flex-shrink:0; }
+  #tutuApp #rightToggle { order:3; }
+  #tutuApp #histTopBtn { order:4; padding:3px 5px; font-size:11px; }
+  .tutu-v2 #tutuApp .v2-top-actions { order:5; flex:1; width:auto; min-width:0; gap:3px; justify-content:flex-end; }
+  #tutuApp .v2-top-actions button { padding:3px 5px; font-size:11px; }
+  #tutuApp #themeButton { order:6; padding:3px 7px; }
+  #tutuApp #saveState, #tutuApp #syncState { min-width:0; max-width:76px; overflow:hidden; text-overflow:ellipsis; font-size:9px; }
+  .tutu-v2 #tutuApp #v2Center { padding:0 0 24px; scrollbar-gutter:auto; }
+  #tutuApp #v2Center > .fmt-bar { position:static; padding:6px; gap:3px; }
+  #tutuApp #v2Center > .fmt-bar button { padding:4px; }
+  .tutu-v2 #tutuApp #laudo { box-sizing:border-box; padding:24px 16px; border-radius:0; }
+  .tutu-v2 #tutuApp #v2Left, .tutu-v2 #tutuApp #v2Right { box-sizing:border-box; position:fixed; top:86px; bottom:var(--v2-footer-height,64px); width:min(340px,100%); display:flex; padding:12px; background:var(--panel); z-index:20; overflow:auto; }
+  #tutuApp #v2Left { left:0; right:auto; box-shadow:8px 0 20px #0002; }
+  #tutuApp #v2Right { left:auto; right:0; box-shadow:-8px 0 20px #0002; }
+  #tutuApp.left-mini #v2Left, #tutuApp.right-mini #v2Right { display:none; }
+  #tutuApp #leftBody { display:flex; }
+  #tutuApp #rightTabs { flex-direction:row; flex-wrap:wrap; }
+  #tutuApp #rightTabs button b { display:inline; }
+  #tutuApp #rightTabs button span { font-size:12px; }
+  #tutuApp .v2-panel:not([hidden]) { display:flex; }
+  .tutu-v2 #setModal { padding:8px; }
+  .tutu-v2 #v2Footer { min-width:0; overflow-x:hidden; }
+  .tutu-v2 #v2Footer .v2-shortcuts { display:none; }
+  #usgInbox { font-size:14px; }
+  #tutuApp .v2-footer-actions { justify-content:center; }
+  .tutu-v2 #tutuApp #copiar, .tutu-v2 #tutuApp #usgOpen { flex:1; justify-content:center; min-width:44px; min-height:48px; font-size:16px; padding:8px 12px; }
+  #tutuApp #copiar kbd, #tutuApp #hudOpen { display:none; }
+  #tutuApp .v2-footer-actions .v2-banco-selo { order:2; max-width:100%; }
+  #usgDialog, #usgDialog.usg-full { inset:0; width:100%; max-width:100%; height:100dvh; max-height:100dvh; margin:0; border:0; border-radius:0; padding:16px 16px max(16px,env(safe-area-inset-bottom)); background:var(--paper); color:var(--text); }
+  #usgDialog[open] { display:flex; flex-direction:column; gap:6px; }
+  #usgDialog h2 { margin:0 0 8px; }
+  #usgDialog p { margin:0; }
+  #usgDialog select { background:var(--panel); color:var(--text); border:1px solid var(--line); }
+  #usgDialog #usgTexto { flex:1; min-height:100px; margin:0; background:var(--panel); color:var(--text); border:1px solid var(--line); }
+  /* Ordem para o polegar: texto em cima; aviso, Iniciar/Parar e Enviar/Fechar embaixo. */
+  #usgDialog button { flex-shrink:0; margin:0; }
+  #usgDialog #usgMsg { order:1; }
+  #usgDialog #usgIniciar { order:2; align-self:stretch; width:auto!important; min-height:72px!important; font-size:22px!important; background:var(--accent); color:var(--accent-ink); }
+  #usgDialog #usgParar { order:3; min-height:48px; }
+  #usgDialog #usgEnviar, #usgDialog #usgEnviar ~ button { order:4; min-height:48px; }
+}
