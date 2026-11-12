@@ -1215,7 +1215,13 @@ function clipboardHtml(){
   tmp.querySelectorAll("font").forEach(f => f.replaceWith(...f.childNodes));
   tmp.querySelectorAll("[style]").forEach(n => { n.style.removeProperty("font-family"); n.style.removeProperty("font-size"); if (!n.getAttribute("style").trim()) n.removeAttribute("style"); });
   tmp.querySelectorAll("span:not([style]):not([class])").forEach(x => x.replaceWith(...x.childNodes));
-  tmp.querySelectorAll("p,div,li").forEach(n => { const a = n.style.textAlign; n.setAttribute("style", PSTYLE + (a ? ";text-align:" + a : "")); });
+  /* PACS (editor tipo TX Text Control) ignora "margin:0" abreviado e põe espaço antes/depois do parágrafo:
+     margens por extenso em pt; linha vazia com <br> virava duas linhas, então vai com &nbsp;. */
+  const cpStyle = `margin-top:0pt;margin-bottom:0pt;margin-left:0pt;margin-right:0pt;text-indent:0pt;line-height:normal;font-family:${FORMAT.font},Helvetica,sans-serif;font-size:${FORMAT.size}`;
+  tmp.querySelectorAll("p,div,li").forEach(n => {
+    const a = n.style.textAlign; n.setAttribute("style", cpStyle + (a ? ";text-align:" + a : ""));
+    if (n.tagName !== "LI" && !n.querySelector("p,div,ul,ol,img") && !n.textContent.replace(/ /g, " ").trim()) n.innerHTML = "&nbsp;";
+  });
   tmp.querySelectorAll("ul,ol").forEach(n => n.setAttribute("style", `margin:0;padding-left:24px;font-family:${FORMAT.font},Helvetica,sans-serif;font-size:${FORMAT.size}`));
   return `<div style="font-family:${FORMAT.font},Helvetica,sans-serif;font-size:${FORMAT.size}">${tmp.innerHTML}</div>`;
 }
@@ -4258,6 +4264,19 @@ window.tutuSite.appReady = true;
     clearTimeout(rightPeekTimer);
     if (!rightPinned) rightPeekTimer = setTimeout(() => showRight(false), 250);
   });
+  // Borda inteira abre a lateral pela posição do mouse, mesmo com outro elemento por cima da faixa (12/11/2026).
+  const naFaixa = (el, e) => { const r = el.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; };
+  document.addEventListener("mousemove", e => {
+    if (mobile.matches || app.classList.contains("compact") || app.classList.contains("focus-mode")) return;
+    if (!leftPinned) {
+      if (naFaixa(left, e)) { clearTimeout(leftPeekTimer); leftPeekTimer = null; if (app.classList.contains("left-mini")) showLeft(true); }
+      else if (!app.classList.contains("left-mini") && !leftPeekTimer) leftPeekTimer = setTimeout(() => { leftPeekTimer = null; showLeft(false); }, 250);
+    }
+    if (!rightPinned) {
+      if (naFaixa(right, e)) { clearTimeout(rightPeekTimer); rightPeekTimer = null; if (app.classList.contains("right-mini")) showRight(true); }
+      else if (!app.classList.contains("right-mini") && !rightPeekTimer) rightPeekTimer = setTimeout(() => { rightPeekTimer = null; showRight(false); }, 250);
+    }
+  }, { passive: true });
   ui.compact = () => { app.classList.toggle("compact"); ui.settings(false); ui.positionPalette?.(); };
   ui.night = () => { const night = document.body.classList.toggle("sepia-night"); store.set("v2Night", night ? "1" : "0"); $("nightToggle").textContent = night ? "Sépia dia" : "Sépia noite"; $("nightToggle").setAttribute("aria-pressed", String(night)); $("themeButton").textContent = night ? "☀" : "☾"; };
   top.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
