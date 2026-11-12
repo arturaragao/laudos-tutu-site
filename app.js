@@ -3421,6 +3421,494 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
   });
 })();
 
+// Pós-processamento local do ditado (sem Claude): números e medidas por extenso, unidades e siglas.
+// "dois vírgula três por um vírgula cinco centímetros" -> "2,3 x 1,5 cm". Usado pelo mic.js; testado em tests/test_fala.js.
+(function (g) {
+  const f = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const UN = { zero: 0, um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10,
+    onze: 11, doze: 12, treze: 13, catorze: 14, quatorze: 14, quinze: 15, dezesseis: 16, dezessete: 17, dezoito: 18, dezenove: 19 };
+  const DEZ = { vinte: 20, trinta: 30, quarenta: 40, cinquenta: 50, sessenta: 60, setenta: 70, oitenta: 80, noventa: 90 };
+  const CEM = { cem: 100, cento: 100, duzentos: 200, duzentas: 200, trezentos: 300, trezentas: 300, quatrocentos: 400, quatrocentas: 400,
+    quinhentos: 500, quinhentas: 500, seiscentos: 600, seiscentas: 600, setecentos: 700, setecentas: 700, oitocentos: 800, oitocentas: 800, novecentos: 900, novecentas: 900 };
+  const numWord = w => { const x = f(w); return x in UN ? UN[x] : x in DEZ ? DEZ[x] : x in CEM ? CEM[x] : x === "mil" ? 1000 : null; };
+  const UNIT_RE = /^(cent[ií]metros?|mil[ií]metros?|mililitros?|ml|cm|mm|unidades?|hounsfield|uh|graus?|por\s?cento|%|anos?|meses|m[eê]s|dias?|semanas?|horas?)$/i;
+  const isDigits = w => /^\d+$/.test(w);
+
+  // junta sequências de números por extenso ("vinte e três", "cento e dez") num valor
+  function parseRun(tok, i) {
+    let total = 0, cur = 0, j = i, used = false;
+    while (j < tok.length) {
+      const v = numWord(tok[j]);
+      if (v === null) {
+        if (used && f(tok[j]) === "e" && j + 1 < tok.length && numWord(tok[j + 1]) !== null && numWord(tok[j + 1]) < 1000) { j++; continue; }
+        break;
+      }
+      if (v === 1000) { total += (cur || 1) * 1000; cur = 0; } else cur += v;
+      used = true; j++;
+    }
+    return used ? { val: total + cur, end: j } : null;
+  }
+
+  function normalizarFala(s) {
+    let tok = String(s).replace(/\bpor\s?cento\b/gi, "%").split(/\s+/).filter(Boolean);
+    // 1) números por extenso -> dígitos, só em contexto de medida (antes de vírgula+número, "por", unidade, ou depois deles)
+    const isNumTok = k => k >= 0 && k < tok.length && (isDigits(tok[k]) || numWord(tok[k]) !== null);
+    const ctxAfter = k => { const n = f(tok[k] || ""); return ((n === "virgula" || n === "por" || n === "x") && isNumTok(k + 1)) || UNIT_RE.test(n + (n === "por" ? " " + f(tok[k + 1] || "") : "")) || (n === "por" && f(tok[k + 1] || "") === "cento"); };
+    const ctxBefore = k => { const n = f(tok[k] || ""); return ((n === "virgula" || n === "por" || n === "x") && isNumTok(k - 1)) || /(rads|bosniak|categoria)$/.test(n); };
+    for (let pass = 0; pass < 3; pass++) {
+      const out = [];
+      for (let i = 0; i < tok.length;) {
+        const r = numWord(tok[i]) !== null ? parseRun(tok, i) : null;
+        if (r && (ctxAfter(r.end) || ctxBefore(i - 1))) { out.push(String(r.val)); i = r.end; }
+        else out.push(tok[i++]);
+      }
+      tok = out;
+    }
+    let t = tok.join(" ");
+    // 2) decimal falado e "por" entre números
+    t = t.replace(/(\d+)\s+v[ií]rgula\s+(\d+)/gi, "$1,$2");
+    t = t.replace(/(\d+)\.(\d{1,2})(?=\s*(?:cm|mm|ml|x|×|por\b|cent|mil[ií]))/gi, "$1,$2");   // o Chrome às vezes usa ponto decimal
+    t = t.replace(/(\d+(?:,\d+)?)\s*(?:por|x|×)\s*(?=\d)/gi, "$1 x ");
+    // 3) unidades depois de número
+    t = t.replace(/(\d)\s*cent[ií]metros?\s+quadrados?\b/gi, "$1 cm²")
+      .replace(/(\d)\s*mil[ií]metros?\s+c[uú]bicos?\b/gi, "$1 mm³")
+      .replace(/(\d)\s*cent[ií]metros?\s+c[uú]bicos?\b/gi, "$1 cm³")
+      .replace(/(\d)\s*cent[ií]metros?\b/gi, "$1 cm")
+      .replace(/(\d)\s*mil[ií]metros?\b/gi, "$1 mm")
+      .replace(/(\d)\s*mililitros?\b/gi, "$1 mL")
+      .replace(/(\d)\s*(?:unidades?\s+(?:de\s+)?)?hounsfield\b/gi, "$1 UH")
+      .replace(/(\d)\s+%/g, "$1%");
+    return t;
+  }
+
+  const SIGLAS = [
+    [/\bbi[\s-]?rads\b/gi, "BI-RADS"], [/\bli[\s-]?rads\b/gi, "LI-RADS"], [/\blung[\s-]?rads\b/gi, "Lung-RADS"],
+    [/\bti[\s-]?rads\b/gi, "TI-RADS"], [/\bpi[\s-]?rads\b/gi, "PI-RADS"], [/\bo[\s-]rads\b/gi, "O-RADS"],
+    [/\bpet[\s-]?(?:ct|tc)\b/gi, "PET-CT"], [/\bangio[\s-]?tc\b/gi, "angio-TC"], [/\btc\b/g, "TC"], [/\brm\b/g, "RM"],
+    [/\btep\b/g, "TEP"], [/\bavc\b/g, "AVC"], [/\bdpoc\b/g, "DPOC"], [/\buh\b/g, "UH"], [/\bspect\b/g, "SPECT"], [/\bfdg\b/g, "FDG"], [/\bdwi\b/g, "DWI"]
+  ];
+  function siglas(s) { for (const [re, to] of SIGLAS) s = s.replace(re, to); return s; }
+
+  g.normalizarFala = normalizarFala; g.siglas = siglas;
+  if (typeof module !== "undefined") module.exports = { normalizarFala, siglas };
+})(typeof window !== "undefined" ? window : globalThis);
+
+// Texto do ditado, parte pura (sem IA, sem DOM): escolher alternativa por n-gramas, correção fonética,
+// substituições aprendidas, juntar/separar/hífen e baixa confiança. Usado pelo content.js; testado em tests/test_v2_texto.js.
+(function (g) {
+  const fold = s => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const foldStr = s => Array.from(String(s)).map(c => c.normalize("NFD").charAt(0)).join("").toLowerCase();   // mesmo tamanho do original
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const TOK = /[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu;
+  const palavras = text => { const re = new RegExp(TOK.source, "gu"), out = []; let m; while ((m = re.exec(text))) out.push({ w: m[0], f: fold(m[0]), s: m.index, e: m.index + m[0].length }); return out; };
+
+  // lado, negação e presença: nunca trocados pela fonética nem juntados a outra palavra
+  const PROTEGIDAS = new Set(["direito", "direita", "direitos", "direitas", "esquerdo", "esquerda", "esquerdos", "esquerdas", "bilateral", "bilaterais",
+    "lateral", "nao", "sem", "nem", "nenhum", "nenhuma", "ausente", "ausentes", "ausencia", "presente", "presentes", "presenca", "sim",
+    "macro", "autotexto", "frase", "corrigir", "cancelar"]);
+  // regra aprendida (de/para) nunca mexe em lado, negação ou número (dígito ou por extenso); "um/uma" ficam de fora (artigos)
+  const NUM_EXT = ["dois", "duas", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "onze", "doze", "treze", "catorze", "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove",
+    "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa", "cem", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "mil", "meio", "meia"];
+  const REGRA_TABU = new Set([...PROTEGIDAS, "ambos", "ambas", "nega", "negam", "negativo", "negativa", "ausentes", "inexistente", ...NUM_EXT]);
+  const regraInsegura = (de, para) => /\d/.test(de + " " + para) || palavras(fold(de) + " " + fold(para)).some(t => REGRA_TABU.has(t.f));
+  const FUNCAO = new Set(["a", "o", "as", "os", "de", "do", "da", "dos", "das", "e", "em", "no", "na", "nos", "nas", "com", "sem", "por", "para", "pelo", "pela",
+    "um", "uma", "ao", "aos", "que", "se", "ou", "mais", "menos", "entre", "sobre", "ate", "ja", "ainda", "tambem", "nao", "como", "sua", "seu", "ha", "foi"]);
+
+  /* ---------- 8: n-gramas ---------- */
+  const cacheNg = new WeakMap();
+  function ngMap(ng) {
+    if (!ng || typeof ng !== "object") return null;
+    let m = cacheNg.get(ng);
+    if (!m) { m = new Map(); for (const k of Object.keys(ng)) m.set(fold(k).replace(/[^a-z0-9]+/g, " ").trim(), +ng[k] || 0); cacheNg.set(ng, m); }
+    return m;
+  }
+  // soma de log(1+freq) dos pares e trios de palavras que existem no banco (trio vale 1,5x)
+  function ngramScore(text, ng) {
+    const m = ngMap(ng); if (!m || !m.size) return 0;
+    const t = fold(text).split(/[^a-z0-9]+/).filter(Boolean);
+    let s = 0;
+    for (let i = 0; i + 1 < t.length; i++) {
+      const bi = m.get(t[i] + " " + t[i + 1]); if (bi) s += Math.log1p(bi);
+      if (i + 2 < t.length) { const tri = m.get(t[i] + " " + t[i + 1] + " " + t[i + 2]); if (tri) s += 1.5 * Math.log1p(tri); }
+    }
+    return s;
+  }
+
+  /* ---------- 9: correção fonética (só palavra fora do vocabulário, só com alta semelhança) ---------- */
+  function lev(a, b) {
+    const m = a.length, n = b.length; if (!m || !n) return m || n;
+    let prev = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) {
+      const cur = [i];
+      for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[n];
+  }
+  // chave fonética pt-BR simples: s/z/ss/ç/c(e,i)/sc iguais; ch/x; qu/c/k; g(e,i)/j; h mudo; l final = u; m/n nasal; letras dobradas
+  function chave(w) {
+    let s = String(w).toLowerCase().replace(/ç/g, "s");
+    s = fold(s).replace(/[^a-z]/g, "");
+    s = s.replace(/ph/g, "f").replace(/th/g, "t").replace(/ch|sh/g, "X").replace(/h/g, "")
+      .replace(/sc(?=[ei])/g, "s").replace(/c(?=[ei])/g, "s").replace(/qu/g, "k").replace(/[cq]/g, "k")
+      .replace(/gu(?=[ei])/g, "g").replace(/g(?=[ei])/g, "j").replace(/z/g, "s").replace(/w/g, "v").replace(/y/g, "i")
+      .replace(/l$/, "u").replace(/m(?=[^aeiou]|$)/g, "n").replace(/(.)\1+/g, "$1");
+    return s;
+  }
+  // só varia gênero (-o/-a/-e) ou número (-s): pode estar certo, não mexe
+  function soFlexao(a, b) {
+    const A = a.replace(/s$/, ""), B = b.replace(/s$/, "");
+    if (A === B) return true;
+    return A.length === B.length && A.slice(0, -1) === B.slice(0, -1) && /[aoe]/.test(A.slice(-1)) && /[aoe]/.test(B.slice(-1));
+  }
+  const cacheVoc = new WeakMap();
+  function vocIndex(vf) {
+    if (!Array.isArray(vf)) return null;
+    let x = cacheVoc.get(vf);
+    if (!x) {
+      const raw = new Set(), byFold = new Map(), byKey = new Map();
+      for (const e of vf) {
+        const w = String(e && e[0] != null ? e[0] : ""), f = +(e && e[1]) || 0; if (!w) continue;
+        const lw = w.toLowerCase(), fw = fold(w);
+        raw.add(lw);
+        const cur = byFold.get(fw); if (!cur || f > cur.f) byFold.set(fw, { w: lw, f });
+        if (fw.length >= 5 && /^[a-z]+$/.test(fw)) { const k = chave(fw); if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push({ w: lw, fw, f }); }
+      }
+      x = { raw, byFold, byKey }; cacheVoc.set(vf, x);
+    }
+    return x;
+  }
+  const casar = (orig, novo) => /^\p{Lu}/u.test(orig) && /^\p{Ll}/u.test(novo) ? novo.charAt(0).toUpperCase() + novo.slice(1) : novo;
+  function corrigirFonetica(text, vf, opts) {
+    const ix = vocIndex(vf); if (!ix || !text) return text;
+    const minFreq = (opts && opts.minFreq) || 3;
+    let out = "", last = 0;
+    for (const t of palavras(text)) {
+      const f = t.f;
+      if (f.length < 5 || /[\d-]/.test(f) || !/^[a-z]+$/.test(f) || PROTEGIDAS.has(f)) continue;
+      if (t.w === t.w.toUpperCase()) continue;                       // sigla
+      if (ix.raw.has(t.w.toLowerCase())) continue;                   // já é uma palavra do vocabulário
+      if (ehPrefixado(f)) continue;
+      let best = null, bs = 0;
+      for (const c of ix.byKey.get(chave(f)) || []) {
+        if (c.f < minFreq || PROTEGIDAS.has(c.fw) || c.fw === f && false) continue;
+        const d = lev(f, c.fw), sim = 1 - d / Math.max(f.length, c.fw.length);
+        if (d > 2 || sim < 0.75 || (d > 0 && soFlexao(f, c.fw))) continue;
+        const sc = sim * 1000 + Math.log1p(c.f);
+        if (sc > bs) { bs = sc; best = c; }
+      }
+      if (best) { out += text.slice(last, t.s) + casar(t.w, best.w); last = t.e; }
+    }
+    return out + text.slice(last);
+  }
+
+  /* ---------- 10: substituições aprendidas (frase antes de palavra; palavra inteira; escopo por exame) ---------- */
+  function aplicarSubstituicoes(text, subs, exame) {
+    if (!text || !Array.isArray(subs) || !subs.length) return text;
+    const itens = subs.filter(s => s && s.de && s.para != null && !regraInsegura(s.de, s.para) && (!s.exame || s.exame === exame))
+      .map(s => ({ de: foldStr(String(s.de)).replace(/\s+/g, " ").trim(), para: String(s.para), esp: s.exame ? 1 : 0 }))
+      .filter(s => s.de)
+      .sort((a, b) => b.de.split(" ").length - a.de.split(" ").length || b.de.length - a.de.length || b.esp - a.esp);
+    if (!itens.length) return text;
+    const low = foldStr(text), aceitos = [];
+    for (const it of itens) {
+      const re = new RegExp("(^|[^\\p{L}\\p{N}])(" + esc(it.de).replace(/ /g, "\\s+") + ")(?=$|[^\\p{L}\\p{N}])", "giu");
+      let m;
+      while ((m = re.exec(low))) {
+        const s = m.index + m[1].length, e = s + m[2].length;
+        if (!aceitos.some(a => s < a.e && e > a.s)) aceitos.push({ s, e, para: casar(text.slice(s, e), it.para) });
+        if (!m[0].length) re.lastIndex++;
+      }
+    }
+    aceitos.sort((a, b) => a.s - b.s);
+    let out = "", last = 0;
+    for (const a of aceitos) { out += text.slice(last, a.s) + a.para; last = a.e; }
+    return out + text.slice(last);
+  }
+
+  /* ---------- 10b: correção salva vale para variantes próximas ("sub galeão", "subgaleão", "sub-galeal" -> "subgaleal") ---------- */
+  // Compara o trecho errado guardado ("de") com janelas de 1 a 4 palavras do texto, juntando as letras (sem espaço nem hífen):
+  // igual, ou a 1 letra de distância (2 em termos longos), ou mesma fonética. Não mexe em lado/negação/número, em palavra
+  // do vocabulário que existe sozinha, nem em mera variação de gênero/número. Regras com ctx (palavra que existe) ficam de fora.
+  const soLetras = f => String(f).replace(/[^a-z]/g, "");
+  function aplicarVariantes(text, regras, opts) {
+    if (!text || !Array.isArray(regras) || !regras.length) return text;
+    const ix = opts && vocIndex(opts.vocabFreq);
+    const itens = [];
+    for (const r of regras) {
+      if (!r || !r.de || r.para == null || r.fuzzy === false || (Array.isArray(r.ctx) && r.ctx.length) || regraInsegura(r.de, r.para)) continue;
+      const chv = soLetras(fold(r.de));
+      if (chv.length < 7) continue;
+      itens.push({ chv, ck: chave(chv), para: String(r.para), pf: soLetras(fold(r.para)), deToks: new Set(palavras(r.de).map(t => t.f)) });
+    }
+    if (!itens.length) return text;
+    const ws = palavras(text), aceitos = [];
+    for (let i = 0; i < ws.length; i++) {
+      let melhor = null;
+      for (const it of itens) {
+        let junto = "";
+        for (let k = 0; k < 4 && i + k < ws.length; k++) {
+          const t = ws[i + k];
+          if (k && !/^[ \t-]+$/.test(text.slice(ws[i + k - 1].e, t.s))) break;
+          if (PROTEGIDAS.has(t.f) || /\d/.test(t.f) || (t.w === t.w.toUpperCase() && t.w.length > 1) || (FUNCAO.has(t.f) && !it.deToks.has(t.f))) break;
+          junto += soLetras(t.f);
+          if (junto.length < 7) continue;
+          if (junto.length - it.chv.length > 2) break;
+          const unico = k === 0 && !t.w.includes("-");
+          if (unico && (ix && ix.raw.has(t.w.toLowerCase()) || t.w.toLowerCase() === it.para.toLowerCase())) continue;   // palavra válida ou já certa
+          if (junto[0] !== it.chv[0] || Math.abs(junto.length - it.chv.length) > 2) continue;
+          if (junto === it.pf) { if (unico) continue; }                       // só estava separada: junta
+          else if (junto !== it.chv && soFlexao(junto, it.chv)) continue;
+          else { const d = lev(junto, it.chv); if (!(d <= (it.chv.length >= 11 ? 2 : 1) || (d <= 3 && chave(junto) === it.ck))) continue; }
+          const sc = lev(junto, it.chv) * 10 - k;   // menor distância; empate: janela mais longa
+          if (!melhor || sc < melhor.sc) melhor = { sc, s: ws[i].s, e: t.e, para: it.para, n: k + 1 };
+        }
+      }
+      if (melhor && !aceitos.some(a => melhor.s < a.e && melhor.e > a.s)) { aceitos.push({ s: melhor.s, e: melhor.e, para: casar(text.slice(melhor.s, melhor.e), melhor.para) }); i += melhor.n - 1; }
+    }
+    let out = "", last = 0;
+    for (const a of aceitos) { out += text.slice(last, a.s) + a.para; last = a.e; }
+    return out + text.slice(last);
+  }
+
+  /* ---------- 11: juntar / hífen (regra do hífen do português, prefixos radiológicos) ---------- */
+  // prefixo terminado em vogal: true = hífen também antes da mesma vogal; false = só antes de "h". Antes de r/s dobra a consoante.
+  const PREF_VOGAL = { anti: 1, arqui: 1, auto: 1, extra: 1, infra: 1, intra: 1, micro: 1, neo: 1, proto: 1, pseudo: 1, semi: 1, supra: 1, ultra: 1, retro: 1, multi: 1, mini: 1,
+    peri: 0, endo: 0, epi: 0, meso: 0, hemi: 0, hipo: 0, poli: 0 };
+  const PREF_R = new Set(["hiper", "inter", "super"]);   // hífen antes de h ou r
+  const PREF_B = new Set(["sub"]);                       // hífen antes de h ou r
+  // palavras que também são preposição: só juntam com estes segundos elementos
+  const AMBIG = {
+    para: new Set(["vertebral", "vertebrais", "aortico", "aortica", "aorticos", "aorticas", "traqueal", "colico", "colica", "colicos", "nasal", "nasais", "esofagico", "esofagica", "gastrico", "gastrica", "renal", "renais"]),
+    contra: new Set(["lateral", "laterais", "indicacao", "indicacoes", "indicado", "indicada", "indicados", "indicadas"])
+  };
+  PREF_VOGAL.para = 0; PREF_VOGAL.contra = 1;
+  const PRE_POS = { pre: "pré", pos: "pós" };
+  const PRE_POS_WL = new Set(["contraste", "operatorio", "operatoria", "operatorios", "cirurgico", "cirurgica", "vertebral", "biopsia", "tratamento", "quimioterapia", "radioterapia", "radioterapico", "parto", "natal", "traumatico", "traumatica", "estenotico"]);
+  const TODOS_PREF = new Set([...Object.keys(PREF_VOGAL), ...PREF_R, ...PREF_B, "pre", "pos", "pro"]);
+  function ehPrefixado(f) { for (const p of TODOS_PREF) if (p.length >= 3 && f.length >= p.length + 3 && f.startsWith(p)) return true; return false; }
+  const vogal = c => /[aeiou]/.test(c);
+
+  function juntar2(a, b) {
+    const pf = a.f, nf = b.f;
+    if (/[\d-]/.test(pf + nf) || nf.length < 3 || FUNCAO.has(nf) || PROTEGIDAS.has(pf) || (PROTEGIDAS.has(nf) && !(AMBIG[pf] && AMBIG[pf].has(nf)))) return null;
+    const lw = a.w.toLowerCase();
+    if (lw === "pré" || lw === "pós" || lw === "pró") return a.w + "-" + b.w;
+    if (PRE_POS[pf] && PRE_POS_WL.has(nf)) return casar(a.w, PRE_POS[pf]) + "-" + b.w;
+    if (AMBIG[pf] && !AMBIG[pf].has(nf)) return null;
+    const n1 = nf[0];
+    if (pf in PREF_VOGAL) {
+      if (n1 === "h" || (PREF_VOGAL[pf] && n1 === pf.slice(-1))) return a.w + "-" + b.w;
+      if ((n1 === "r" || n1 === "s") && nf.length > 2 && vogal(nf[1])) return a.w + b.w.charAt(0) + b.w;
+      return a.w + b.w;
+    }
+    if (PREF_R.has(pf)) return a.w + (n1 === "h" || n1 === "r" ? "-" : "") + b.w;
+    if (PREF_B.has(pf)) return a.w + (n1 === "h" || n1 === "r" ? "-" : "") + b.w;
+    return null;
+  }
+  // "hipo denso" -> "hipodenso" quando a junção existe no vocabulário e pelo menos uma das partes não existe sozinha
+  function juntarVocab(a, b, ix) {
+    if (/[\d-]/.test(a.f + b.f) || a.f.length < 2 || b.f.length < 2 || FUNCAO.has(a.f) || FUNCAO.has(b.f) || PROTEGIDAS.has(a.f) || PROTEGIDAS.has(b.f)) return null;
+    if (a.f.length + b.f.length < 7) return null;
+    if (ix.byFold.has(a.f) && ix.byFold.has(b.f)) return null;
+    const hy = ix.byFold.get(a.f + "-" + b.f), j = ix.byFold.get(a.f + b.f), e = hy && hy.f >= 2 ? hy : j && j.f >= 2 ? j : null;
+    if (!e) return null;
+    return casar(a.w, e.w);
+  }
+  function juntarPalavras(text, opts) {
+    if (!text) return text;
+    const ix = opts && vocIndex(opts.vocabFreq);
+    const ws = palavras(text);
+    let out = "", last = 0;
+    for (let i = 0; i < ws.length;) {
+      const a = ws[i], b = ws[i + 1];
+      if (b && /^[ \t]+$/.test(text.slice(a.e, b.s))) {
+        let r = juntar2(a, b);
+        if (r == null && ix) r = juntarVocab(a, b, ix);
+        if (r != null) { out += text.slice(last, a.s) + r; last = b.e; i += 2; continue; }
+      }
+      i++;
+    }
+    return out + text.slice(last);
+  }
+  // "intra hífen hepático" / "intra - hepático" -> "intra-hepático"
+  function hifenFalado(text) {
+    return String(text).replace(/(\p{L}+)\s+h[ií]fen\s+(\p{L}+)/giu, "$1-$2").replace(/(\p{L}{2,})\s+-\s+(\p{L}{2,})/gu, "$1-$2");
+  }
+  // separar: palavra fora do vocabulário que é a junção de duas palavras frequentes que aparecem juntas no banco (par nos n-gramas)
+  function separarPalavras(text, opts) {
+    const ix = opts && vocIndex(opts.vocabFreq), ng = opts && ngMap(opts.ngramas);
+    if (!ix || !ng || !text) return text;
+    let out = "", last = 0;
+    for (const t of palavras(text)) {
+      const f = t.f;
+      if (f.length < 10 || /[\d-]/.test(f) || !/^[a-z]+$/.test(f) || ix.raw.has(t.w.toLowerCase()) || ix.byFold.has(f) || ehPrefixado(f)) continue;
+      let best = -1, bs = 0;
+      for (let k = 4; k <= f.length - 4; k++) {
+        const L = ix.byFold.get(f.slice(0, k)), R = ix.byFold.get(f.slice(k)), par = ng.get(f.slice(0, k) + " " + f.slice(k));
+        if (L && R && par && L.f >= 3 && R.f >= 3 && par > bs) { bs = par; best = k; }
+      }
+      if (best > 0) { out += text.slice(last, t.s) + t.w.slice(0, best) + " " + t.w.slice(best); last = t.e; }
+    }
+    return out + text.slice(last);
+  }
+
+  // junta tudo o que é automático (ordem: hífen falado, prefixos/vocabulário, separar, fonética)
+  function melhorarPalavras(text, opts) {
+    opts = opts || {};
+    let t = hifenFalado(text);
+    t = juntarPalavras(t, opts);
+    t = separarPalavras(t, opts);
+    return corrigirFonetica(t, opts.vocabFreq, opts);
+  }
+
+  /* ---------- 15: baixa confiança ---------- */
+  // palavras do texto final que diferem entre as alternativas do reconhecimento (só quando conf < limite)
+  function palavrasBaixas(final, alts, original, conf, limite) {
+    if (typeof conf !== "number" || conf >= (limite || 0.6) || !Array.isArray(alts) || alts.length < 2) return [];
+    const wf = s => fold(s).split(/[^a-z0-9]+/).filter(Boolean);
+    const ref = wf(original != null ? original : alts[0]);
+    const outros = alts.filter(a => a !== original).map(a => new Set(wf(a)));
+    const dif = new Set(ref.filter(w => w.length >= 3 && !/\d/.test(w) && outros.some(s => !s.has(w))));
+    const res = [];
+    for (const t of palavras(final)) if (dif.has(t.f) && !res.includes(t.w)) res.push(t.w);
+    return res;
+  }
+
+  const api = { fold, ngramScore, chave, lev, corrigirFonetica, aplicarSubstituicoes, aplicarVariantes, juntarPalavras, hifenFalado, separarPalavras, melhorarPalavras, palavrasBaixas, PROTEGIDAS, regraInsegura };
+  g.TextoV2 = api;
+  if (typeof module !== "undefined") module.exports = api;
+})(typeof window !== "undefined" ? window : globalThis);
+
+(() => {
+const fold1 = c => c.normalize("NFD").charAt(0);
+  const foldStr = s => Array.from(s).map(fold1).join("").toLowerCase();   // mesmo tamanho do original
+  const vnorm = s => foldStr(String(s)).replace(/[.,;:!?"]/g, "").replace(/\s+/g, " ").trim();
+
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Correções (e macros): busca sem diferenciar acentos nem maiúsculas, trocando no texto original
+  function applyCorrections(text, list) {
+    const items = (list || []).filter(c => c && c.de).map(c => ({ de: foldStr(String(c.de)).replace(/\s+/g, " ").trim(), para: String(c.para ?? ""),
+      ctx: Array.isArray(c.ctx) && c.ctx.length ? new Set(c.ctx.map(w => foldStr(String(w)))) : null }))
+      .filter(c => c.de).sort((a, b) => b.de.length - a.de.length);
+    for (const c of items) {
+      const pat = new RegExp("(^|[^\\p{L}\\p{N}])(" + esc(c.de).replace(/ /g, "\\s+") + ")(?=$|[^\\p{L}\\p{N}])", "giu");
+      let low = foldStr(text), out = "", last = 0, m;
+      pat.lastIndex = 0;
+      while ((m = pat.exec(low))) {
+        const start = m.index + m[1].length, end = start + m[2].length;
+        if (c.ctx) {   // correção de palavra que também existe: só troca perto das palavras onde foi aprendida
+          const viz = [...ctxWords(low.slice(Math.max(0, start - 60), start), -1), ...ctxWords(low.slice(end, end + 60), 1)];
+          if (!viz.some(w => c.ctx.has(w))) continue;
+        }
+        out += text.slice(last, start) + c.para; last = end;
+        if (m[0].length === 0) pat.lastIndex++;
+      }
+      if (last) text = out + text.slice(last);
+    }
+    return text;
+  }
+  function expandPhrases(text, list) {
+    if (!list || !list.length) return text;
+    const names = list.map(f => ({ toks: vnorm(f.nome).split(" ").filter(Boolean), texto: String(f.texto || "") }))
+      .filter(f => f.toks.length && f.texto).sort((a, b) => b.toks.length - a.toks.length);
+    for (let guard = 0; guard < 10; guard++) {
+      const toks = [];
+      const re = /[^\s.,;:!?"]+/g; let m;
+      while ((m = re.exec(text))) toks.push({ w: foldStr(m[0]), s: m.index, e: m.index + m[0].length });
+      let done = false;
+      for (let i = 0; i < toks.length && !done; i++) {
+        if (toks[i].w !== "frase") continue;
+        const hit = names.find(f => f.toks.every((t, k) => toks[i + 1 + k] && toks[i + 1 + k].w === t));
+        if (!hit) continue;
+        let end = toks[i + hit.toks.length].e;
+        if (text[end] === ".") end++;
+        const after = text.slice(end).replace(/^\s+/, "");
+        text = text.slice(0, toks[i].s) + hit.texto + (after ? " " + after : "");
+        done = true;
+      }
+      if (!done) break;
+    }
+    return text;
+  }
+
+let vocabSet = null, exameSet = null, exameKey = "", vocabSig = "";
+  // Escolhe, entre as alternativas do reconhecimento, a que tem mais termos do vocabulário médico
+  // (termos da máscara aberta valem o dobro); trechos que já são erros conhecidos (correções) contam contra.
+  function bestAlternative(text, alts, cfg) {
+    const T = globalThis.TextoV2, ng = cfg && cfg.ngramas && T ? cfg.ngramas : null;
+    if (!alts || alts.length < 2 || !cfg || ((!Array.isArray(cfg.vocab) || !cfg.vocab.length) && !ng)) return text;
+    const vocab = Array.isArray(cfg.vocab) ? cfg.vocab : [];
+    if (!vocabSet || vocabSet.size !== vocab.length) vocabSet = new Set(vocab.map(w => foldStr(w)));
+    const ex = cfg.vocabExame || [];
+    if (exameKey !== ex.join("|")) { exameKey = ex.join("|"); exameSet = new Set(ex.map(w => foldStr(w))); }
+    const erros = (cfg.correcoes || []).filter(c => c && c.de && !c.ctx && !/^(auto ?texto|macro) /.test(c.de)).map(c => " " + vnorm(c.de) + " ");
+    const score = t => {
+      const ws = foldStr(t).split(/[^a-z0-9]+/);
+      let n = ws.reduce((s, w) => s + (exameSet.has(w) && w.length >= 5 ? 2 : vocabSet.has(w) && w.length >= 6 ? 1 : 0), 0);
+      const v = " " + vnorm(t) + " "; for (const e of erros) if (v.includes(e)) n -= 1;
+      return ng ? n + 0.25 * T.ngramScore(t, ng) : n;   // sequências de palavras do banco desempatam e reforçam
+    };
+    let best = text, bs = score(text);
+    for (const a of alts) { const sc = score(a); if (sc > bs) { best = a; bs = sc; } }
+    return best;
+  }
+
+const ctxWords = (t, lado) => { const ws = foldStr(t).split(/[^a-z0-9]+/).filter(w => w.length >= 3); return lado < 0 ? ws.slice(-2) : ws.slice(0, 2); };
+
+const exameAtual = cfg => cfg.exameAtual || (document.getElementById("plantaoExam") || {}).value || null;
+  const isMacro = c => c && /^(auto ?texto|macro) /i.test(String(c.de || ""));
+  // correções do médico, substituições aprendidas, ajustes automáticos de palavras; por fim macros e frases
+  function posTexto(text, cfg) {
+    const T = globalThis.TextoV2, cs = cfg.correcoes || [];
+    let t = applyCorrections(text, cs.filter(c => !isMacro(c)));
+    if (T) {
+      t = T.aplicarSubstituicoes(t, cfg.substituicoes, exameAtual(cfg));
+      // a correção salva vale também para variantes próximas ("sub galeão", "subgaleão", "sub-galeal" -> "subgaleal")
+      const vo = { vocabFreq: cfg.vocabFreq }, rs = cs.filter(c => !isMacro(c));
+      t = T.aplicarVariantes(t, rs, vo);
+      t = T.melhorarPalavras(t, { vocabFreq: cfg.vocabFreq, ngramas: cfg.ngramas });
+      t = T.aplicarVariantes(t, rs, vo);
+    }
+    return expandPhrases(applyCorrections(t, cs.filter(isMacro)), cfg.frases).replace(/([.!?])\s*\.(?!\.)/g, "$1");
+  }
+
+function punct(s) {
+  // números e medidas por extenso antes da pontuação ("dois vírgula três" não pode virar "dois, três")
+  if (typeof normalizarFala === "function") s = normalizarFala(s.trim());
+  s = " " + s.trim() + " ";
+  const rules = [
+    [/\s+ponto par[aá]grafo\s+/gi, ".\n"],
+    [/\s+(nova linha|novo par[aá]grafo|par[aá]grafo|pr[oó]xima linha)\s+/gi, "\n"],
+    [/\s+ponto e v[ií]rgula\s+/gi, "; "],
+    [/\s+ponto final\s+/gi, ". "],
+    [/\s+dois pontos\s+/gi, ": "],
+    [/\s+ponto de interroga[cç][aã]o\s+|\s+interroga[cç][aã]o\s+/gi, "? "],
+    [/\s+v[ií]rgula\s+/gi, ", "],
+    [/\s+barra\s+/gi, " / "],
+    [/\s+(h[ií]fen|tra[cç]o)\s+/gi, " - "],
+    [/\s+abre par[eê]nteses?\s+/gi, " ("],
+    [/\s+fecha par[eê]nteses?\s+/gi, ") "],
+    [/\s+abre aspas\s+/gi, " \""],
+    [/\s+fecha aspas\s+/gi, "\" "],
+    [/\s+ponto\s+(?!de\s)/gi, ". "]
+  ];
+  for (const [re, to] of rules) s = s.replace(re, to);
+  s = s.replace(/\s+ponto\s*$/i, ".");
+  if (typeof siglas === "function") s = siglas(s);
+  return s
+    .replace(/\(\s+/g, "(").replace(/\s+\)/g, ")")
+    .replace(/\s+([.,;:?])/g, "$1")
+    .replace(/([.,;:?])(?=[^\s\n\d)"])/g, "$1 ")
+    .replace(/[ \t]+\n/g, "\n").replace(/\n[ \t]+/g, "\n")
+    .replace(/ {2,}/g, " ")
+    .replace(/^[ \t]+|[ \t]+$/g, "");
+}
+
+
+globalThis.usgVoice = { bestAlternative, posTexto, punct };
+})();
+
 /* Funções puras compartilhadas com os testes Node; nenhuma dependência de DOM. */
 (function (root) {
   "use strict";
@@ -3708,19 +4196,40 @@ window.tutuSite.appReady = true;
     Object.entries(ui.panels).forEach(([n, p]) => { p.hidden = n !== name; $(p.getAttribute("aria-labelledby")).setAttribute("aria-selected", String(n === name)); });
     $("rightToggle").setAttribute("aria-expanded", "true");
   };
-  ui.toggleLeft = () => { const mini = app.classList.toggle("left-mini"); store.set("v2LeftMini", mini ? "1" : "0"); leftToggle.setAttribute("aria-expanded", String(!mini)); };
+  let leftPinned = store.get("v2LeftMini") !== "1" && innerWidth >= 760;
+  let leftPeekTimer = null;
+  const showLeft = open => {
+    app.classList.toggle("left-mini", !open);
+    leftToggle.setAttribute("aria-expanded", String(open));
+    leftToggle.setAttribute("aria-pressed", String(leftPinned));
+    leftToggle.title = leftPinned ? "Desafixar máscaras · Ctrl+E" : "Fixar máscaras · Ctrl+E";
+  };
+  const setLeftPinned = pinned => {
+    clearTimeout(leftPeekTimer);
+    leftPinned = pinned;
+    store.set("v2LeftMini", pinned ? "0" : "1");
+    $("setCollapse").value = pinned ? "0" : "1";
+    showLeft(pinned);
+  };
+  ui.toggleLeft = () => setLeftPinned(!leftPinned);
+  leftToggle.addEventListener("mouseenter", () => { clearTimeout(leftPeekTimer); showLeft(true); });
+  left.addEventListener("mouseenter", () => clearTimeout(leftPeekTimer));
+  left.addEventListener("mouseleave", () => {
+    clearTimeout(leftPeekTimer);
+    if (!leftPinned) leftPeekTimer = setTimeout(() => showLeft(false), 250);
+  });
   ui.toggleRight = () => { const mini = app.classList.toggle("right-mini"); store.set("v2RightMini", mini ? "1" : "0"); $("rightToggle").setAttribute("aria-expanded", String(!mini)); };
   ui.compact = () => { app.classList.toggle("compact"); ui.settings(false); ui.positionPalette?.(); };
   ui.night = () => { const night = document.body.classList.toggle("sepia-night"); store.set("v2Night", night ? "1" : "0"); $("nightToggle").textContent = night ? "Sépia dia" : "Sépia noite"; $("nightToggle").setAttribute("aria-pressed", String(night)); $("themeButton").textContent = night ? "☀" : "☾"; };
   top.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
   if (store.get("v2Night") === "1") ui.night();
-  if (store.get("v2LeftMini") === "1" || innerWidth < 760) ui.toggleLeft();
+  showLeft(leftPinned);
   if (store.get("v2RightMini") === "1" || innerWidth < 760) ui.toggleRight();
   $("maskSearch").oninput = () => { document.querySelectorAll("#exams .exam").forEach(b => b.hidden = !TutuV2Core.score($("maskSearch").value, b.textContent)); };
   const render = renderExams;
   renderExams = () => { render(); $("maskSearch").oninput(); };
   // Os atalhos antigos de foco/plantão passam a usar as disposições da casca.
-  setCollapsed = on => { if (app.classList.contains("left-mini") !== on) ui.toggleLeft(); };
+  setCollapsed = on => setLeftPinned(!on);
   $("setCollapse").onchange = () => setCollapsed($("setCollapse").value === "1");
   setFoco = on => { app.classList.toggle("focus-mode", on); $("setFoco").checked = on; document.body.classList.toggle("foco", on); store.set("foco", on ? "1" : "0"); };
   const originalPlantao = setPlantao;
@@ -4077,6 +4586,8 @@ window.tutuSite.appReady = true;
   }
   function execute(index) { const item = results[index]; if (!item) return; close(); item.run(); }
   input.oninput = () => { selected = 0; draw(); };
+  // A paleta pode estar aberta com resultados da versão anterior do banco.
+  document.addEventListener("tutu-bancos", () => { conts = []; results = []; close(); });
   ui.openPalette = async () => {
     if (!pal.hidden) { close(); return; }
     previousFocus = document.activeElement;
@@ -5058,6 +5569,7 @@ window.tutuSite.appReady = true;
   "use strict";
   const ui = window.tutuV2, core = TutuV2Core;
   let compIdx = null, compKey = "", wordIdx = null, wordKey = "";
+  document.addEventListener("tutu-bancos", () => { compIdx = wordIdx = null; compKey = wordKey = ""; });
   const exampleLines = () => Object.values(examples || {}).flatMap(list => (list || []).flatMap(t => String(t).split("\n")));
   const sig = () => [BANK.length, BANK.length ? BANK[BANK.length - 1][3].length : 0, frases.length, exampleLines().length].join(":");
   function completionIndex() {
@@ -5271,9 +5783,31 @@ window.tutuSite.appReady = true;
   }
 
   /* ---------- bancos ---------- */
+  const selo = el("span", { id: "bancoState", class: "v2-banco-selo", role: "status" });
+  selo.hidden = true; ind.before(selo);
+  let seloEpoch = 0;
+  async function bancoStatus() {
+    const epoch = ++seloEpoch;
+    const [idx, erro] = await Promise.all([S.kvGet("_gh/indice"), S.kvGet("_gh/bancosErro")]);
+    if (epoch !== seloEpoch) return;
+    if (!idx && !erro) { selo.hidden = true; return; }
+    const g = await T.lerBancosGh();
+    if (epoch !== seloEpoch) return;
+    const fontes = [...new Set((idx?.bancos || []).map(b => b.origem).filter(Boolean))].map(v => v === "radio" ? "Radio" : "Notion").join("/") || "Notion";
+    const contagens = (idx?.bancos || []).map(b => b.contagem);
+    const n = contagens.length && contagens.every(n => Number.isFinite(n) && n >= 0)
+      ? contagens.reduce((a, b) => a + b, 0) : (g.tc?.frases.length || 0) + (g.nt?.frases.length || 0);
+    const recente = Date.now() - Date.parse(idx?.quando || idx?.atualizado) <= 48 * 36e5;
+    selo.hidden = false;
+    selo.dataset.state = erro ? "erro" : recente ? "ok" : "antigo";
+    selo.textContent = "Banco atualizado em " + (hora(idx?.atualizado).replace(",", "") || "data desconhecida") + " · " + n + " frases · " + fontes;
+    selo.title = erro || "Última leitura: " + hora(idx?.quando) + ((idx?.avisos?.length) ? " · " + JSON.stringify(idx.avisos) : "");
+  }
+  document.addEventListener("tutu-bancos-status", bancoStatus);
+  bancoStatus(); setInterval(bancoStatus, 60000);
   async function aplicarBancos() {
     const g = await T.lerBancosGh();
-    if (g.pares.length) window.BANK_PARES = g.pares;
+    window.BANK_PARES = g.pares;
     if (!g.tc && !g.nt) { if (g.pares.length) document.dispatchEvent(new CustomEvent("tutu-bancos")); return; }
     const b = (await T.exportBackup()).bancos;
     const tc = T.mergeBank(g.tc ? g.tc.frases : window.BANK_TC, b.bank_tc).entries;
@@ -5292,6 +5826,7 @@ window.tutuSite.appReady = true;
     $("bankInfo").textContent = BANK.filter(e => !/^Laudos/.test(e[1])).length + " frases · atualizado em " + T.brData((g.tc || g.nt).atualizado);
     NT_INFO = { laudos: window.BANK_NT_META.laudos, data: window.BANK_NT_META.data, fonte: "db" }; showNtInfo();
     document.dispatchEvent(new CustomEvent("tutu-bancos"));
+    await bancoStatus();
   }
   async function atualizarBancos() {
     if (await T.bancosRefresh() || !window.BANK_GH?.tc && (await T.lerBancosGh()).tc) await aplicarBancos();
@@ -6020,7 +6555,7 @@ window.tutuSite.appReady = true;
     sheet.focus({ preventScroll: true }); caretAtEnd(ultimo);
     const lista = pend.get(caso) || []; sugs.forEach((s, i) => lista.push({ chave: s.chave, texto: linhas[i] })); pend.set(caso, lista);
     updateCount(); renderAlerts(); scheduleCaseSave(); pushVersion("Conclusão sugerida");
-    setStatus("Conclusão inserida a partir do banco, sem usar o Claude. Pode editar: o Tutu aprende com a sua edição.", "ok");
+    setStatus("Conclusão inserida a partir do banco, sem usar o Claude. Pode editar: o Laudos aprende com a sua edição.", "ok");
     return true;
   }
   function dispensar() {
@@ -6901,4 +7436,239 @@ window.tutuSite.appReady = true;
   });
   observer.observe(panel, { attributes: true, attributeFilter: ["hidden"] });
   if (demo) ui.panel("Corretor");
+})();
+
+/* USG do celular: texto filtrado na fila; organização local, sem IA. */
+(function (root) {
+  "use strict";
+  const palavras = t => String(t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().match(/[a-z]+/g) || [];
+  function anonimizar(texto, cfg = {}) {
+    if (typeof texto !== "string" || texto.length > 80000) throw Error("bloqueado: possível dado de paciente");
+    const vocab = new Set(palavras(["informações clínicas técnica de exame achados conclusão fígado sem alterações fluxo trifásico estenose de vps cm s cisto medindo artéria femoral superficial direita esquerda com placa anos idade a da do dos das e", ...(cfg.vocab || []), ...(cfg.vocabExame || []), cfg.mask || "", ...(cfg.banco || [])].join(" ")));
+    const mes = "(?:janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)";
+    const numero = "(?:um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa)";
+    const dia = "(?:\\d{1,2}|primeiro|" + numero + "(?:\\s+e\\s+" + numero + ")?)";
+    const ano = "(?:\\d{4}|(?:dois\\s+mil|mil\\s+novecentos)(?:\\s+(?:e\\s+)?" + numero + ")*)";
+    let t = texto.replace(/\0/g, "")
+      .replace(/\b(?:paciente|sr|sra|senhor|senhora)\b(?:\(a\))?\.?\s*[:=-]?\s*[^\n;.!?]+/gi, "[identidade]")
+      .replace(/^\s*(?:dr(?:\(a\)|a)?\.?|médico|solicitante|assinatura|crm)\s*:?.*$/gim, "[assinatura]")
+      .replace(/\b\d{4}-\d{2}-\d{2}(?:T[\d:.Z+-]+)?\b|\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/g, "[data]")
+      .replace(new RegExp("\\b" + dia + "\\s+de\\s+" + mes + "(?:\\s+(?:de\\s+)?" + ano + ")?\\b", "gi"), "[data]");
+    const desconhecidos = trecho => {
+      let n = 0;
+      for (const p of palavras(trecho)) {
+        if (/^(?:da|de|do|dos|das|e)$/.test(p)) continue;
+        n = vocab.has(p) ? 0 : n + 1;
+        if (n >= 2) return true;
+      }
+      return false;
+    };
+    // Idade junto de palavras desconhecidas é identidade suspeita, em qualquer caixa.
+    for (const trecho of t.split(/[.!?;\n]/)) {
+      const idade = /\b\d{1,3}\s*(?:anos?|a)\b/gi;
+      for (const m of trecho.matchAll(idade)) {
+        if (desconhecidos(trecho.slice(0, m.index)) || desconhecidos(trecho.slice(m.index + m[0].length))) throw Error("bloqueado: possível dado de paciente");
+      }
+    }
+    t = t.replace(/\b(?=[a-z\d-]*[a-z])(?=[a-z\d-]*\d)[a-z\d]+(?:-[a-z\d]+)*\b/gi, "[identificador]")
+      .replace(/(?:\+?55[\s-]*)?\(?\b\d{2}\)?[\s-]*\d{4,5}[\s-]?\d{4}\b|\b\d{3}\.\d{3}\.\d{3}-\d{2}\b|\d{6,}/g, "[identificador]")
+      .replace(/\b(?:acesso|prontu[aá]rio|cpf)\s*[:#=-]?\s*(?:\[identificador\]|[\d .-]+)/gi, "[identificador]");
+    const semTitulos = t.replace(/Informações Clínicas|Técnica de exame|Achados|Conclusão/g, "");
+    if (/@|\b(?:nome|identifica[cç][aã]o|benefici[aá]rio|nascimento|telefone|celular|endere[cç]o|rg|cns|acesso|prontu[aá]rio|cpf)\s*[:#=]?\s*\S|\b\d{6,}\b|\b\d{2,}(?:[ .-]\d{2,}){2,}\b/i.test(t) ||
+        [...semTitulos.matchAll(/\b[A-ZÀ-Ý][a-zà-ÿ]+\s+(?:(?:da|de|do|dos|das)\s+)?[A-ZÀ-Ý][a-zà-ÿ]+\b/g)].some(m => desconhecidos(m[0]))) throw Error("bloqueado: possível dado de paciente");
+    return t.trim();
+  }
+  const normalizar = (t, cfg) => root.usgVoice.posTexto(root.usgVoice.punct(t), cfg);
+  const prioridade = e => /arterial.*(?:inferior|mmii)/i.test(e.name) ? 0 : /car[oó]tid/i.test(e.name) ? 1 : /abd[oô]m/i.test(e.name) ? 2 : 3;
+  const examesUSG = list => list.filter(e => /\busg\b|ultrass|doppler|ecograf/i.test([e.name, e.code, e.mask?.split("\n")[0]].join(" "))).sort((a, b) => prioridade(a) - prioridade(b));
+  const api = { anonimizar, normalizar, examesUSG };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TutuUSG = api;
+})(globalThis);
+
+(() => {
+  "use strict";
+  if (typeof document === "undefined") return;
+  const ui = window.tutuV2, T = window.tutuSite, G = T.gh, U = window.TutuUSG, el = ui.el, button = ui.button;
+  let speech = null, ouvindo = false, busy = false, listBusy = false;
+  const msg = el("p", { id: "usgMsg", role: "status", "aria-live": "polite" });
+  const dizer = t => { msg.textContent = t; };
+  const dialog = el("dialog", { id: "usgDialog", "aria-labelledby": "usgTitulo" });
+  const exame = el("select", { id: "usgExame", "aria-label": "Exame de USG" });
+  const texto = el("textarea", { id: "usgTexto", rows: "9", "aria-label": "Achados ditados", placeholder: "Dite somente os achados, sem identificação do paciente. Você pode editar aqui." });
+  const parcial = el("p", { id: "usgParcial", "aria-live": "polite" });
+  const iniciar = button("Iniciar áudio", () => { try { captar(); } catch (e) { stop(); dizer(e.message); } }, { id: "usgIniciar" });
+  const parar = button("Parar", () => stop(), { id: "usgParar" }); parar.disabled = true;
+  const enviar = button("Enviar", () => enviarPedido(), { id: "usgEnviar" });
+  function preencher() {
+    const selected = exame.value; exame.replaceChildren();
+    for (const e of U.examesUSG(EXAMS)) exame.append(el("option", { value: e.id }, e.name));
+    if ([...exame.options].some(o => o.value === selected)) exame.value = selected;
+    if (!exame.options.length) dizer("Nenhuma máscara USG neste navegador. Sincronize nas Configurações.");
+  }
+  function config(ex) {
+    publishVoice();
+    const cfg = JSON.parse($("voiceConfig").textContent), antes = current, ext = extras;
+    try { current = ex; extras = []; cfg.vocabExame = vocabExame(); }
+    finally { current = antes; extras = ext; }
+    cfg.exameAtual = ex.id; return cfg;
+  }
+  function filtrar(t, ex) {
+    return U.anonimizar(t, { ...config(ex), mask: ex.mask, banco: BANK.map(r => r[3] || "") });
+  }
+  function stop() {
+    ouvindo = false; const s = speech; speech = null; s?.stop();
+    iniciar.disabled = false; parar.disabled = true; exame.disabled = false;
+  }
+  function captar() {
+    const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara USG.");
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Speech) throw Error("Áudio indisponível neste navegador. Digite os achados ou use um navegador com Web Speech.");
+    const s = speech = new Speech(); s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
+    const cfg = config(ex);
+    if (window.SpeechRecognitionPhrase && "phrases" in s) {
+      try { s.phrases = [...new Set([...cfg.vocabExame, ...cfg.vocab])].slice(0, 300).map(w => new SpeechRecognitionPhrase(w, cfg.vocabExame.includes(w) ? 5 : 2.5)); } catch (_) {}
+    }
+    s.onresult = ev => {
+      let interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i], cfg = config(ex), alts = Array.from(r, a => a.transcript);
+        const t = U.normalizar(usgVoice.bestAlternative(alts[0], alts, cfg), cfg);
+        if (r.isFinal) texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + t;
+        else interim += t;
+      }
+      parcial.textContent = interim;
+    };
+    s.onerror = ev => { dizer("Voz: " + ev.error); if (/not-allowed|audio-capture|service-not-allowed/.test(ev.error)) stop(); };
+    s.onend = () => { parcial.textContent = ""; if (ouvindo && speech === s) { try { s.start(); } catch (_) { stop(); } } };
+    s.start(); ouvindo = true; iniciar.disabled = true; parar.disabled = false; exame.disabled = true;
+    dizer("Ouvindo em pt-BR. Dite só achados: o reconhecimento pode usar o serviço de voz do navegador.");
+  }
+  async function enviarPedido() {
+    if (busy) return;
+    if (ouvindo) { dizer("Pare o ditado antes de enviar."); return; }
+    busy = true; enviar.disabled = true;
+    try {
+      // Nenhuma consulta remota antes de filtrar o texto editado.
+      const ex = EXAMS.find(e => e.id === exame.value); if (!ex) throw Error("Escolha uma máscara USG.");
+      const fresh = filtrar(texto.value, ex); if (!fresh) throw Error("Dite ou digite os achados.");
+      if (!G.token) throw Error("Salve a chave em Configurações › Sincronização.");
+      const r = await fetch("https://api.github.com/repos/" + G.repo, { cache: "no-store", headers: { Authorization: "Bearer " + G.token } });
+      if (!r.ok || !(await r.json()).private) throw Error("A fila exige o repositório privado de dados.");
+      await G.putJson("fila-usg/" + crypto.randomUUID() + ".json", { exame: ex.id, modo: "audio", texto: fresh, criado: new Date().toISOString() }, null, "USG: texto anônimo");
+      texto.value = ""; dizer("Enviado. Abra em USG do celular neste aparelho ou em qualquer PC sincronizado."); await atualizar();
+    } catch (e) { dizer(/fetch/i.test(e.message) ? "Rede indisponível. O texto permanece nesta tela para tentar novamente." : e.message); }
+    finally { busy = false; enviar.disabled = false; }
+  }
+  dialog.append(el("h2", { id: "usgTitulo" }, "Ditar USG"), el("label", { for: "usgExame" }, "Exame"), exame,
+    el("p", { id: "usgModo" }, "Áudio"), iniciar, parar, texto, parcial, enviar, button("Fechar", () => { stop(); dialog.close(); }), msg);
+  document.body.append(dialog);
+  const abrirDialog = () => { preencher(); dialog.showModal(); };
+  document.querySelector(".v2-top-actions").prepend(button("Ditar USG", abrirDialog, { id: "usgOpen" }));
+  dialog.addEventListener("cancel", stop); window.addEventListener("pagehide", stop);
+  const painel = el("details", { id: "usgInbox" }), cachePedidos = new Map();
+  const lista = el("div", { id: "usgLista" }), inboxMsg = el("p", { id: "usgInboxMsg", role: "status" });
+  const sugestoes = el("details", { id: "usgSugestoes" });
+  painel.append(el("summary", {}, "USG do celular"), button("Atualizar pedidos", () => atualizar()), inboxMsg, lista, sugestoes); ui.center.prepend(painel);
+  let vinculosPendentes = Promise.resolve();
+  function mudarVinculos(fn) {
+    const tarefa = vinculosPendentes.then(async () => {
+      const vinculos = (await T.sync.kvGet("_usg/vinculos")) || {};
+      fn(vinculos); await T.sync.kvSet("_usg/vinculos", vinculos);
+    });
+    vinculosPendentes = tarefa.catch(() => {}); return tarefa;
+  }
+  function organizar(fresh) {
+    const ps = [...sheet.children], hi = ps.findIndex(p => norm(p.textContent) === "achados");
+    const ci = ps.findIndex((p, i) => i > hi && norm(p.textContent) === "conclusão");
+    if (hi < 0 || ci < 0) throw Error("A máscara precisa das seções Achados e Conclusão.");
+    // Topografia derivada dos parágrafos da máscara, sem catálogo paralelo de órgãos.
+    const bases = ps.slice(hi + 1, ci).filter(p => p.textContent.trim()).map(p => {
+      const prefixo = fold(p.textContent).split(/[:;]|\b(?:com|sem|apresenta\w*|de calibre|de dimens\w*|pervi\w*|calibres?|fluxo\w*)\b/)[0];
+      return { p, ts: terms(prefixo, true).filter(t => !/^(arter|segme|estru|paren)$/.test(t)), lado: lado(p.textContent), fs: [] };
+    });
+    const achados = fresh.replace(/\[(?:identidade|identificador|data|assinatura)\]/g, "").split(/\n+|(?<=[.!?;])\s+/).map(s => s.replace(/^[\s.;,]+|[\s;]+$/g, "")).filter(Boolean);
+    const sobras = [], refs = [];
+    for (const f of achados) {
+      const ts = new Set(terms(f)), lf = lado(f);
+      const ranks = bases.map(b => {
+        const sc = b.ts.filter(t => ts.has(t)).reduce((s, t) => s + 1 / bases.filter(x => x.ts.includes(t)).length, 0);
+        return { b, sc: lf && b.lado && lf !== b.lado ? 0 : sc + (sc && lf && lf === b.lado ? 0.5 : 0) };
+      }).sort((a, b) => b.sc - a.sc);
+      if (ranks[0]?.sc > 0 && ranks[0].sc > (ranks[1]?.sc || 0)) ranks[0].b.fs.push(f); else sobras.push(f);
+      refs.push({ f, frases: pickPhrases(f, 3) });
+    }
+    for (const b of bases) if (b.fs.length) b.p.innerHTML = '<span class="chg usg-origem">' + esc(b.fs.join(" ")) + '</span>';
+    for (const f of sobras) ps[ci].insertAdjacentHTML("beforebegin", P('<span class="chg usg-nao-encaixado" title="Sem topografia única na máscara: revisar">' + esc(f) + '</span>'));
+    // É uma máscara recém-aberta: a conclusão normal dela deve dar lugar aos achados recebidos.
+    if (achados.length) {
+      for (let i = ci + 1; i < ps.length && !isHeading(ps[i].textContent.trim()); i++) ps[i].remove();
+      suggestConclusion();
+    }
+    sugestoes.replaceChildren(el("summary", {}, "Redação sugerida pelo banco — conferir antes de usar"));
+    for (const r of refs) if (r.frases.length) { sugestoes.append(el("p", {}, r.f)); for (const s of r.frases) sugestoes.append(el("blockquote", {}, s)); }
+    return sobras.length;
+  }
+  async function abrir(id, d) {
+    try {
+      if (!ui.initialized || genBusy || corrBusy) throw Error("Aguarde a operação na folha.");
+      const ex = EXAMS.find(e => e.id === d.exame); if (!ex) throw Error("Sincronize a máscara deste exame primeiro.");
+      const fresh = filtrar(d.texto, ex), antes = ui.activeId(); ui.newTab(ex.id);
+      const caso = ui.activeId(), pedido = id;
+      if (caso === antes) throw Error("Aguarde a operação na folha.");
+      const n = organizar(fresh);
+      updateCount(); renderAlerts();
+      await mudarVinculos(vinculos => { vinculos[caso] = pedido; });
+      await ui.flush();
+      setStatus("USG organizado localmente. Revise os destaques e a conclusão." + (n ? " Há " + n + " achado(s) sem encaixe ao fim de Achados." : ""), "ok");
+    } catch (e) { inboxMsg.textContent = e.message; }
+  }
+  async function apagar(id, sha) {
+    const r = await fetch("https://api.github.com/repos/" + G.repo + "/contents/fila-usg/" + id + ".json", {
+      method: "DELETE", headers: { Authorization: "Bearer " + G.token, "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "USG: remover texto da fila", sha, branch: "main" })
+    });
+    if (!r.ok && r.status !== 404) throw Error("Não foi possível apagar da fila.");
+    cachePedidos.delete(id + ".json");
+  }
+  const antigoClipboard = copyToClipboard;
+  copyToClipboard = async (...args) => {
+    const caso = ui.activeId(), vinculo = T.sync.kvGet("_usg/vinculos").then(v => ({ id: v?.[caso] }), () => ({ erro: true }));
+    // Inicia a cópia na folha atual antes que qualquer await permita trocar de aba.
+    const ok = await antigoClipboard(...args);
+    if (ok) {
+      try {
+        const { id, erro } = await vinculo;
+        if (erro) throw Error("Vínculo indisponível.");
+        if (id) {
+          const r = await G.getJson("fila-usg/" + id + ".json"); if (r) await apagar(id, r.sha);
+          await mudarVinculos(vinculos => { if (vinculos[caso] === id) delete vinculos[caso]; }); await atualizar();
+        }
+      } catch (_) { inboxMsg.textContent = "Laudo copiado; remoção da fila pendente. Copie de novo quando a rede voltar."; }
+    }
+    return ok;
+  };
+  async function atualizar() {
+    if (listBusy || !G.token) return; listBusy = true;
+    try {
+      const arquivos = (await G.list("fila-usg")).filter(f => /^[a-f0-9-]{36}\.json$/.test(f.name)), rows = [];
+      for (const f of arquivos) {
+        let r = cachePedidos.get(f.name);
+        if (!r || r.sha !== f.sha) { r = await G.getJson("fila-usg/" + f.name); if (r) cachePedidos.set(f.name, r); }
+        if (!r) continue;
+        const d = r.json, id = f.name.slice(0, -5), criado = Date.parse(d.criado);
+        const expirado = Number.isFinite(criado) && Date.now() - criado >= 30 * 86400000;
+        const row = el("div", { class: "usg-pedido", "data-id": id, "data-state": expirado ? "expirado" : "recebido" }), ex = EXAMS.find(e => e.id === d.exame);
+        row.append(el("span", {}, (ex?.name || "USG") + (expirado ? " · expirado" : " · recebido")), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
+          try { await apagar(id, r.sha); await atualizar(); }
+          catch (e) { inboxMsg.textContent = e.message; }
+        })); rows.push(row);
+      }
+      lista.replaceChildren(...rows); inboxMsg.textContent = rows.length ? "Organização neste navegador. Revise antes de copiar." : "Nenhum pedido.";
+    } catch (_) { inboxMsg.textContent = "Fila indisponível; confira rede e chave em Sincronização."; }
+    finally { listBusy = false; }
+  }
+  T.onChave(atualizar); setInterval(() => { if (!document.hidden) atualizar(); }, 15000);
+  window.addEventListener("focus", atualizar); document.addEventListener("visibilitychange", () => { if (!document.hidden) atualizar(); }); atualizar();
+  ui.actions.ditarusg = { label: "Ditar USG", run: abrirDialog }; ui.usg = { atualizar, preencher };
 })();

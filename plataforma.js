@@ -23,7 +23,7 @@
       resolve(req.result);
     };
     req.onerror = () => reject(new Error("Não foi possível abrir o banco local. Permita o armazenamento neste navegador."));
-    req.onblocked = () => reject(new Error("Feche outras abas do Tutu para abrir o banco local."));
+    req.onblocked = () => reject(new Error("Feche outras abas do Laudos para abrir o banco local."));
   });
   async function transaction(mode, action){
     const connection = await ready;
@@ -346,31 +346,52 @@
   };
 
   // ---- bancos de frases do repo de dados (cache no IndexedDB; só baixa o que mudou) ----
-  async function bancosRefresh(){
+  let bancoPendente = null;
+  function bancosRefresh(){
+    if (!bancoPendente) bancoPendente = refreshBancos().finally(() => { bancoPendente = null; });
+    return bancoPendente;
+  }
+  async function refreshBancos(){
+    try {
     const idx = await gh.getJson("bancos/indice.json");
     if (!idx) return false;
-    const lista = Array.isArray(idx.json.bancos) ? idx.json.bancos : [];
+    const j = idx.json;
+    const lista = Array.isArray(j.bancos) ? j.bancos : Object.entries(j.bancos || j.hash || {}).map(([slug, v]) =>
+      typeof v === "string" ? { slug, hash: v, origem: j.origem?.[slug], contagem: j.contagem?.[slug] } : { ...v, slug });
+    if ((!Array.isArray(j.bancos) && !j.bancos && !j.hash) || lista.some(b => !/^[a-z0-9_-]+$/.test(b.slug) || !(b.hash || b.atualizado)) || new Set(lista.map(b => b.slug)).size !== lista.length)
+      throw new Error("Índice de bancos inválido.");
+    for (const b of lista) b.origem = b.origem || (typeof j.origem === "string" ? j.origem : j.origem?.[b.slug]);
+    const writes = [];
     let mudou = false;
     for (const b of lista){
       const c = await kvGet("_gh/banco/" + b.slug);
-      if (c && c.atualizado === b.atualizado) continue;
+      if (c && (b.hash ? c.hash === b.hash : c.atualizado === b.atualizado)) continue;
       const f = await gh.getJson("bancos/" + b.slug + ".json");
-      if (!f) continue;
-      await kvSet("_gh/banco/" + b.slug, { atualizado: b.atualizado, doc: f.json }); mudou = true;
+      if (!f || !Array.isArray(f.json?.frases) || f.json.frases.some(e => !Array.isArray(e) || e.length < 4 || e.some(v => typeof v !== "string")))
+        throw new Error("Banco inválido ou ausente: " + b.slug);
+      writes.push(["_gh/banco/" + b.slug, { hash: b.hash || null, atualizado: b.atualizado || j.gerado || f.json.atualizado, doc: f.json }]); mudou = true;
     }
     const antigo = await kvGet("_gh/indice");
     const slugs = lista.map(b => b.slug);
     if (!antigo || antigo.slugs.join() !== slugs.join()) mudou = true;
-    await kvSet("_gh/indice", { slugs, atualizado: idx.json.atualizado || "", quando: new Date().toISOString() });
+    writes.push(["_gh/indice", { slugs, bancos: lista, atualizado: j.gerado || j.atualizado || "", quando: new Date().toISOString(), avisos: j.avisos || [] }]);
+    await transaction("readwrite", s => { for (const [k, v] of writes) s.put(clone(v), k); s.delete("_gh/bancosErro"); });
+    document.dispatchEvent(new CustomEvent("tutu-bancos-status"));
     return mudou;
+    } catch (e) {
+      await kvSet("_gh/bancosErro", e.message || "Falha ao ler os bancos.").catch(() => {});
+      document.dispatchEvent(new CustomEvent("tutu-bancos-status"));
+      throw e;
+    }
   }
   const brData = iso => { const d = new Date(iso); return isNaN(d) ? "sem data" : d.toLocaleDateString("pt-BR"); };
   // {tc, nt}: cada lado = {frases, atualizado} ou null. notas-tomografia = NT; as demais (TC, USG, RM, RX) = TC.
   async function lerBancosGh(){
-    const out = { tc: null, nt: null, pares: [] }, idx = await kvGet("_gh/indice");
+    const rows = new Map(await readAll());
+    const out = { tc: null, nt: null, pares: [] }, idx = rows.get("_gh/indice");
     if (!idx) return out;
     for (const slug of idx.slugs){
-      const c = await kvGet("_gh/banco/" + slug);
+      const c = rows.get("_gh/banco/" + slug);
       if (!c || !Array.isArray(c.doc?.frases)) continue;
       if (slug === "notas-tomografia" && Array.isArray(c.doc?.pares)) out.pares = c.doc.pares.filter(p => Array.isArray(p) && p.length >= 4);   // achado -> conclusão (só nesta página)
       const lado = slug === "notas-tomografia" ? "nt" : "tc";
