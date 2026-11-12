@@ -4114,7 +4114,75 @@ globalThis.usgVoice = { bestAlternative, posTexto, punct };
     }
     return melhor;
   }
-  const api = { normalize, speechDelta, fixFala, exameDoTexto, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
+  /* Corretor: estatísticas do que os chefes mudam (sem IA). entradas = [{id, changes:[{de, para}]}], changes vindas do diff por palavra.
+     Agrupa por texto normalizado (sem acento/caixa/pontuação; números viram #) e conta quantos exames têm cada mudança.
+     Devolve {tira, poe, trocas, principais}: cada item {chave, texto, n, ids} (ids = até `exemplos` exames onde ocorreu). (12/11/2026) */
+  const chaveMudanca = t => normalize(t).replace(/\d+(?:[.,]\d+)*/g, "#").replace(/[^a-z#\s]+/g, " ").replace(/\s+/g, " ").trim();
+  function estatisticasMudancas(entradas, { max = 15, exemplos = 5 } = {}) {
+    const mapas = { tira: new Map(), poe: new Map(), trocas: new Map(), remocoes: new Map() };
+    const somar = (mapa, chave, texto, id) => {
+      if (!chave) return;
+      const o = mapa.get(chave) || { chave, n: 0, ids: [], formas: new Map() };
+      o.n++; if (!o.ids.includes(id) && o.ids.length < exemplos) o.ids.push(id);
+      o.formas.set(texto, (o.formas.get(texto) || 0) + 1); mapa.set(chave, o);
+    };
+    for (const e of entradas || []) for (const c of e.changes || []) {
+      const de = String(c.de || "").trim(), para = String(c.para || "").trim(), kd = chaveMudanca(de), kp = chaveMudanca(para);
+      if (de && para) { if (kd !== kp) { somar(mapas.trocas, kd + " → " + kp, de + " → " + para, e.id); somar(mapas.tira, kd, de, e.id); somar(mapas.poe, kp, para, e.id); } }
+      else if (de) { somar(mapas.tira, kd, de, e.id); somar(mapas.remocoes, kd, de, e.id); }
+      else if (para) somar(mapas.poe, kp, para, e.id);
+    }
+    const top = (mapa, n = max) => [...mapa.values()].map(o => ({ chave: o.chave, n: o.n, ids: o.ids, texto: [...o.formas].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0] }))
+      .sort((a, b) => b.n - a.n || a.chave.localeCompare(b.chave)).slice(0, n);
+    const principais = [...top(mapas.trocas, 1e9).map(o => ({ ...o, tipo: "troca" })), ...top(mapas.remocoes, 1e9).map(o => ({ ...o, tipo: "tira" }))]
+      .filter(o => o.n >= 2).sort((a, b) => b.n - a.n || a.chave.localeCompare(b.chave)).slice(0, 5);
+    return { tira: top(mapas.tira), poe: top(mapas.poe), trocas: top(mapas.trocas), principais };
+  }
+  /* Aprendizado de voz com a IA: compara o ditado bruto com o laudo final copiado, alinha por palavras (LCS) e devolve trocas curtas
+     (1 a 3 palavras de cada lado) em que a palavra ditada some do texto final e a final lembra o som ou é do vocabulário.
+     Reestruturação longa, inserção/remoção pura, números e flexão simples (estenose/estenoses) ficam de fora.
+     vocab = palavras conhecidas (iterável). Devolve [{de, para, antes, depois}] (antes/depois = palavras vizinhas no final). */
+  const palavrasTexto = t => [...String(t || "").replace(/\[<[^>]*>\]/g, " ").matchAll(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu)].map(m => ({ w: m[0].replace(/[-'’]+$/, ""), f: normalize(m[0]).replace(/[^a-z0-9]/g, "") })).filter(x => x.f);
+  const bigramas = s => { const m = new Map(); for (let i = 0; i < s.length - 1; i++) m.set(s.slice(i, i + 2), (m.get(s.slice(i, i + 2)) || 0) + 1); return m; };
+  function dice(a, b) {
+    const x = bigramas(a), y = bigramas(b); let comum = 0;
+    for (const [k, n] of x) comum += Math.min(n, y.get(k) || 0);
+    return a.length + b.length < 4 ? 0 : 2 * comum / (a.length + b.length - 2);
+  }
+  const FUNCAO = new Set(["de", "da", "do", "das", "dos", "e", "o", "a", "os", "as", "um", "uma", "em", "no", "na", "com", "para", "por", "que", "se", "ao", "ou"]);
+  function trocasVoz(ditado, final, vocab) {
+    const A = palavrasTexto(ditado), B = palavrasTexto(final);
+    if (!A.length || !B.length || A.length > 2500 || B.length > 2500) return [];
+    const n = A.length, m = B.length, L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i].f === B[j].f ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    const voc = new Set([...(vocab || [])].map(w => normalize(w).replace(/[^a-z0-9]/g, ""))), naFinal = new Set(B.map(x => x.f)), out = [], vistos = new Set();
+    let i = 0, j = 0, ai = 0, bj = 0;
+    const fecha = (ia, ib, ja, jb) => {   // A[ia..ib) x B[ja..jb)
+      const a = A.slice(ia, ib), b = B.slice(ja, jb);
+      if (!a.length || !b.length || a.length > 3 || b.length > 3) return;
+      if ([...a, ...b].some(x => /\d/.test(x.f))) return;
+      if (!a.some(x => x.f.length >= 3 && !FUNCAO.has(x.f)) || !b.some(x => x.f.length >= 3 && !FUNCAO.has(x.f))) return;
+      if (a.some(x => naFinal.has(x.f))) return;   // a palavra ditada ainda aparece no final: foi reordenação, não erro de voz
+      const fa = a.map(x => x.f).join(""), fb = b.map(x => x.f).join("");
+      if (a.length === 1 && b.length === 1 && Math.abs(fa.length - fb.length) <= 2 && (fa.startsWith(fb) || fb.startsWith(fa))) return;   // flexão
+      const pa = phoneKey(fa), pb = phoneKey(fb), lim = Math.floor(Math.max(pa.length, pb.length) * 0.34);
+      const parecido = Math.max(fa.length, fb.length) >= 4 && distance(pa, pb) <= Math.max(1, lim);
+      const conteudo = b.filter(x => x.f.length >= 4 && !FUNCAO.has(x.f)), noVocab = conteudo.length > 0 && conteudo.every(x => voc.has(x.f));
+      const desconhecida = a.some(x => !voc.has(x.f) && !FUNCAO.has(x.f)), d = dice(fa, fb);
+      const viaVocab = noVocab && ((desconhecida && d >= 0.2) || (a.length === 1 && b.length === 1 && a[0].f[0] === b[0].f[0] && d >= 0.4));
+      if (!parecido && !viaVocab) return;
+      const de = a.map(x => x.w).join(" "), para = b.map(x => x.w).join(" "), k = normalize(de) + "|" + normalize(para);
+      if (vistos.has(k)) return; vistos.add(k);
+      out.push({ de: de.toLowerCase(), para, antes: B[ja - 1]?.w || "", depois: B[jb]?.w || "" });
+    };
+    while (i < n && j < m) {
+      if (A[i].f === B[j].f) { fecha(ai, i, bj, j); i++; j++; ai = i; bj = j; }
+      else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++;
+    }
+    fecha(ai, n, bj, m);
+    return out;
+  }
+  const api = { estatisticasMudancas, trocasVoz, normalize, speechDelta, fixFala, exameDoTexto, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
     lastSentence, buildCompletionIndex, completeSentence, laudosToNotion };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuV2Core = api;
@@ -7281,7 +7349,9 @@ window.tutuSite.appReady = true;
   const signature = /^\s*Dr(?:\(a\)|a)?\.?\s*:\s*([^\r\n]+)/im;
   const semChefe = "chefe não identificado";
   let pares = [], selecionado = "", lado = false, ladoAmplo = false, busy = false, banco;
-  const cache = new WeakMap();
+  const cache = new WeakMap(), T = window.tutuSite, G = T?.gh;
+  let indice = [], lidos = {}, lidosRemoto = {}, lidosSha = null, ghBusy = false, filaLidos = Promise.resolve();
+  const pendentes = new Map(), cachePares = new Map(), falhas = new Set(), carregando = new Set();
 
   function normalizar(d) {
     if (!d || typeof d !== "object" || !["capturado_em", "final", "preliminar", "chefe", "titulo"].every(k => typeof d[k] === "string") ||
@@ -7294,6 +7364,14 @@ window.tutuSite.appReady = true;
       acesso: d.acesso ?? "",
       chefe: d.chefe.trim() || d.final.match(signature)?.[1].trim() || "",
       titulo: d.titulo.trim() || d.final.split(/\r?\n/).find(l => l.trim())?.trim() || "Sem título" };
+  }
+  /* Par do repo de dados (FORMATO-PARES.md) na forma interna; o contrato guarda texto puro de cada lado. */
+  function deContrato(d) {
+    const t = x => (x && typeof x.texto === "string" ? x.texto : "");
+    if (!d || !/^\d{4,}$/.test(String(d.acesso)) || !t(d.preliminar).trim() || !t(d.definitivo).trim()) throw new Error("Par inválido");
+    const final = t(d.definitivo);
+    return { id: String(d.acesso), seq: 0, capturado_em: String(d.capturadoEm || d.aprovadoEm || d.data + "T12:00:00Z"), final, preliminar: t(d.preliminar), acesso: String(d.acesso),
+      chefe: String(d.chefe || "").trim() || final.match(signature)?.[1].trim() || "", titulo: String(d.exame || d.descricaoPacs || "Sem título").trim() };
   }
   function lerJSONL(texto) {
     const res = { pares: [], puladas: 0 };
@@ -7334,7 +7412,7 @@ window.tutuSite.appReady = true;
   function analisar(p) {
     if (cache.has(p)) return cache.get(p);
     const a = secoes(p.preliminar), b = secoes(p.final), sections = [], changes = [];
-    let removidas = 0, adicionadas = 0, total = 0;
+    let removidas = 0, adicionadas = 0;
     for (const nome of new Set([...Object.keys(a), ...Object.keys(b)])) {
       const antes = a[nome] || "", depois = b[nome] || "";
       if (!antes && !depois) continue;
@@ -7350,10 +7428,10 @@ window.tutuSite.appReady = true;
         if (de) rm += palavras(de); else ins += palavras(para);
         if (de || !anterior?.matches("del")) changes.push({ secao: nome, de, para });
       }
-      removidas += rm; adicionadas += ins; total += palavras(antes) + palavras(depois);
+      removidas += rm; adicionadas += ins;
       sections.push({ nome, antes, depois, html: host.innerHTML, rm, ins });
     }
-    const res = { sections, changes, removidas, adicionadas, pct: total ? 100 * (removidas + adicionadas) / total : 0 };
+    const res = { sections, changes, removidas, adicionadas };
     cache.set(p, res); return res;
   }
 
@@ -7432,6 +7510,7 @@ window.tutuSite.appReady = true;
   const sincronizar = () => { if (!panel.hidden && !flutuante.open) flutuante.showModal(); else if (panel.hidden && flutuante.open) flutuante.close(); };
   new MutationObserver(sincronizar).observe(panel, { attributes: true, attributeFilter: ["hidden"] });
   const actions = el("div", { class: "corretor-actions" });
+  const ghBtn = button("Atualizar do GitHub", () => carregarGh(), { id: "corretorGh" });
   const atualizar = button("Carregar da ponte", carregar, { id: "corretorCarregar" });
   const input = el("input", { type: "file", accept: ".jsonl,application/json,text/plain", id: "corretorArquivo", hidden: "" });
   input.onchange = async () => {
@@ -7441,8 +7520,9 @@ window.tutuSite.appReady = true;
     catch (_) { status.textContent = "Não foi possível ler o arquivo selecionado."; }
     finally { input.value = ""; busy = false; atualizar.disabled = false; }
   };
-  actions.append(atualizar, button("Importar pares.jsonl", () => input.click(), { id: "corretorImportar" }), input);
-  const status = el("p", { id: "corretorStatus", role: "status" }, "Nenhum par carregado.");
+  actions.append(ghBtn, atualizar, button("Importar pares.jsonl", () => input.click(), { id: "corretorImportar" }), input);
+  const ghStatus = el("p", { id: "corretorGhStatus", role: "status" }, "GitHub: ainda não carregado.");
+  const status = el("p", { id: "corretorStatus", role: "status" });
   const filters = el("div", { class: "corretor-actions" });
   function select(id, label, options) {
     const wrapper = el("label", {}, label + " "), s = el("select", { id });
@@ -7450,11 +7530,13 @@ window.tutuSite.appReady = true;
     s.onchange = render; wrapper.append(s); filters.append(wrapper); return s;
   }
   const chefe = select("corretorChefe", "Chefe", [["", "Todos"]]);
-  const exame = select("corretorTipo", "Tipo", [["", "Todos"], ...["USG", "TC", "RM", "Outros"].map(x => [x, x])]);
-  const ordem = select("corretorOrdem", "Ordenar", [["data", "Data (recentes)"], ["mudado", "% mudado (maior)"]]);
-  const acesso = el("input", { id: "corretorAcesso", type: "search", size: "8", inputmode: "numeric", placeholder: "Acesso", "aria-label": "Buscar por acesso" });
+  const exame = select("corretorTipo", "Exame", [["", "Todos"]]);
+  const periodo = select("corretorPeriodo", "Período", [["0", "Tudo"], ["7", "7 dias"], ["30", "30 dias"], ["90", "90 dias"]]);
+  const lidoSel = select("corretorLido", "Leitura", [["", "Todos"], ["nao", "Não lidos"], ["lido", "Lidos"]]);
+  const ordem = select("corretorOrdem", "Ordenar", [["data", "Data (recentes)"], ["mudado", "Com alterações primeiro"]]);
+  const acesso = el("input", { id: "corretorAcesso", type: "search", size: "14", placeholder: "Acesso, exame, chefe", "aria-label": "Buscar por acesso, exame ou chefe" });
   acesso.oninput = render;
-  const buscaAcesso = el("label", {}, "Acesso "); buscaAcesso.append(acesso); filters.append(buscaAcesso);
+  const buscaAcesso = el("label", {}, "Busca "); buscaAcesso.append(acesso); filters.append(buscaAcesso);
   const lista = el("div", { id: "corretorLista" }), detalhe = el("div", { id: "corretorDetalhe" });
   const amplo = el("dialog", { id: "corretorAmplo", class: "corretor-amplo", "aria-labelledby": "corretorAmploTitulo" });
   const amploConteudo = el("div", { id: "corretorAmploConteudo" });
@@ -7462,26 +7544,120 @@ window.tutuSite.appReady = true;
   panel.append(amplo);
   const panorama = el("div", { id: "corretorPanorama" });
   const esq = el("div", { class: "corretor-esq" }), dir = el("div", { class: "corretor-dir" });
-  esq.append(actions, status, filters, el("p", { class: "meta" },
-    "% mudado = palavras apagadas + adicionadas / total de palavras dos dois textos. Assinatura excluída. Frequência de edição não indica erro clínico."), lista);
+  esq.append(actions, ghStatus, status, filters, el("p", { class: "meta" },
+    "Estatísticas contam em quantos exames o trecho aparece (sem acento, caixa ou pontuação; números viram #). Assinatura excluída. Frequência de edição não indica erro clínico."), lista);
   dir.append(detalhe, panorama);
   panel.prepend(cabecalho); panel.append(esq, dir);
-  function filtros() {
-    const atual = chefe.value; chefe.replaceChildren(el("option", { value: "" }, "Todos"));
-    [...new Set(pares.map(p => p.chefe))].sort().forEach(n => chefe.append(el("option", { value: n || "__sem__" }, n || semChefe)));
-    chefe.value = [...chefe.options].some(o => o.value === atual) ? atual : "";
+
+  /* Itens da lista: índice do GitHub (par baixado sob demanda) + pares locais (ponte/arquivo), todos com a mesma forma. */
+  const dia = s => /^\d{4}-\d\d-\d\d/.test(String(s || "")) ? String(s).slice(0, 10) : "";
+  const dataBR = d => d ? new Date(d + "T12:00:00").toLocaleDateString("pt-BR") : "sem data";
+  function itens() {
+    const locais = new Map(pares.filter(p => p.acesso).map(p => [p.acesso, p])), vistos = new Set(), out = [];
+    for (const it of indice) {
+      vistos.add(it.acesso);
+      out.push({ id: it.acesso, acesso: it.acesso, data: dia(it.data) || dia(it.capturadoEm), chefe: String(it.chefe || "").trim(), exame: it.exame || it.categoria || "Outros",
+        categoria: it.categoria || "", mudou: it.mudou !== false, titulo: it.exame || "Sem título", cap: String(it.capturadoEm || ""), seq: 0, par: cachePares.get(it.acesso) || locais.get(it.acesso) || null });
+    }
+    for (const p of pares) if (!(p.acesso && vistos.has(p.acesso)))
+      out.push({ id: p.id, acesso: p.acesso, data: dia(p.capturado_em), chefe: p.chefe, exame: tipo(p), categoria: "", mudou: true, titulo: p.titulo, cap: p.capturado_em, seq: p.seq, par: p });
+    return out;
   }
+  function filtros() {
+    const its = itens();
+    const refaz = (s, valores) => {
+      const atual = s.value; s.replaceChildren(el("option", { value: "" }, "Todos"));
+      valores.forEach(([v, t]) => s.append(el("option", { value: v }, t)));
+      s.value = [...s.options].some(o => o.value === atual) ? atual : "";
+    };
+    refaz(chefe, [...new Set(its.map(i => i.chefe))].sort().map(n => [n || "__sem__", n || semChefe]));
+    refaz(exame, [...new Set(its.map(i => i.exame))].sort().map(x => [x, x]));
+  }
+  function recorte() {
+    const termo = foldText(acesso.value.trim()), dias = Number(periodo.value), corte = Date.now() - dias * 864e5;
+    return itens().filter(i => (!chefe.value || (i.chefe || "__sem__") === chefe.value) && (!exame.value || i.exame === exame.value) &&
+      (!dias || (i.data && Date.parse(i.data + "T12:00:00") >= corte)) &&
+      (!lidoSel.value || (lidoSel.value === "lido") === Boolean(i.acesso && lidos[i.acesso])) &&
+      (!termo || foldText([i.acesso, i.exame, i.chefe, i.categoria, i.titulo].join(" ")).includes(termo)));
+  }
+
+  /* GitHub: índice leve + lidos.json; cada par só é baixado ao abrir (ou em "Carregar os restantes"). */
+  const ghMsg = e => e?.offline ? "sem rede" : e?.limite ? "limite de requisições do GitHub" : e?.auth ? "a chave não tem acesso ao repositório" : e?.semChave ? "sem chave" : "indisponível";
+  async function carregarGh() {
+    if (demo || ghBusy) return false;
+    if (!G?.token) { ghStatus.textContent = "GitHub: sem chave (Configurações › Sincronização). Use a ponte ou o arquivo."; return false; }
+    ghBusy = true; ghBtn.disabled = true;
+    try {
+      const r = await G.getJson("preliminares/indice.json");
+      if (!r) { ghStatus.textContent = "GitHub: ainda não há preliminares/indice.json no repositório."; return false; }
+      indice = (Array.isArray(r.json?.itens) ? r.json.itens : []).filter(i => i && /^\d{4,}$/.test(String(i.acesso))).map(i => ({ ...i, acesso: String(i.acesso) }));
+      const l = await G.getJson("preliminares/lidos.json");
+      lidosSha = l?.sha || null; lidosRemoto = { ...(l?.json?.lidos || {}) }; lidos = { ...lidosRemoto };
+      for (const [ac, novo] of pendentes) { if (novo) lidos[ac] ||= new Date().toISOString(); else delete lidos[ac]; }
+      ghStatus.textContent = `GitHub: ${indice.length} exames no índice; ${Object.keys(lidos).length} lidos.`;
+      filtros(); render(); return true;
+    } catch (e) { ghStatus.textContent = "GitHub: " + ghMsg(e) + ". Os pares já abertos continuam aqui; a ponte e o arquivo seguem valendo."; return false; }
+    finally { ghBusy = false; ghBtn.disabled = false; }
+  }
+  async function carregarPar(i) {
+    if (!G?.token || cachePares.has(i.acesso) || falhas.has(i.id) || carregando.has(i.id)) return;
+    carregando.add(i.id);
+    try {
+      const r = await G.getJson("preliminares/pares/" + i.acesso + ".json");
+      if (!r) throw new Error("sem par");
+      cachePares.set(i.acesso, deContrato(r.json));
+    } catch (_) { falhas.add(i.id); }
+    finally { carregando.delete(i.id); }
+  }
+  async function carregarTodos() {
+    const fila = recorte().filter(i => !i.par && i.acesso && !falhas.has(i.id)), total = fila.length;
+    if (!total || !G?.token) return;
+    let feitos = 0;
+    const trabalhador = async () => { for (let i = fila.shift(); i; i = fila.shift()) { await carregarPar(i); ghStatus.textContent = `GitHub: baixando pares ${++feitos}/${total}…`; } };
+    await Promise.all([trabalhador(), trabalhador(), trabalhador(), trabalhador()]);
+    ghStatus.textContent = `GitHub: ${total} pares baixados.`; render();
+  }
+  /* ✓ lido: grava preliminares/lidos.json com sha; conflito (409/422) relê o remoto e refaz só esta marcação. */
+  function alternarLido(ac) {
+    const novo = !lidos[ac];
+    if (novo) lidos[ac] = new Date().toISOString(); else delete lidos[ac];
+    render();
+    if (!G?.token) { ghStatus.textContent = "Lido marcado só nesta tela (sem chave do GitHub, não foi gravado)."; return; }
+    pendentes.set(ac, novo); const stamp = lidos[ac];
+    filaLidos = filaLidos.then(() => gravarLido(ac, novo, stamp)).catch(() => {});
+  }
+  async function gravarLido(ac, novo, stamp) {
+    let gravou = false;
+    for (let t = 0; t < 4 && !gravou; t++) {
+      const base = { ...lidosRemoto }; if (novo) base[ac] = stamp; else delete base[ac];
+      try { lidosSha = await G.putJson("preliminares/lidos.json", { versao: 1, lidos: base }, lidosSha, "Corretor: marcar lido"); lidosRemoto = base; gravou = true; }
+      catch (e) {
+        if (!e.conflito) { ghStatus.textContent = "Não foi possível gravar o lido: " + ghMsg(e) + "."; return; }
+        const r = await G.getJson("preliminares/lidos.json").catch(() => null);
+        lidosSha = r?.sha || null; lidosRemoto = { ...(r?.json?.lidos || {}) };
+      }
+    }
+    if (gravou) { pendentes.delete(ac); ghStatus.textContent = "Lido gravado no GitHub."; }
+    else ghStatus.textContent = "Não foi possível gravar o lido (conflito repetido). Tente de novo.";
+  }
+
   function tabela(host, titulo, headers, rows) {
     host.append(el("h3", {}, titulo));
     if (!rows.length) { host.append(el("p", { class: "meta" }, "Sem alterações neste recorte.")); return; }
     const table = el("table"), head = el("thead"), tr = el("tr"), body = el("tbody");
     headers.forEach(h => tr.append(el("th", { scope: "col" }, h))); head.append(tr);
-    for (const row of rows) { const r = el("tr"); row.forEach(t => r.append(el("td", {}, String(t)))); body.append(r); }
+    for (const row of rows) { const r = el("tr"); row.forEach(t => { const td = el("td"); td.append(t instanceof Node ? t : String(t)); r.append(td); }); body.append(r); }
     table.append(head, body); host.append(table);
   }
-  function abrir(p) {
+  function abrir(i) {
     detalhe.replaceChildren();
-    if (!p) { if (amplo.open) amplo.close(); return; }
+    if (!i) { if (amplo.open) amplo.close(); return; }
+    if (!i.par) {
+      detalhe.append(el("h3", {}, i.titulo), el("p", { class: "meta" }, falhas.has(i.id) ? "Não foi possível carregar este par." : "Carregando o par…"));
+      if (!falhas.has(i.id) && !carregando.has(i.id)) carregarPar(i).then(() => { if (selecionado === i.id) render(); });
+      return;
+    }
+    const p = i.par;
     correcao(detalhe, p, false);
     detalhe.querySelector("h3").after(button("Tela larga", () => {
       ladoAmplo = lado;
@@ -7500,7 +7676,7 @@ window.tutuSite.appReady = true;
           ladoAmplo = !ladoAmplo; correcao(host, p, true);
           host.querySelector("#corretorAmploLado").focus();
         }
-        else { lado = !lado; abrir(p); }
+        else { lado = !lado; render(); }
       }, { id: larga ? "corretorAmploLado" : "corretorLado", "aria-pressed": String(mostrarLados) }));
     if (!mostrarLados) { const lg = el("p", { class: "corretor-legenda" }); lg.append(el("del", { class: "rm" }, "apagado pelo chefe"), " ", el("span", { class: "chg" }, "adicionado pelo chefe")); host.append(lg); }
     for (const s of analisar(p).sections) {
@@ -7518,38 +7694,53 @@ window.tutuSite.appReady = true;
     const d = new Date(iso); d.setUTCHours(0, 0, 0, 0); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7);
     return d.toISOString().slice(0, 10);
   }
-  function render() {
-    const termoAcesso = acesso.value.trim();
-    const filtrados = pares.filter(p => (!chefe.value || (p.chefe || "__sem__") === chefe.value) && (!exame.value || tipo(p) === exame.value) &&
-      (!termoAcesso || p.acesso.includes(termoAcesso)));
-    filtrados.sort((a, b) => (ordem.value === "mudado" ? analisar(b).pct - analisar(a).pct : 0) || Date.parse(b.capturado_em) - Date.parse(a.capturado_em) || b.seq - a.seq);
-    lista.replaceChildren(el("h3", {}, `${filtrados.length} pares`));
-    if (!filtrados.some(p => p.id === selecionado)) selecionado = filtrados[0]?.id || "";
-    for (const p of filtrados) {
-      const pct = analisar(p).pct, b = button("", () => { selecionado = p.id; render(); }, { class: "corretor-par", "aria-pressed": String(p.id === selecionado) });
-      b.append(el("span", { class: "cp-t" }, p.titulo),
-        el("span", { class: "cp-m" }, `${new Date(p.capturado_em).toLocaleDateString("pt-BR")} · ${p.chefe || semChefe}${p.acesso ? ` · Acesso ${p.acesso}` : ""}`),
-        el("span", { class: "cp-pct", "data-nivel": pct > 30 ? "alto" : pct > 10 ? "medio" : "baixo" }, `${pct.toFixed(1)}%`));
-      lista.append(b);
-    }
-    abrir(filtrados.find(p => p.id === selecionado));
-    panorama.replaceChildren(el("h2", {}, "Panorama do recorte"));
-    const apagados = new Map(), adicionados = new Map(), trocas = new Map(), sections = new Map(), grupos = new Map(), semanas = new Map();
-    const inc = (map, key) => map.set(key, (map.get(key) || 0) + 1);
-    for (const p of filtrados) {
-      const a = analisar(p);
-      for (const c of a.changes) { if (c.de) inc(apagados, c.de); if (c.para) inc(adicionados, c.para); if (c.de && c.para) inc(trocas, `${c.de} → ${c.para}`); }
+  function exemplos(ids, porId) {
+    const box = el("span", { class: "corretor-exs" });
+    ids.forEach((id, k) => {
+      const i = porId.get(id); if (!i) return;
+      box.append(button(i.acesso || "#" + (k + 1), () => { selecionado = id; render(); detalhe.scrollIntoView?.({ block: "nearest" }); }, { class: "corretor-ex", title: "Abrir este par" }));
+    });
+    return box;
+  }
+  function estatisticas(filtrados) {
+    panorama.replaceChildren(el("h2", {}, "Estatísticas do recorte"));
+    const comPar = filtrados.filter(i => i.par), falta = filtrados.filter(i => !i.par && i.acesso && !falhas.has(i.id)).length;
+    panorama.append(el("p", { class: "meta", id: "corretorCobertura" }, `${comPar.length} de ${filtrados.length} exames com texto carregado.`));
+    if (falta && G?.token) panorama.append(button(`Carregar os ${falta} restantes`, carregarTodos, { id: "corretorCarregarTodos" }));
+    if (!comPar.length) return;
+    const porId = new Map(comPar.map(i => [i.id, i])), analises = comPar.map(i => [i, analisar(i.par)]);
+    const st = TutuV2Core.estatisticasMudancas(analises.map(([i, a]) => ({ id: i.id, changes: a.changes })));
+    const linhas = (lista, rotulo = o => o.texto) => lista.map(o => [rotulo(o), o.n, exemplos(o.ids, porId)]);
+    tabela(panorama, "Seus erros principais (repetidos no recorte)", ["O que os chefes mudaram", "Vezes", "Exemplos"],
+      linhas(st.principais, o => (o.tipo === "troca" ? "Trocam: " : "Tiram: ") + o.texto));
+    tabela(panorama, "O que os chefes mais tiram", ["Trecho", "Vezes", "Exemplos"], linhas(st.tira));
+    tabela(panorama, "O que os chefes mais põem", ["Trecho", "Vezes", "Exemplos"], linhas(st.poe));
+    tabela(panorama, "Trocas mais frequentes (A → B)", ["Troca", "Vezes", "Exemplos"], linhas(st.trocas));
+    const sections = new Map(), grupos = new Map(), semanas = new Map();
+    for (const [i, a] of analises) {
       for (const s of a.sections) { const n = sections.get(s.nome) || [0, 0]; n[0] += s.rm; n[1] += s.ins; sections.set(s.nome, n); }
-      const key = JSON.stringify([p.chefe || semChefe, tipo(p)]), g = grupos.get(key) || [0, 0]; g[0]++; g[1] += a.pct; grupos.set(key, g);
-      const week = semana(p.capturado_em), w = semanas.get(week) || [0, 0]; w[0]++; w[1] += a.pct; semanas.set(week, w);
+      const key = JSON.stringify([i.chefe || semChefe, i.exame]); grupos.set(key, (grupos.get(key) || 0) + 1);
+      if (i.data) { const w = semana(i.data + "T12:00:00Z"); semanas.set(w, (semanas.get(w) || 0) + 1); }
     }
-    const top = map => [...map].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 15);
-    tabela(panorama, "Trocas mais frequentes", ["A → B", "Vezes"], top(trocas));
-    tabela(panorama, "Trechos mais apagados", ["Trecho", "Vezes"], top(apagados));
-    tabela(panorama, "Trechos mais adicionados", ["Trecho", "Vezes"], top(adicionados));
     tabela(panorama, "Conclusão × Achados", ["Seção", "Palavras apagadas", "Adicionadas"], [...sections].map(([k, n]) => [k, ...n]));
-    tabela(panorama, "Por chefe e tipo", ["Chefe", "Tipo", "Pares", "% médio"], [...grupos].map(([k, n]) => [...JSON.parse(k), n[0], (n[1] / n[0]).toFixed(1) + "%"]));
-    tabela(panorama, "Evolução semanal (início segunda, UTC)", ["Semana", "Pares", "% médio"], [...semanas].sort().map(([k, n]) => [k, n[0], (n[1] / n[0]).toFixed(1) + "%"]));
+    tabela(panorama, "Por chefe e exame", ["Chefe", "Exame", "Pares"], [...grupos].map(([k, n]) => [...JSON.parse(k), n]));
+    tabela(panorama, "Evolução semanal (início segunda, UTC)", ["Semana", "Pares"], [...semanas].sort().map(([k, n]) => [k, n]));
+  }
+  function render() {
+    const filtrados = recorte();
+    filtrados.sort((a, b) => (ordem.value === "mudado" ? Number(b.mudou) - Number(a.mudou) : 0) || (b.data || "").localeCompare(a.data || "") || b.cap.localeCompare(a.cap) || b.seq - a.seq);
+    lista.replaceChildren(el("h3", {}, `${filtrados.length} pares`));
+    if (!filtrados.some(i => i.id === selecionado)) selecionado = filtrados[0]?.id || "";
+    for (const i of filtrados) {
+      const linha = el("div", { class: "corretor-linha" }), b = button("", () => { selecionado = i.id; render(); }, { class: "corretor-par", "aria-pressed": String(i.id === selecionado) });
+      b.append(el("span", { class: "cp-t" }, i.titulo),
+        el("span", { class: "cp-m" }, `${dataBR(i.data)} · ${i.chefe || semChefe}${i.acesso ? ` · Acesso ${i.acesso}` : ""}${i.mudou ? "" : " · sem alterações"}`));
+      linha.append(b);
+      if (i.acesso) { const lido = Boolean(lidos[i.acesso]); linha.append(button("✓", () => alternarLido(i.acesso), { class: "corretor-lido", "aria-pressed": String(lido), "aria-label": (lido ? "Marcar como não lido: acesso " : "Marcar como lido: acesso ") + i.acesso, title: lido ? "Lido (clique para desmarcar)" : "Marcar como lido" })); }
+      lista.append(linha);
+    }
+    abrir(filtrados.find(i => i.id === selecionado));
+    estatisticas(filtrados);
   }
   function demonstracao() {
     return [
@@ -7565,12 +7756,13 @@ window.tutuSite.appReady = true;
   const observer = new MutationObserver(async () => {
     if (panel.hidden || iniciado) return;
     iniciado = true;
-    if (demo) { atualizar.disabled = true; await receber({ pares: demonstracao(), puladas: 0 }, "Demonstração"); return; }
+    if (demo) { atualizar.disabled = ghBtn.disabled = true; await receber({ pares: demonstracao(), puladas: 0 }, "Demonstração"); return; }
     try { pares = deduplicar((await armazenamento()).map(normalizar)); filtros(); render(); }
     catch (_) { status.textContent = "Armazenamento local indisponível; importações ficarão só em memória."; }
-    await carregar();
+    if (!(await carregarGh())) await carregar();   // GitHub primeiro; a ponte local é a alternativa
   });
   observer.observe(panel, { attributes: true, attributeFilter: ["hidden"] });
+  T?.onChave?.(() => { if (iniciado && !demo) carregarGh(); });
   if (demo) ui.panel("Corretor");
 })();
 
@@ -7849,6 +8041,18 @@ window.tutuSite.appReady = true;
     if (!r.ok && r.status !== 404) throw Error("Não foi possível apagar da fila.");
     cachePedidos.delete(id + ".json");
   }
+  /* Aprendizado de voz com a IA: ditado bruto x laudo copiado -> trocas curtas (ex.: "terapublica" -> "poplítea") viram correções de voz.
+     Mesma regra de 90-inicio-eventos.js: palavra que já existe no português só vira automática na 2ª vez (learnPairs, limite 2). */
+  async function aprenderVoz(ditado, final) {
+    const voc = typeof VOCAB !== "undefined" ? VOCAB : [], trocas = TutuV2Core.trocasVoz(ditado, final, voc);
+    for (const t of trocas) {
+      const ws = fold(t.de).split(/[^a-z0-9]+/).filter(Boolean);
+      if (typeof KNOWN !== "undefined" && ws.length && ws.every(w => w.length < 3 || KNOWN.has(w))) await learnPairs([{ de: t.de, para: t.para, antes: t.antes, depois: t.depois, comContexto: true }], 2);
+      else await addCorrecao(t.de, t.para);
+      if (typeof VOCAB !== "undefined") for (const w of t.para.toLowerCase().split(/[^a-zà-úç-]+/)) if (w.length >= 5 && !VOCAB.includes(w)) VOCAB.unshift(w);
+    }
+    if (trocas.length) publishVoice();
+  }
   const antigoClipboard = copyToClipboard;
   copyToClipboard = async (...args) => {
     const caso = ui.activeId(), finalTexto = laudoTagged(), vinculo = T.sync.kvGet("_usg/vinculos").then(v => ({ id: v?.[caso] }), () => ({ erro: true }));
@@ -7865,6 +8069,7 @@ window.tutuSite.appReady = true;
             await G.putJson("ia/correcoes/" + r.json.exame + "/" + id + ".json",
               { exame: r.json.exame, proposta: r.json.laudo, final: finalTexto, quando: new Date().toISOString() }, null, "IA: correção do Artur").catch(() => {});
           }
+          if (r?.json?.laudo) await aprenderVoz(r.json.texto, finalTexto).catch(() => {});
           if (r) await apagar(id, r.sha);
           await mudarVinculos(vinculos => { if (vinculos[caso] === id) delete vinculos[caso]; }); await atualizar();
         }

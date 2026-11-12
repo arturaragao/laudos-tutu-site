@@ -618,9 +618,15 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 .tutu-v2 .corretor-par { display:grid; width:100%; text-align:left; white-space:normal; grid-template-columns:minmax(0,1fr) auto; gap:2px 8px; align-items:center; margin:0; padding:9px 12px; border-radius:12px; background:var(--paper); }
 .corretor-par .cp-t { font-weight:600; font-size:13.5px; }
 .corretor-par .cp-m { grid-column:1; font-size:11.5px; color:var(--muted); }
-.corretor-par .cp-pct { grid-column:2; grid-row:1 / span 2; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; background:var(--p-green); color:var(--changed); }
-.corretor-par .cp-pct[data-nivel="medio"] { background:var(--p-yellow); color:var(--warn); }
-.corretor-par .cp-pct[data-nivel="alto"] { background:var(--p-red); color:var(--crit); }
+.corretor-linha { display:flex; gap:6px; align-items:stretch; }
+.tutu-v2 .corretor-linha button.corretor-par { flex:1 1 auto; min-width:0; width:auto; }
+.tutu-v2 .corretor-linha button.corretor-lido { flex:0 0 44px; width:44px; min-height:44px; margin:0; padding:0; border-radius:12px; font-size:20px; line-height:1; background:var(--paper); color:var(--muted); border:1px solid var(--line); }
+.tutu-v2 .corretor-linha button.corretor-lido[aria-pressed="true"] { background:var(--p-green); color:var(--changed); border-color:var(--changed); font-weight:700; }
+.corretor-esq #corretorStatus:empty { display:none; }
+.corretor-esq #corretorGhStatus { margin:0; font-size:12.5px; color:var(--muted); }
+.corretor-exs { display:flex; flex-wrap:wrap; gap:4px; }
+.tutu-v2 .corretor-exs button.corretor-ex { min-height:0; margin:0; padding:2px 8px; border-radius:999px; font-size:11px; }
+#corretorCarregarTodos { margin:4px 0 8px; }
 .tutu-v2 .corretor-par[aria-pressed="true"] { border-color:var(--changed); box-shadow:inset 3px 0 0 var(--changed); }
 .corretor-dir #corretorDetalhe, .corretor-dir #corretorPanorama { background:transparent; border:0; padding:0; }
 #corretorDetalhe h3 { margin:0; font-size:17px; }
@@ -643,7 +649,7 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #corretorPanorama th { position:sticky; top:0; background:var(--paper); color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
 @media(max-width:900px) {
   .corretor-flutuante { width:100vw; height:100dvh; max-height:100dvh; border-radius:0; border:0; }
-  #rightPanelCorretor { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto auto; overflow:auto; }
+  #rightPanelCorretor { grid-template-columns:minmax(0,1fr); grid-template-rows:max-content max-content max-content; align-content:start; overflow:auto; }
   .corretor-esq, .corretor-dir { overflow:visible; border-right:0; }
   #corretorLista { max-height:260px; overflow:auto; }
 }
@@ -771,3 +777,4 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 
 /* Áudio sem exame escolhido: tracejado e apagado; o exame vem do que for dito (12/11/2026) */
 .tutu-v2 #usgExame.sem-selecao { color:var(--muted); font-style:italic; border-style:dashed; }
+#corretorPanorama th:nth-child(2) { min-width:5.5em; }
