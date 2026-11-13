@@ -778,3 +778,18 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 /* Áudio sem exame escolhido: tracejado e apagado; o exame vem do que for dito (12/11/2026) */
 .tutu-v2 #usgExame.sem-selecao { color:var(--muted); font-style:italic; border-style:dashed; }
 #corretorPanorama th:nth-child(2) { min-width:5.5em; }
+
+/* Conversar com a IA (116-v2-conversar.js): caixa pequena sobre a folha, perto de Copiar */
+#conversaBox { position:fixed; right:16px; bottom:96px; z-index:60; box-sizing:border-box; width:min(440px, calc(100vw - 24px)); display:flex; flex-direction:column; gap:6px; padding:10px 12px; border:1px solid var(--line, #aaa); border-radius:12px; background:var(--paper, #fffaf2); color:var(--text, inherit); box-shadow:0 10px 30px #0003; }
+#conversaBox[hidden], #conversaBox [hidden] { display:none !important; }
+#conversaBox .conversa-cab { display:flex; justify-content:space-between; align-items:center; font-size:13px; }
+#conversaBox .conversa-linha { display:flex; gap:6px; align-items:stretch; }
+#conversaBox textarea { flex:1; min-width:0; min-height:60px; height:72px; max-height:30vh; resize:vertical; font:inherit; font-size:14px; }
+#conversaBox .conversa-botoes { display:flex; flex-direction:column; gap:4px; }
+#conversaBox .conversa-acoes { display:flex; gap:6px; }
+#conversaMic.on { background:#b3261e; color:#fff; }
+#conversaMsg, #conversaLembrei { margin:0; font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+#conversaLembrei span { color:var(--text, inherit); }
+#conversaAbrir[aria-pressed="true"] { outline:2px solid var(--accent, #8a5a2b); }
+#conversaDoAudio { margin-top:4px; }
+@media (max-width:760px) { #conversaBox { right:12px; left:12px; width:auto; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); } }

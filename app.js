@@ -8376,3 +8376,246 @@ window.tutuSite.appReady = true;
   window.addEventListener("pagehide", () => { if (!extension) stop(false); });
   ui.siteDictation = { get on() { return on; }, get extension() { return extension; }, toggle: () => ui.dictate() };
 })();
+
+/* Conversar com a IA (12/11/2026): na folha do laudo, o Artur fala ou escreve um ajuste ("o lado é direito", "conclusão um item por achado").
+   A IA recebe o laudo numerado + o pedido e devolve só o DIFF (mesmo protocolo do Gerar: applyDiff/diffLaudoHtml); a folha mostra
+   vermelho riscado / verde, com Aceitar tudo e Desfazer. Se o pedido valer para os próximos laudos ("da próxima vez", "sempre", "nunca",
+   "gostei"), a IA manda no mesmo retorno "REGRA: ..." -> regra do exame (coleção regras) + ia/regras/<exame>.md no repo de dados
+   (seção "Ajustes ditados no Conversar"), que o áudio do celular (tools/ia_laudo.py) também lê. "Lembrei: ..." tem desfazer.
+   Motor: sample da plataforma (ponte /ia2: Antigravity, Claude de reserva). Só o laudo + o pedido vão para a IA (pedido filtrado). */
+(function (root) {
+  "use strict";
+  const SECAO = "## Ajustes ditados no Conversar";
+  /* "REGRA: ..." no retorno da IA. Devolve { regra, resto } (regra "" se não veio ou veio vazia/"nenhuma"). */
+  function extrairRegra(resposta) {
+    let regra = "";
+    const resto = String(resposta || "").replace(/\r/g, "").split("\n").filter(l => {
+      const m = l.match(/^\s*(?:[*•-]\s*)?\**\s*REGRA\s*\**\s*:\s*(.*)$/i);
+      if (!m) return true;
+      const t = m[1].replace(/\*+/g, "").trim();
+      if (!regra && t && !/^(?:nenhuma|n[aã]o|-|—)\.?$/i.test(t)) regra = t.slice(0, 240);
+      return false;
+    }).join("\n");
+    return { regra, resto };
+  }
+  /* Filtro leve do pedido (não do laudo): números longos, datas e "paciente Fulano" não saem do PC. */
+  function limparPedido(t) {
+    return String(t || "").replace(/\0/g, "")
+      .replace(/\b(?:[Pp]aciente|PACIENTE|[Ss]ra?|[Ss]enhora?)\b(?:\(a\))?\.?\s*[:=-]?\s*(?:[A-ZÀ-Ý][a-zà-ÿ]+\s*){1,4}/g, "[identidade] ")
+      .replace(/\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/g, "[data]")
+      .replace(/\d{6,}/g, "[identificador]").replace(/[ \t]+/g, " ").trim().slice(0, 2000);
+  }
+  /* Linhas numeradas COMPLETAS (o pedido pode mexer em frases normais). Devolve { linhas: [{raw, n}], texto }. */
+  function numerar(rascunho) {
+    const linhas = [], out = []; let n = 0;
+    for (const raw of String(rascunho || "").split("\n")) {
+      if (!raw.trim()) { linhas.push({ raw, n: 0 }); continue; }
+      n++; linhas.push({ raw, n }); out.push("L" + n + " " + raw.trim());
+    }
+    return { linhas, texto: out.join("\n") };
+  }
+  function montarPrompt({ exame = "", regras = "", numerado = "", pedido = "" }) {
+    return `Assistente de laudos de um radiologista brasileiro (português do Brasil). O médico pediu um AJUSTE no laudo abaixo.
+EXAME: ${exame}
+${regras ? `REGRAS DE ESTILO DO MÉDICO PARA ESTE EXAME:
+${regras}
+` : ""}LAUDO (linhas numeradas):
+"""
+${numerado}
+"""
+PEDIDO DO MÉDICO (falado ou escrito; pode ter erros do reconhecimento de voz):
+"""
+${pedido}
+"""
+REGRAS:
+1. Faça só o que o pedido diz; o resto do laudo fica igual. Nunca invente achados, medidas ou lateralidade que o pedido não trouxe.
+2. Mantenha as marcações <b>, <u>, <i>, {{centro}} e os títulos como estão. Texto puro, sem markdown.
+3. Se o pedido mexer em achados, deixe a conclusão coerente com eles.
+FORMATO DA RESPOSTA: DIFF, só as linhas que mudam, uma operação por linha, sem comentários:
+Ln: texto novo   (substitui a linha n)
++Ln: texto       (insere depois da linha n; várias seguidas ficam nessa ordem)
+-Ln              (apaga a linha n)
+Linhas não citadas ficam como estão; nunca repita uma linha sem mudança. Se nada mudar, responda só: OK
+MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "da próxima vez", "sempre", "nunca", "prefiro", "gostei", "não gostei"), acrescente no fim UMA linha "REGRA: <regra curta e geral de redação, sem dados deste paciente>". Se for só deste laudo, não escreva REGRA.`;
+  }
+  /* ia/regras/<exame>.md: acrescenta a regra na seção (cria a seção/arquivo se faltar); não duplica. */
+  function regraMd(atual, regra, data) {
+    const linha = "- " + regra + (data ? " (" + data + ")" : "");
+    let t = String(atual || "").replace(/\r/g, "");
+    if (t.split("\n").some(l => l.replace(/\s*\(\d{2}\/\d{2}\/\d{4}\)\s*$/, "") === "- " + regra)) return t;
+    if (!t.trim()) t = "# Regras do exame\n";
+    const i = t.indexOf(SECAO);
+    if (i < 0) return t.replace(/\n*$/, "\n\n") + SECAO + "\n" + linha + "\n";
+    const fim = t.indexOf("\n## ", i + SECAO.length), corte = fim < 0 ? t.length : fim;
+    return t.slice(0, corte).replace(/\n*$/, "\n") + linha + "\n" + (fim < 0 ? "" : "\n" + t.slice(fim + 1));
+  }
+  function tirarRegraMd(atual, regra) {
+    return String(atual || "").replace(/\r/g, "").split("\n").filter(l => l.replace(/\s*\(\d{2}\/\d{2}\/\d{4}\)\s*$/, "") !== "- " + regra).join("\n");
+  }
+  const api = { extrairRegra, limparPedido, numerar, montarPrompt, regraMd, tirarRegraMd, SECAO };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TutuConversa = api;
+})(globalThis);
+
+(() => {
+  "use strict";
+  if (typeof document === "undefined") return;
+  const ui = window.tutuV2, C = window.TutuConversa, T = window.tutuSite;
+  if (!ui || !ui.footerActions || !C) return;
+  const el = ui.el, button = ui.button, ANDROID = /Android/i.test(navigator.userAgent);
+  let busy = false, speech = null, ouvindo = false, tela = null, ultimaRegra = null, ctlConversa = null;
+
+  const box = el("section", { id: "conversaBox", class: "conversa", "aria-label": "Conversar com a IA", hidden: "" });
+  const texto = el("textarea", { id: "conversaTexto", rows: "3", "aria-label": "Pedido de ajuste para a IA",
+    placeholder: "Fale ou escreva o ajuste: \"o lado é direito\", \"conclusão um item por achado\", \"da próxima vez, fluxo em todas as frases\"." });
+  const msg = el("p", { id: "conversaMsg", role: "status", "aria-live": "polite" });
+  const mic = button("🎤", () => (ouvindo ? parar() : ouvir()), { id: "conversaMic", "aria-label": "Ditar o pedido", title: "Ditar o pedido (voz)" });
+  const enviar = button("Enviar", () => mandar(), { id: "conversaEnviar", title: "Enviar à IA · Ctrl Enter" });
+  const fechar = button("×", () => abrir(false), { id: "conversaFechar", "aria-label": "Fechar", title: "Fechar" });
+  const aceitar = button("Aceitar tudo", () => { acceptAllEdits(); scheduleCaseSave(); acoes.hidden = true; dizer("Ajustes aceitos."); }, { id: "conversaAceitar" });
+  const desfazer = button("Desfazer", () => { undoAllClaude(); acoes.hidden = true; dizer("Ajuste desfeito."); }, { id: "conversaDesfazer" });
+  const acoes = el("div", { class: "conversa-acoes", hidden: "" }); acoes.append(aceitar, desfazer);
+  const lembrei = el("p", { id: "conversaLembrei", hidden: "" });
+  const cab = el("div", { class: "conversa-cab" }); cab.append(el("b", {}, "Conversar com a IA"), fechar);
+  const linha = el("div", { class: "conversa-linha" }); linha.append(texto, el("div", { class: "conversa-botoes" }));
+  linha.lastChild.append(mic, enviar);
+  box.append(cab, linha, msg, acoes, lembrei);
+  document.body.append(box);
+  const abrirBtn = button("Conversar", () => abrir(box.hidden), { id: "conversaAbrir", title: "Conversar com a IA: pedir ajustes no laudo (voz ou texto)" });
+  const copiar = document.getElementById("copiar");
+  if (copiar && copiar.parentNode === ui.footerActions) copiar.after(abrirBtn); else ui.footerActions.append(abrirBtn);
+  /* Áudio (celular): depois de abrir um laudo pronto, o botão fecha o Áudio e abre a conversa sobre a folha. */
+  const usg = document.getElementById("usgDialog");
+  if (usg) {
+    const doAudio = button("Conversar com a IA sobre o laudo aberto", () => { try { usg.close(); } catch (_) {} abrir(true); }, { id: "conversaDoAudio", hidden: "" });
+    usg.append(doAudio);
+    const vigiar = () => { doAudio.hidden = !temLaudo(); };
+    const folha = document.getElementById("laudo"); if (folha) new MutationObserver(vigiar).observe(folha, { childList: true, subtree: true, characterData: true });
+    usg.addEventListener("close", vigiar); vigiar();
+  }
+
+  function dizer(t) { msg.textContent = t; }
+  function temLaudo() { try { return !!laudoTagged().trim(); } catch (_) { return false; } }
+  function abrir(on) {
+    box.hidden = !on; abrirBtn.setAttribute("aria-pressed", String(!!on));
+    if (on) { dizer(temLaudo() ? "" : "Abra ou escreva um laudo na folha primeiro."); texto.focus(); }
+    else parar();
+  }
+  texto.addEventListener("keydown", e => {
+    // stopPropagation: Ctrl+Enter no documento é o Gerar (31-chat-ensinar.js); Esc fecha só esta caixa
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); mandar(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); abrir(false); }
+  });
+
+  /* ---------- voz: mesmo motor do site (Web Speech + usgVoice + fixFala); Android: speechDelta e Wake Lock ---------- */
+  const manterTela = async () => { try { if (ouvindo && !tela && navigator.wakeLock && document.visibilityState === "visible") { tela = await navigator.wakeLock.request("screen"); tela.addEventListener("release", () => { tela = null; }); } } catch (_) { tela = null; } };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") manterTela(); });
+  const cfgVoz = () => { try { return JSON.parse(document.getElementById("voiceConfig").textContent) || {}; } catch (_) { return {}; } };
+  function ouvir() {
+    const Speech = window.SpeechRecognition || window.webkitSpeechRecognition, V = window.usgVoice;
+    if (!Speech || !V) { dizer("Voz indisponível neste navegador: escreva o pedido."); return; }
+    const s = speech = new Speech(); s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
+    let sessao = "";
+    s.onstart = () => { sessao = ""; };
+    s.onresult = ev => {
+      let parcial = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i], cfg = cfgVoz(), alts = Array.from(r, a => V.punct(a.transcript || "")).filter(Boolean);
+        if (!alts.length) continue;
+        let best = V.bestAlternative(alts[0], alts, cfg);
+        if (r.isFinal && ANDROID && window.TutuV2Core?.speechDelta) { const d = TutuV2Core.speechDelta(sessao, best); sessao = d.sessao; best = d.novo; if (!best) continue; }
+        const t = (window.TutuV2Core?.fixFala || String)(V.posTexto(best, cfg));
+        if (r.isFinal) texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + t;
+        else parcial += t;
+      }
+      dizer(parcial ? "… " + parcial : "Ouvindo. Toque no microfone para parar.");
+    };
+    s.onerror = ev => { dizer("Voz: " + ev.error); if (/not-allowed|audio-capture|service-not-allowed/.test(ev.error)) parar(); };
+    s.onend = () => { if (ouvindo && speech === s) { try { s.start(); } catch (_) { parar(); } } };
+    try { s.start(); } catch (_) { dizer("Não consegui ligar o microfone."); return; }
+    ouvindo = true; mic.classList.add("on"); mic.setAttribute("aria-pressed", "true"); manterTela();
+    dizer("Ouvindo. Toque no microfone para parar.");
+  }
+  function parar() {
+    const s = speech; speech = null; ouvindo = false;
+    if (s) { s.onresult = s.onend = s.onerror = null; try { s.stop(); } catch (_) {} }
+    try { tela?.release(); } catch (_) {} tela = null;
+    mic.classList.remove("on"); mic.setAttribute("aria-pressed", "false");
+  }
+
+  /* ---------- envio: laudo numerado + pedido -> DIFF (+ REGRA opcional) ---------- */
+  async function mandar() {
+    if (busy) return;
+    if (ouvindo) parar();
+    const pedido = C.limparPedido(texto.value);
+    if (!pedido) { dizer("Fale ou escreva o que ajustar."); texto.focus(); return; }
+    if (typeof sample !== "function" || !sample) { dizer("IA indisponível: abra a ponte local (127.0.0.1:47831)."); return; }
+    if (typeof genBusy !== "undefined" && genBusy) { dizer("Aguarde o Gerar terminar."); return; }
+    const draft = laudoTagged();
+    if (!draft.trim()) { dizer("A folha está vazia: abra ou escreva um laudo primeiro."); return; }
+    const num = C.numerar(draft);
+    genLines = num.linhas;   // applyDiff (30-claude-gerar.js) lê estas linhas
+    const prompt = C.montarPrompt({ exame: nameAll(), regras: rulesBlock(), numerado: num.texto, pedido });
+    busy = true; enviar.disabled = true; acoes.hidden = true; lockSheet(true); ctlConversa = new AbortController();
+    dizer("Enviando à IA…");
+    const t0 = performance.now();
+    try {
+      const r = await sample(prompt, { signal: ctlConversa.signal, cache: false, modelTier: "balanced" });
+      const motor = r?.motor === "antigravity" ? "Antigravity" : "Claude", secs = ((performance.now() - t0) / 1000).toFixed(0);
+      const { regra, resto } = C.extrairRegra(r?.text || "");
+      lockSheet(false);
+      if (laudoTagged() !== draft) { dizer("A folha mudou enquanto a IA respondia: nada foi aplicado. Envie de novo."); return; }
+      genLines = num.linhas;
+      const novo = /^\s*ok\.?\s*$/i.test(resto.trim()) ? draft : applyDiff(resto);
+      if (novo === null) { dizer(`A resposta (${motor}) veio fora do formato; o laudo ficou como estava. Tente de novo.`); return; }
+      if (novo !== draft) {
+        pushVersion("Antes da correção");   // "Desfazer IA" (undoAllClaude) volta até aqui
+        sheet.innerHTML = diffLaudoHtml(draft, novo);
+        pushVersion("Ajustado na conversa (" + motor + ")");
+        renderAlerts(); updateCount(); scheduleCaseSave();
+        acoes.hidden = false;
+      }
+      texto.value = "";
+      dizer((novo === draft ? "Nada a mudar no laudo" : "Ajustado: verde = novo, vermelho = apagado") + ` · ${motor}, ${secs} s` + (r?.aviso ? " · " + r.aviso : "") + ".");
+      if (regra) await lembrar(regra);
+    } catch (e) {
+      lockSheet(false);
+      dizer(e?.name === "AbortError" ? "Pedido cancelado." : (e?.message || "Falha ao falar com a IA."));
+    } finally { busy = false; enviar.disabled = false; lockSheet(false); }
+  }
+
+  /* ---------- memória: regra do exame (coleção regras) + ia/regras/<exame>.md no repo de dados ---------- */
+  const hoje = () => new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  async function gravarMd(exame, muda) {
+    const G = T?.gh; if (!G?.token || !G.getText || !/^[a-z0-9-]{1,60}$/.test(exame)) return false;
+    const caminho = "ia/regras/" + exame + ".md";
+    for (let i = 0; i < 2; i++) {
+      try {
+        const atual = await G.getText(caminho), novo = muda(atual?.text || "");
+        if (novo === (atual?.text || "")) return true;
+        await G.putText(caminho, novo, atual?.sha || null, "IA: regra ditada no Conversar");
+        return true;
+      } catch (e) { if (!e?.conflito) return false; }   // outro aparelho gravou antes: relê e tenta de novo
+    }
+    return false;
+  }
+  async function lembrar(regra) {
+    const exame = current?.id || "todos", data = hoje();
+    let id = null;
+    try { if (db) id = (await db.collection("regras").add({ texto: regra, exame, origem: "conversa", criadoEm: new Date().toISOString() }))?.id || null; } catch (_) {}
+    ultimaRegra = { regra, exame, id };
+    lembrei.replaceChildren(el("span", {}, "Lembrei: " + regra + " "), button("Desfazer", () => esquecer(), { id: "conversaEsquecer" }), el("small", { id: "conversaLembreiNota" }, " salvando…"));
+    lembrei.hidden = false;
+    const ok = await gravarMd(exame, md => C.regraMd(md, regra, data));
+    const nota = document.getElementById("conversaLembreiNota");
+    if (nota && ultimaRegra?.regra === regra) nota.textContent = ok ? " (vale também no áudio do celular)" : " (só neste aparelho: sem chave do repo de dados ou sem rede)";
+  }
+  async function esquecer() {
+    const r = ultimaRegra; if (!r) return;
+    ultimaRegra = null; lembrei.hidden = true;
+    try { if (db && r.id) await db.doc("regras/" + r.id).delete(); } catch (_) {}
+    const ok = await gravarMd(r.exame, md => C.tirarRegraMd(md, r.regra));
+    dizer("Esqueci: " + r.regra + (ok ? "" : " (o arquivo do repo de dados não foi alterado)"));
+  }
+  ui.conversa = { abrir, mandar };
+})();

@@ -130,16 +130,21 @@
     if (options.signal?.aborted) abort();
     const timeout = setTimeout(abort, 120000);
     try{
-      const response = await fetch("http://127.0.0.1:47831/ia", {
+      // /ia2: Antigravity (Gemini) com o Claude de reserva; ponte antiga (sem /ia2, 404) cai na /ia (só Claude).
+      const pedir = rota => fetch("http://127.0.0.1:47831/" + rota, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ texto, modelTier: options.modelTier || "balanced" }), signal: controller.signal
       });
+      let response = await pedir("ia2");
+      if (response.status === 404) response = await pedir("ia");
       if (!response.ok) throw new Error("Ponte local respondeu com erro.");
       const result = await response.json();
       const text = typeof result === "string" ? result : (result.text ?? result.texto);
       if (typeof text !== "string" || !text.trim()) throw new Error("Resposta vazia da ponte local.");
       options.onText?.({ text });
-      return { text, truncated: Boolean(result.truncated) };
+      const motor = result.motor || "claude";
+      sample.ultimo = { motor, modelo: result.modelo || "", aviso: result.aviso || "" };
+      return { text, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "" };
     }catch(e){
       if (options.signal?.aborted) throw new DOMException("Pedido cancelado.", "AbortError");
       const error = new Error("Ponte local indisponível. Abra a ponte em 127.0.0.1:47831 para usar IA. As funções locais continuam disponíveis.");
@@ -337,6 +342,18 @@
   };
   gh.putJson = async (path, obj, sha, message) => {
     const res = await ghFetch("/contents/" + path, { method: "PUT", body: { message, content: b64(JSON.stringify(obj)), branch: "main", ...(sha ? { sha } : {}) } });
+    if (!res.ok) throw ghFalha(res);
+    return (await res.json()).content.sha;
+  };
+  gh.getText = async path => {   // arquivo de texto (ex.: ia/regras/<exame>.md): { sha, text } ou null
+    const res = await ghFetch("/contents/" + path + "?ref=main");
+    if (res.status === 404) return null;
+    if (!res.ok) throw ghFalha(res);
+    const j = await res.json();
+    return { sha: j.sha, text: j.encoding === "base64" && j.content ? unb64(j.content) : "" };
+  };
+  gh.putText = async (path, text, sha, message) => {
+    const res = await ghFetch("/contents/" + path, { method: "PUT", body: { message, content: b64(String(text)), branch: "main", ...(sha ? { sha } : {}) } });
     if (!res.ok) throw ghFalha(res);
     return (await res.json()).content.sha;
   };
