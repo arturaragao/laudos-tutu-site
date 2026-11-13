@@ -7554,8 +7554,10 @@ window.tutuSite.appReady = true;
   const dataBR = d => d ? new Date(d + "T12:00:00").toLocaleDateString("pt-BR") : "sem data";
   function itens() {
     const locais = new Map(pares.filter(p => p.acesso).map(p => [p.acesso, p])), vistos = new Set(), out = [];
+    aguardandoN = 0;
     for (const it of indice) {
       vistos.add(it.acesso);
+      if (it.status === "aguardando") { aguardandoN++; continue; }   // sem definitivo do chefe ainda: o robô completa depois
       out.push({ id: it.acesso, acesso: it.acesso, data: dia(it.data) || dia(it.capturadoEm), chefe: String(it.chefe || "").trim(), exame: it.exame || it.categoria || "Outros",
         categoria: it.categoria || "", mudou: it.mudou !== false, titulo: it.exame || "Sem título", cap: String(it.capturadoEm || ""), seq: 0, par: cachePares.get(it.acesso) || locais.get(it.acesso) || null });
     }
@@ -7702,10 +7704,11 @@ window.tutuSite.appReady = true;
     });
     return box;
   }
+  let aguardandoN = 0;
   function estatisticas(filtrados) {
     panorama.replaceChildren(el("h2", {}, "Estatísticas do recorte"));
     const comPar = filtrados.filter(i => i.par), falta = filtrados.filter(i => !i.par && i.acesso && !falhas.has(i.id)).length;
-    panorama.append(el("p", { class: "meta", id: "corretorCobertura" }, `${comPar.length} de ${filtrados.length} exames com texto carregado.`));
+    panorama.append(el("p", { class: "meta", id: "corretorCobertura" }, `${comPar.length} de ${filtrados.length} exames com texto carregado.` + (aguardandoN ? ` ${aguardandoN} aguardando o definitivo do chefe (o robô completa na próxima coleta).` : "")));
     if (falta && G?.token) panorama.append(button(`Carregar os ${falta} restantes`, carregarTodos, { id: "corretorCarregarTodos" }));
     if (!comPar.length) return;
     const porId = new Map(comPar.map(i => [i.id, i])), analises = comPar.map(i => [i, analisar(i.par)]);
