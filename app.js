@@ -4182,7 +4182,58 @@ globalThis.usgVoice = { bestAlternative, posTexto, punct };
     fecha(ai, n, bj, m);
     return out;
   }
-  const api = { estatisticasMudancas, trocasVoz, normalize, speechDelta, fixFala, exameDoTexto, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
+  /* Laudo em HTML (como no PACS): sanitiza e marca o que o chefe tirou (<del>) e pôs (<ins>) sobre o HTML do definitivo. Mesma lógica do app Radio (preliminares.js). */
+  const OK_TAGS = new Set("p br b strong i em u s strike del ins sub sup ul ol li h1 h2 h3 h4 h5 h6 div span blockquote table thead tbody tr td th".split(" "));
+  const escHtml = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const decodeEntidades = s => s.replace(/&(nbsp|amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/gi, (m, e) => {
+    e = e.toLowerCase();
+    if (e === "nbsp") return " "; if (e === "amp") return "&"; if (e === "lt") return "<"; if (e === "gt") return ">"; if (e === "quot") return '"'; if (e === "apos") return "'";
+    const n = e[1] === "x" ? parseInt(e.slice(2), 16) : +e.slice(1); return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : m;
+  });
+  /* HTML -> tokens seguros: só tags da lista e sem atributos (nada de on*, style, href); script/style/comentários somem. */
+  function tokensHtml(html) {
+    html = String(html ?? "").replace(/<!--[\s\S]*?-->/g, "").replace(/<(script|style)\b[\s\S]*?<\/\1\s*>/gi, "");
+    const out = [], re = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*?(\/?)>|<|[^<\s]+|\s+/g; let m;
+    while ((m = re.exec(html))) {
+      if (m[2]) { const n = m[2].toLowerCase(); if (OK_TAGS.has(n)) out.push({ k: "tag", s: n === "br" ? "<br>" : m[1] ? "</" + n + ">" : "<" + n + ">" }); }
+      else if (m[0] === "<") out.push({ k: "pal", s: "<" });
+      else if (/^\s+$/.test(m[0])) out.push({ k: "esp" });
+      else decodeEntidades(m[0]).split(/\s+/).forEach((p, j) => { if (j) out.push({ k: "esp" }); if (p) out.push({ k: "pal", s: p }); });
+    }
+    return out;
+  }
+  const htmlSeguro = html => tokensHtml(html).map(t => t.k === "tag" ? t.s : t.k === "esp" ? " " : escHtml(t.s)).join("");
+  /* LCS por palavras (preliminar x definitivo); null se grande demais. */
+  function lcsPalavras(a, b) {
+    let i0 = 0; while (i0 < a.length && i0 < b.length && a[i0] === b[i0]) i0++;
+    let fa = a.length, fb = b.length; while (fa > i0 && fb > i0 && a[fa - 1] === b[fb - 1]) { fa--; fb--; }
+    const A = a.slice(i0, fa), B = b.slice(i0, fb), n = A.length, m = B.length;
+    if ((n + 1) * (m + 1) > 9e6) return null;
+    const l = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) l[i][j] = A[i] === B[j] ? l[i + 1][j + 1] + 1 : Math.max(l[i + 1][j], l[i][j + 1]);
+    const out = a.slice(0, i0).map(p => ["=", p]); let i = 0, j = 0;
+    while (i < n && j < m) { if (A[i] === B[j]) { out.push(["=", A[i]]); i++; j++; } else if (l[i + 1][j] >= l[i][j + 1]) out.push(["-", A[i++]]); else out.push(["+", B[j++]]); }
+    while (i < n) out.push(["-", A[i++]]); while (j < m) out.push(["+", B[j++]]);
+    for (let k = fa; k < a.length; k++) out.push(["=", a[k]]);
+    return out;
+  }
+  /* "Corrigido": HTML do definitivo (formatação preservada) com o que saiu em <del> e o que entrou em <ins>. null = laudo grande demais. */
+  function corrigidoHtml(preHtml, defHtml) {
+    const dt = tokensHtml(defHtml), pre = tokensHtml(preHtml).filter(t => t.k === "pal").map(t => t.s);
+    const dif = lcsPalavras(pre, dt.filter(t => t.k === "pal").map(t => t.s));
+    if (!dif) return null;
+    const antes = [], marca = []; let fila = [];
+    for (const [t, w] of dif) { if (t === "-") fila.push(w); else { antes.push(fila); fila = []; marca.push(t); } }
+    const out = [], del = l => l.length ? "<del>" + l.map(escHtml).join(" ") + "</del> " : ""; let d = 0, fim = 0;
+    for (const t of dt) {
+      if (t.k === "tag") out.push(t.s);
+      else if (t.k === "esp") out.push(" ");
+      else { out.push(del(antes[d]), marca[d] === "+" ? "<ins>" + escHtml(t.s) + "</ins>" : escHtml(t.s)); d++; fim = out.length; }
+    }
+    if (fila.length) out.splice(fim, 0, " " + del(fila).trim());
+    return out.join("").replace(/<\/ins> <ins>/g, " ").replace(/<\/del> <del>/g, " ");
+  }
+  const api = { htmlSeguro, corrigidoHtml, estatisticasMudancas, trocasVoz, normalize, speechDelta, fixFala, exameDoTexto, distance, score, placePalette, validSession, keepTabs, phoneKey, buildWordIndex, suggestWords, suggestPhrases,
     lastSentence, buildCompletionIndex, completeSentence, laudosToNotion };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuV2Core = api;
@@ -7367,10 +7418,11 @@ window.tutuSite.appReady = true;
   }
   /* Par do repo de dados (FORMATO-PARES.md) na forma interna; o contrato guarda texto puro de cada lado. */
   function deContrato(d) {
-    const t = x => (x && typeof x.texto === "string" ? x.texto : "");
-    if (!d || !/^\d{4,}$/.test(String(d.acesso)) || !t(d.preliminar).trim() || !t(d.definitivo).trim()) throw new Error("Par inválido");
+    const t = x => (x && typeof x.texto === "string" ? x.texto : ""), h = x => (x && typeof x.html === "string" ? x.html : "");
+    const aguardando = d?.status === "aguardando";   // sem definitivo do chefe ainda: só o preliminar
+    if (!d || !/^\d{4,}$/.test(String(d.acesso)) || !t(d.preliminar).trim() || (!aguardando && !t(d.definitivo).trim())) throw new Error("Par inválido");
     const final = t(d.definitivo);
-    return { id: String(d.acesso), seq: 0, capturado_em: String(d.capturadoEm || d.aprovadoEm || d.data + "T12:00:00Z"), final, preliminar: t(d.preliminar), acesso: String(d.acesso),
+    return { aguardando, preHtml: h(d.preliminar), finalHtml: h(d.definitivo), id: String(d.acesso), seq: 0, capturado_em: String(d.capturadoEm || d.aprovadoEm || d.data + "T12:00:00Z"), final, preliminar: t(d.preliminar), acesso: String(d.acesso),
       chefe: String(d.chefe || "").trim() || final.match(signature)?.[1].trim() || "", titulo: String(d.exame || d.descricaoPacs || "Sem título").trim() };
   }
   function lerJSONL(texto) {
@@ -7557,8 +7609,8 @@ window.tutuSite.appReady = true;
     aguardandoN = 0;
     for (const it of indice) {
       vistos.add(it.acesso);
-      if (it.status === "aguardando") { aguardandoN++; continue; }   // sem definitivo do chefe ainda: o robô completa depois
-      out.push({ id: it.acesso, acesso: it.acesso, data: dia(it.data) || dia(it.capturadoEm), chefe: String(it.chefe || "").trim(), exame: it.exame || it.categoria || "Outros",
+      const aguardando = it.status === "aguardando"; if (aguardando) aguardandoN++;   // sem definitivo: lista só o preliminar
+      out.push({ aguardando, id: it.acesso, acesso: it.acesso, data: dia(it.data) || dia(it.capturadoEm), chefe: String(it.chefe || "").trim(), exame: it.exame || it.categoria || "Outros",
         categoria: it.categoria || "", mudou: it.mudou !== false, titulo: it.exame || "Sem título", cap: String(it.capturadoEm || ""), seq: 0, par: cachePares.get(it.acesso) || locais.get(it.acesso) || null });
     }
     for (const p of pares) if (!(p.acesso && vistos.has(p.acesso)))
@@ -7612,7 +7664,7 @@ window.tutuSite.appReady = true;
     finally { carregando.delete(i.id); }
   }
   async function carregarTodos() {
-    const fila = recorte().filter(i => !i.par && i.acesso && !falhas.has(i.id)), total = fila.length;
+    const fila = recorte().filter(i => !i.aguardando && !i.par && i.acesso && !falhas.has(i.id)), total = fila.length;
     if (!total || !G?.token) return;
     let feitos = 0;
     const trabalhador = async () => { for (let i = fila.shift(); i; i = fila.shift()) { await carregarPar(i); ghStatus.textContent = `GitHub: baixando pares ${++feitos}/${total}…`; } };
@@ -7668,12 +7720,31 @@ window.tutuSite.appReady = true;
     }, { id: "corretorTelaLarga" }));
     if (amplo.open) correcao(amploConteudo, p, true);
   }
+  /* Laudo com a formatação do PACS: "Corrigido" aberto; preliminar e definitivo recolhidos. null = sem HTML (par antigo) ou grande demais: cai no texto. */
+  const abertos = new Map();
+  function sub(chave, rotulo, html, aberto, extra = "") {
+    const d = el("details", { class: "corretor-sub" + extra }), f = el("div", { class: "corretor-folha" });
+    d.open = abertos.has(chave) ? abertos.get(chave) : aberto; f.innerHTML = html;
+    d.append(el("summary", {}, rotulo), f); d.addEventListener("toggle", () => abertos.set(chave, d.open));
+    return d;
+  }
+  function laudoHtml(p) {
+    const pre = TutuV2Core.htmlSeguro(p.preHtml || "");
+    if (p.aguardando) return pre.trim() ? [sub(p.id + "|p", "Laudo preliminar", pre, true), el("p", { class: "corretor-aguarda" }, "Aguardando o definitivo do chefe")] : null;
+    if (!pre.trim() || !(p.finalHtml || "").trim()) return null;
+    const cor = TutuV2Core.corrigidoHtml(p.preHtml, p.finalHtml);
+    if (cor === null) return null;
+    const lg = el("p", { class: "corretor-legenda" }); lg.append(el("del", {}, "tirado pelo chefe"), " ", el("ins", {}, "posto pelo chefe"));
+    return [lg, sub(p.id + "|c", "Corrigido", cor, true, " corretor-corrigido"), sub(p.id + "|p", "Laudo preliminar", pre, false), sub(p.id + "|d", "Laudo definitivo", TutuV2Core.htmlSeguro(p.finalHtml), false)];
+  }
   function correcao(host, p, larga) {
     host.replaceChildren();
-    const mostrarLados = larga ? ladoAmplo : lado;
+    const folhas = laudoHtml(p), mostrarLados = !folhas && (larga ? ladoAmplo : lado);
     host.append(el("h3", larga ? { id: "corretorAmploTitulo" } : {}, p.titulo),
-      el("p", { class: "meta" }, `${p.chefe || semChefe}${p.acesso ? ` · Acesso ${p.acesso}` : ""}`),
-      button(mostrarLados ? "Mostrar correção aplicada" : "Lado a lado", () => {
+      el("p", { class: "meta" }, `${p.aguardando ? "aguardando o definitivo" : p.chefe || semChefe}${p.acesso ? ` · Acesso ${p.acesso}` : ""}`));
+    if (folhas) { host.append(...folhas); return; }
+    if (p.aguardando) return;
+    host.append(button(mostrarLados ? "Mostrar correção aplicada" : "Lado a lado", () => {
         if (larga) {
           ladoAmplo = !ladoAmplo; correcao(host, p, true);
           host.querySelector("#corretorAmploLado").focus();
@@ -7707,8 +7778,8 @@ window.tutuSite.appReady = true;
   let aguardandoN = 0;
   function estatisticas(filtrados) {
     panorama.replaceChildren(el("h2", {}, "Estatísticas do recorte"));
-    const comPar = filtrados.filter(i => i.par), falta = filtrados.filter(i => !i.par && i.acesso && !falhas.has(i.id)).length;
-    panorama.append(el("p", { class: "meta", id: "corretorCobertura" }, `${comPar.length} de ${filtrados.length} exames com texto carregado.` + (aguardandoN ? ` ${aguardandoN} aguardando o definitivo do chefe (o robô completa na próxima coleta).` : "")));
+    const base = filtrados.filter(i => !i.aguardando), comPar = base.filter(i => i.par), falta = base.filter(i => !i.par && i.acesso && !falhas.has(i.id)).length;
+    panorama.append(el("p", { class: "meta", id: "corretorCobertura" }, `${comPar.length} de ${base.length} exames com texto carregado.` + (aguardandoN ? ` ${aguardandoN} aguardando o definitivo do chefe (o robô completa na próxima coleta).` : "")));
     if (falta && G?.token) panorama.append(button(`Carregar os ${falta} restantes`, carregarTodos, { id: "corretorCarregarTodos" }));
     if (!comPar.length) return;
     const porId = new Map(comPar.map(i => [i.id, i])), analises = comPar.map(i => [i, analisar(i.par)]);
@@ -7731,13 +7802,13 @@ window.tutuSite.appReady = true;
   }
   function render() {
     const filtrados = recorte();
-    filtrados.sort((a, b) => (ordem.value === "mudado" ? Number(b.mudou) - Number(a.mudou) : 0) || (b.data || "").localeCompare(a.data || "") || b.cap.localeCompare(a.cap) || b.seq - a.seq);
+    filtrados.sort((a, b) => (ordem.value === "mudado" ? Number(b.mudou && !b.aguardando) - Number(a.mudou && !a.aguardando) : 0) || (b.data || "").localeCompare(a.data || "") || b.cap.localeCompare(a.cap) || b.seq - a.seq);
     lista.replaceChildren(el("h3", {}, `${filtrados.length} pares`));
     if (!filtrados.some(i => i.id === selecionado)) selecionado = filtrados[0]?.id || "";
     for (const i of filtrados) {
       const linha = el("div", { class: "corretor-linha" }), b = button("", () => { selecionado = i.id; render(); }, { class: "corretor-par", "aria-pressed": String(i.id === selecionado) });
       b.append(el("span", { class: "cp-t" }, i.titulo),
-        el("span", { class: "cp-m" }, `${dataBR(i.data)} · ${i.chefe || semChefe}${i.acesso ? ` · Acesso ${i.acesso}` : ""}${i.mudou ? "" : " · sem alterações"}`));
+        el("span", { class: "cp-m" }, `${dataBR(i.data)} · ${i.chefe || semChefe}${i.acesso ? ` · Acesso ${i.acesso}` : ""}${i.aguardando ? " · aguardando definitivo" : i.mudou ? "" : " · sem alterações"}`));
       linha.append(b);
       if (i.acesso) { const lido = Boolean(lidos[i.acesso]); linha.append(button("✓", () => alternarLido(i.acesso), { class: "corretor-lido", "aria-pressed": String(lido), "aria-label": (lido ? "Marcar como não lido: acesso " : "Marcar como lido: acesso ") + i.acesso, title: lido ? "Lido (clique para desmarcar)" : "Marcar como lido" })); }
       lista.append(linha);

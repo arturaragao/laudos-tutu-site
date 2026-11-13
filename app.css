@@ -793,3 +793,18 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #conversaAbrir[aria-pressed="true"] { outline:2px solid var(--accent, #8a5a2b); }
 #conversaDoAudio { margin-top:4px; }
 @media (max-width:760px) { #conversaBox { right:12px; left:12px; width:auto; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); } }
+/* Corretor: laudo com a formatação do PACS (folha branca, Arial ~11pt); Corrigido aberto, preliminar e definitivo recolhidos. */
+.corretor-sub { margin:12px 0 0; border:1px solid var(--line); border-radius:12px; background:var(--panel); overflow:hidden; }
+.corretor-sub > summary { cursor:pointer; padding:10px 14px; min-height:24px; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+.corretor-corrigido > summary { color:var(--text); }
+.corretor-folha { box-sizing:border-box; margin:0 12px 12px; padding:16px 20px; background:#fff; color:#000; border:1px solid #cfcfcf; border-radius:4px; font:11pt/1.3 Arial, Helvetica, sans-serif; overflow-wrap:anywhere; overflow-x:auto; }
+.corretor-folha p, .corretor-folha div, .corretor-folha h1, .corretor-folha h2, .corretor-folha h3, .corretor-folha h4, .corretor-folha h5, .corretor-folha h6 { margin:0; padding:0; font:inherit; }
+.corretor-folha h1, .corretor-folha h2, .corretor-folha h3, .corretor-folha h4, .corretor-folha h5, .corretor-folha h6 { font-weight:700; }
+.corretor-folha ul, .corretor-folha ol { margin:0; padding-left:22px; }
+.corretor-folha table { border-collapse:collapse; } .corretor-folha td, .corretor-folha th { padding:2px 6px; border:1px solid #bbb; }
+.corretor-folha del { background:#fde4e1; color:#b3261e; text-decoration:line-through; }
+.corretor-folha ins { background:#e1f4df; color:#1b6b2a; text-decoration:underline; }
+.corretor-legenda ins { padding:1px 6px; border-radius:4px; background:var(--p-green); color:var(--changed); text-decoration:underline; }
+.corretor-legenda del:not(.rm) { background:var(--p-red); color:var(--crit); }
+.corretor-aguarda { margin:12px 0 0; padding:10px 14px; border:1px dashed var(--line); border-radius:12px; color:var(--muted); font-size:13px; }
+@media(max-width:900px) { .corretor-folha { margin:0 8px 8px; padding:12px; } }
