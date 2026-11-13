@@ -7604,17 +7604,22 @@ window.tutuSite.appReady = true;
   /* Itens da lista: índice do GitHub (par baixado sob demanda) + pares locais (ponte/arquivo), todos com a mesma forma. */
   const dia = s => /^\d{4}-\d\d-\d\d/.test(String(s || "")) ? String(s).slice(0, 10) : "";
   const dataBR = d => d ? new Date(d + "T12:00:00").toLocaleDateString("pt-BR") : "sem data";
+  /* Grupo "mesmo laudo" (indice.json: acessos + descricoes): um item, vários acessos. Sem o campo, é só o acesso. */
+  const acessosDe = it => { const l = Array.isArray(it.acessos) ? it.acessos.map(String).filter(a => /^\d{4,}$/.test(a)) : []; return l.length > 1 && l.includes(it.acesso) ? l : [it.acesso]; };
+  const rotuloAcessos = i => (i.acessos?.length > 1 ? i.acessos.join(" + ") : i.acesso);
+  const lidoDe = i => Boolean(i.acessos?.some(a => lidos[a]));
+  function alternarLidoItem(i) { const novo = !lidoDe(i); for (const a of i.acessos) if (Boolean(lidos[a]) !== novo) alternarLido(a); }
   function itens() {
     const locais = new Map(pares.filter(p => p.acesso).map(p => [p.acesso, p])), vistos = new Set(), out = [];
     aguardandoN = 0;
     for (const it of indice) {
       vistos.add(it.acesso);
       const aguardando = it.status === "aguardando"; if (aguardando) aguardandoN++;   // sem definitivo: lista só o preliminar
-      out.push({ aguardando, id: it.acesso, acesso: it.acesso, data: dia(it.data) || dia(it.capturadoEm), chefe: String(it.chefe || "").trim(), exame: it.exame || it.categoria || "Outros",
+      out.push({ aguardando, id: it.acesso, acesso: it.acesso, acessos: acessosDe(it), descricoes: Array.isArray(it.descricoes) ? it.descricoes.map(String) : [], data: dia(it.data) || dia(it.capturadoEm), chefe: String(it.chefe || "").trim(), exame: it.exame || it.categoria || "Outros",
         categoria: it.categoria || "", mudou: it.mudou !== false, titulo: it.exame || "Sem título", cap: String(it.capturadoEm || ""), seq: 0, par: cachePares.get(it.acesso) || locais.get(it.acesso) || null });
     }
     for (const p of pares) if (!(p.acesso && vistos.has(p.acesso)))
-      out.push({ id: p.id, acesso: p.acesso, data: dia(p.capturado_em), chefe: p.chefe, exame: tipo(p), categoria: "", mudou: true, titulo: p.titulo, cap: p.capturado_em, seq: p.seq, par: p });
+      out.push({ id: p.id, acesso: p.acesso, acessos: p.acesso ? [p.acesso] : [], descricoes: [], data: dia(p.capturado_em), chefe: p.chefe, exame: tipo(p), categoria: "", mudou: true, titulo: p.titulo, cap: p.capturado_em, seq: p.seq, par: p });
     return out;
   }
   function filtros() {
@@ -7631,8 +7636,8 @@ window.tutuSite.appReady = true;
     const termo = foldText(acesso.value.trim()), dias = Number(periodo.value), corte = Date.now() - dias * 864e5;
     return itens().filter(i => (!chefe.value || (i.chefe || "__sem__") === chefe.value) && (!exame.value || i.exame === exame.value) &&
       (!dias || (i.data && Date.parse(i.data + "T12:00:00") >= corte)) &&
-      (!lidoSel.value || (lidoSel.value === "lido") === Boolean(i.acesso && lidos[i.acesso])) &&
-      (!termo || foldText([i.acesso, i.exame, i.chefe, i.categoria, i.titulo].join(" ")).includes(termo)));
+      (!lidoSel.value || (lidoSel.value === "lido") === Boolean(i.acesso && lidoDe(i))) &&
+      (!termo || foldText([...i.acessos, ...i.descricoes, i.exame, i.chefe, i.categoria, i.titulo].join(" ")).includes(termo)));
   }
 
   /* GitHub: índice leve + lidos.json; cada par só é baixado ao abrir (ou em "Carregar os restantes"). */
@@ -7712,13 +7717,13 @@ window.tutuSite.appReady = true;
       return;
     }
     const p = i.par;
-    correcao(detalhe, p, false);
+    correcao(detalhe, p, false, rotuloAcessos(i));
     detalhe.querySelector("h3").after(button("Tela larga", () => {
       ladoAmplo = lado;
-      correcao(amploConteudo, p, true);
+      correcao(amploConteudo, p, true, rotuloAcessos(i));
       amplo.showModal();
     }, { id: "corretorTelaLarga" }));
-    if (amplo.open) correcao(amploConteudo, p, true);
+    if (amplo.open) correcao(amploConteudo, p, true, rotuloAcessos(i));
   }
   /* Laudo com a formatação do PACS: "Corrigido" aberto; preliminar e definitivo recolhidos. null = sem HTML (par antigo) ou grande demais: cai no texto. */
   const abertos = new Map();
@@ -7737,11 +7742,11 @@ window.tutuSite.appReady = true;
     const lg = document.createDocumentFragment();   // legenda retirada a pedido do Artur (13/11)
     return [lg, sub(p.id + "|c", "Corrigido", cor, true, " corretor-corrigido"), sub(p.id + "|p", "Laudo preliminar", pre, false), sub(p.id + "|d", "Laudo definitivo", TutuV2Core.htmlSeguro(p.finalHtml), false)];
   }
-  function correcao(host, p, larga) {
+  function correcao(host, p, larga, rotulo = p.acesso) {
     host.replaceChildren();
     const folhas = laudoHtml(p), mostrarLados = !folhas && (larga ? ladoAmplo : lado);
     host.append(el("h3", larga ? { id: "corretorAmploTitulo" } : {}, p.titulo),
-      el("p", { class: "meta" }, `${p.aguardando ? "aguardando o definitivo" : p.chefe || semChefe}${p.acesso ? ` · Acesso ${p.acesso}` : ""}`));
+      el("p", { class: "meta" }, `${p.aguardando ? "aguardando o definitivo" : p.chefe || semChefe}${rotulo ? ` · Acesso ${rotulo}` : ""}`));
     if (folhas) { host.append(...folhas); return; }
     if (p.aguardando) return;
     host.append(button(mostrarLados ? "Mostrar correção aplicada" : "Lado a lado", () => {
@@ -7771,7 +7776,7 @@ window.tutuSite.appReady = true;
     const box = el("span", { class: "corretor-exs" });
     ids.forEach((id, k) => {
       const i = porId.get(id); if (!i) return;
-      box.append(button(i.acesso || "#" + (k + 1), () => { selecionado = id; render(); detalhe.scrollIntoView?.({ block: "nearest" }); }, { class: "corretor-ex", title: "Abrir este par" }));
+      box.append(button(rotuloAcessos(i) || "#" + (k + 1), () => { selecionado = id; render(); detalhe.scrollIntoView?.({ block: "nearest" }); }, { class: "corretor-ex", title: "Abrir este par" }));
     });
     return box;
   }
@@ -7808,9 +7813,9 @@ window.tutuSite.appReady = true;
     for (const i of filtrados) {
       const linha = el("div", { class: "corretor-linha" }), b = button("", () => { selecionado = i.id; render(); }, { class: "corretor-par", "aria-pressed": String(i.id === selecionado) });
       b.append(el("span", { class: "cp-t" }, i.titulo),
-        el("span", { class: "cp-m" }, `${dataBR(i.data)} · ${i.chefe || semChefe}${i.acesso ? ` · Acesso ${i.acesso}` : ""}${i.aguardando ? " · aguardando definitivo" : i.mudou ? "" : " · sem mudanças"}`));
+        el("span", { class: "cp-m" }, `${dataBR(i.data)} · ${i.chefe || semChefe}${i.acesso ? ` · Acesso ${rotuloAcessos(i)}` : ""}${i.aguardando ? " · aguardando definitivo" : i.mudou ? "" : " · sem mudanças"}`));
       linha.append(b);
-      if (i.acesso) { const lido = Boolean(lidos[i.acesso]); linha.append(button("✓", () => alternarLido(i.acesso), { class: "corretor-lido", "aria-pressed": String(lido), "aria-label": (lido ? "Marcar como não lido: acesso " : "Marcar como lido: acesso ") + i.acesso, title: lido ? "Lido (clique para desmarcar)" : "Marcar como lido" })); }
+      if (i.acesso) { const lido = lidoDe(i); linha.append(button("✓", () => alternarLidoItem(i), { class: "corretor-lido", "aria-pressed": String(lido), "aria-label": (lido ? "Marcar como não lido: acesso " : "Marcar como lido: acesso ") + rotuloAcessos(i), title: lido ? "Lido (clique para desmarcar)" : "Marcar como lido" })); }
       lista.append(linha);
     }
     abrir(filtrados.find(i => i.id === selecionado));
@@ -7952,6 +7957,8 @@ window.tutuSite.appReady = true;
   function filtrar(t, ex) {
     return U.anonimizar(t, { ...config(ex), mask: ex.mask, banco: BANK.map(r => r[3] || "") });
   }
+  /* Mesmo filtro para o Conversar sem ponte (116): usa o exame aberto na folha (vocabulário), lança "bloqueado" se não puder filtrar. */
+  ui.anonimizar = t => filtrar(t, (typeof current !== "undefined" && current) || U.examesUSG(EXAMS)[0] || EXAMS[0] || {});
   function stop() {
     ouvindo = false; const s = speech; speech = null; s?.stop(); soltarTela();
     iniciar.disabled = false; parar.disabled = true; exame.disabled = false; parcial.textContent = ""; if (msg.textContent.startsWith("Ouvindo")) dizer(""); atualizarUI();
@@ -8474,7 +8481,10 @@ window.tutuSite.appReady = true;
    vermelho riscado / verde, com Aceitar tudo e Desfazer. Se o pedido valer para os próximos laudos ("da próxima vez", "sempre", "nunca",
    "gostei"), a IA manda no mesmo retorno "REGRA: ..." -> regra do exame (coleção regras) + ia/regras/<exame>.md no repo de dados
    (seção "Ajustes ditados no Conversar"), que o áudio do celular (tools/ia_laudo.py) também lê. "Lembrei: ..." tem desfazer.
-   Motor: sample da plataforma (ponte /ia2: Antigravity, Claude de reserva). Só o laudo + o pedido vão para a IA (pedido filtrado). */
+   Motor: sample da plataforma (ponte /ia2: Antigravity, Claude de reserva). Só o laudo + o pedido vão para a IA (pedido filtrado).
+   Sem a ponte (celular, PCs do hospital): 13/11/2026, pela fila do repo de dados (fila-conversa/<uuid>.json, mesmo desenho do áudio):
+   o laudo e o pedido passam pelo anonimizar do 114 ANTES de ir ao GitHub; a ponte do PC (Antigravity) ou a Action (Claude) grava
+   `resposta`; o site espera (polling) e segue o mesmo caminho do /ia2. */
 (function (root) {
   "use strict";
   const SECAO = "## Ajustes ditados no Conversar";
@@ -8497,12 +8507,13 @@ window.tutuSite.appReady = true;
       .replace(/\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/g, "[data]")
       .replace(/\d{6,}/g, "[identificador]").replace(/[ \t]+/g, " ").trim().slice(0, 2000);
   }
-  /* Linhas numeradas COMPLETAS (o pedido pode mexer em frases normais). Devolve { linhas: [{raw, n}], texto }. */
-  function numerar(rascunho) {
+  /* Linhas numeradas COMPLETAS (o pedido pode mexer em frases normais). Devolve { linhas: [{raw, n}], texto }.
+     filtro (opcional): aplicado a cada linha só no `texto` enviado (a numeração e `linhas` ficam do original). */
+  function numerar(rascunho, filtro) {
     const linhas = [], out = []; let n = 0;
     for (const raw of String(rascunho || "").split("\n")) {
       if (!raw.trim()) { linhas.push({ raw, n: 0 }); continue; }
-      n++; linhas.push({ raw, n }); out.push("L" + n + " " + raw.trim());
+      n++; linhas.push({ raw, n }); out.push("L" + n + " " + (filtro ? filtro(raw.trim()) : raw.trim()));
     }
     return { linhas, texto: out.join("\n") };
   }
@@ -8635,13 +8646,62 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     mic.classList.remove("on"); mic.setAttribute("aria-pressed", "false");
   }
 
+  /* ---------- sem a ponte: fila do repo de dados (fila-conversa/<uuid>.json), processada pela ponte do PC ou pela Action ---------- */
+  const fila = { intervalo: 5000, limite: 6 * 60 * 1000 };   // polling a cada 5 s, até 6 min
+  const anon = t => {   // mesmo anonimizar do Áudio (114); sem ele nada vai ao GitHub
+    if (typeof ui.anonimizar !== "function") throw Error("bloqueado: filtro de privacidade indisponível");
+    return ui.anonimizar(String(t));
+  };
+  const esperar = (ms, signal) => new Promise((ok, no) => {
+    if (signal?.aborted) return no(new DOMException("Pedido cancelado.", "AbortError"));
+    const t = setTimeout(() => { signal?.removeEventListener("abort", ab); ok(); }, ms);
+    const ab = () => { clearTimeout(t); no(new DOMException("Pedido cancelado.", "AbortError")); };
+    signal?.addEventListener("abort", ab, { once: true });
+  });
+  async function apagarFila(caminho) {   // best effort, como o 114 ao copiar o laudo do áudio
+    const G = T?.gh;
+    try {
+      const r = await G.getJson(caminho); if (!r) return;
+      await fetch("https://api.github.com/repos/" + G.repo + "/contents/" + caminho, {
+        method: "DELETE", headers: { Authorization: "Bearer " + G.token, "Content-Type": "application/json" },
+        body: JSON.stringify({ message: "Conversar: remover pedido da fila", sha: r.sha, branch: "main" })
+      });
+    } catch (_) {}
+  }
+  async function viaFila(montarAnonimo, signal) {
+    const G = T?.gh;
+    if (!G?.token || !G.putJson || !G.getJson) throw Error("Sem a ponte do PC (127.0.0.1:47831) e sem a chave do repo de dados: salve-a em Configurações › Sincronização.");
+    const prompt = montarAnonimo();   // lança "bloqueado" antes de qualquer envio
+    const caminho = "fila-conversa/" + crypto.randomUUID() + ".json";
+    await G.putJson(caminho, { prompt, modelTier: "balanced", ia: "pendente", criado: new Date().toISOString() }, null, "Conversar: pedido anônimo");
+    dizer("Sem a ponte do PC: enviado pela fila (até ~3 min)…");
+    const fim = Date.now() + fila.limite;
+    try {
+      while (Date.now() < fim) {
+        await esperar(fila.intervalo, signal);
+        let d = null;
+        try { d = (await G.getJson(caminho))?.json; } catch (_) { continue; }   // rede falhou: tenta de novo no próximo ciclo
+        if (d?.ia === "erro") throw Error("A IA não conseguiu responder pela fila" + (d.erro ? " (" + String(d.erro).slice(0, 120) + ")" : "") + ". O laudo ficou como estava.");
+        if (typeof d?.resposta === "string" && d.resposta.trim()) return { text: d.resposta, motor: d.motor || "claude", aviso: "pela fila" };
+      }
+      throw Error("A IA não respondeu em 6 min pela fila; o laudo ficou como estava. Tente de novo.");
+    } finally { await apagarFila(caminho); }
+  }
+  /* Com a ponte: nada muda (local, sem GitHub). Sem ponte (ou sem sample): fila. */
+  async function pedirIA(prompt, signal, montarAnonimo) {
+    if (typeof sample === "function" && sample) {
+      try { return await sample(prompt, { signal, cache: false, modelTier: "balanced" }); }
+      catch (e) { if (e?.code !== "ponte_indisponivel") throw e; }
+    }
+    return viaFila(montarAnonimo, signal);
+  }
+
   /* ---------- envio: laudo numerado + pedido -> DIFF (+ REGRA opcional) ---------- */
   async function mandar() {
     if (busy) return;
     if (ouvindo) parar();
     const pedido = C.limparPedido(texto.value);
     if (!pedido) { dizer("Fale ou escreva o que ajustar."); texto.focus(); return; }
-    if (typeof sample !== "function" || !sample) { dizer("IA indisponível: abra a ponte local (127.0.0.1:47831)."); return; }
     if (typeof genBusy !== "undefined" && genBusy) { dizer("Aguarde o Gerar terminar."); return; }
     const draft = laudoTagged();
     if (!draft.trim()) { dizer("A folha está vazia: abra ou escreva um laudo primeiro."); return; }
@@ -8652,7 +8712,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     dizer("Enviando à IA…");
     const t0 = performance.now();
     try {
-      const r = await sample(prompt, { signal: ctlConversa.signal, cache: false, modelTier: "balanced" });
+      const r = await pedirIA(prompt, ctlConversa.signal, () => C.montarPrompt({ exame: nameAll(), regras: rulesBlock(), numerado: C.numerar(draft, anon).texto, pedido: anon(pedido) }));
       const motor = r?.motor === "antigravity" ? "Antigravity" : "Claude", secs = ((performance.now() - t0) / 1000).toFixed(0);
       const { regra, resto } = C.extrairRegra(r?.text || "");
       lockSheet(false);
@@ -8673,7 +8733,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
       if (regra) await lembrar(regra);
     } catch (e) {
       lockSheet(false);
-      dizer(e?.name === "AbortError" ? "Pedido cancelado." : (e?.message || "Falha ao falar com a IA."));
+      dizer(e?.name === "AbortError" ? "Pedido cancelado." : /^bloqueado/i.test(e?.message || "") ? "Bloqueado pelo filtro de privacidade: nada foi enviado ao GitHub. " + e.message : (e?.message || "Falha ao falar com a IA."));
     } finally { busy = false; enviar.disabled = false; lockSheet(false); }
   }
 
@@ -8710,5 +8770,5 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     const ok = await gravarMd(r.exame, md => C.tirarRegraMd(md, r.regra));
     dizer("Esqueci: " + r.regra + (ok ? "" : " (o arquivo do repo de dados não foi alterado)"));
   }
-  ui.conversa = { abrir, mandar };
+  ui.conversa = { abrir, mandar, fila };
 })();
