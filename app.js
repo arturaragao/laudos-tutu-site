@@ -7734,7 +7734,7 @@ window.tutuSite.appReady = true;
     if (!pre.trim() || !(p.finalHtml || "").trim()) return null;
     const cor = TutuV2Core.corrigidoHtml(p.preHtml, p.finalHtml);
     if (cor === null) return null;
-    const lg = el("p", { class: "corretor-legenda" }); lg.append(el("del", {}, "tirado pelo chefe"), " ", el("ins", {}, "posto pelo chefe"));
+    const lg = document.createDocumentFragment();   // legenda retirada a pedido do Artur (13/11)
     return [lg, sub(p.id + "|c", "Corrigido", cor, true, " corretor-corrigido"), sub(p.id + "|p", "Laudo preliminar", pre, false), sub(p.id + "|d", "Laudo definitivo", TutuV2Core.htmlSeguro(p.finalHtml), false)];
   }
   function correcao(host, p, larga) {
@@ -7808,7 +7808,7 @@ window.tutuSite.appReady = true;
     for (const i of filtrados) {
       const linha = el("div", { class: "corretor-linha" }), b = button("", () => { selecionado = i.id; render(); }, { class: "corretor-par", "aria-pressed": String(i.id === selecionado) });
       b.append(el("span", { class: "cp-t" }, i.titulo),
-        el("span", { class: "cp-m" }, `${dataBR(i.data)} · ${i.chefe || semChefe}${i.acesso ? ` · Acesso ${i.acesso}` : ""}${i.aguardando ? " · aguardando definitivo" : i.mudou ? "" : " · sem alterações"}`));
+        el("span", { class: "cp-m" }, `${dataBR(i.data)} · ${i.chefe || semChefe}${i.acesso ? ` · Acesso ${i.acesso}` : ""}${i.aguardando ? " · aguardando definitivo" : i.mudou ? "" : " · sem mudanças"}`));
       linha.append(b);
       if (i.acesso) { const lido = Boolean(lidos[i.acesso]); linha.append(button("✓", () => alternarLido(i.acesso), { class: "corretor-lido", "aria-pressed": String(lido), "aria-label": (lido ? "Marcar como não lido: acesso " : "Marcar como lido: acesso ") + i.acesso, title: lido ? "Lido (clique para desmarcar)" : "Marcar como lido" })); }
       lista.append(linha);
