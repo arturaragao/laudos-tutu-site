@@ -8053,11 +8053,31 @@ window.tutuSite.appReady = true;
     }
     if (trocas.length) publishVoice();
   }
+  /* Aprendizado também nos ajustes da IA fora do Áudio (Conversar com a IA e Gerar): ui.registrarIA(texto) guarda a última versão da IA
+     aceita no caso aberto (116 chama depois do diff; applyGenerated, abaixo, no Gerar); ao copiar, se o texto copiado difere dela,
+     grava a mesma correção ia/correcoes/<exame>/<id>.json, uma vez por versão. Desfazer a IA esquece a proposta. */
+  const propostasIA = new Map();
+  const mesmoTexto = (a, b) => String(a).replace(/\s+/g, " ").trim() === String(b).replace(/\s+/g, " ").trim();
+  ui.registrarIA = texto => {
+    const caso = ui.activeId(), exame = typeof current !== "undefined" ? current?.id : "";
+    if (!caso) return;
+    if (texto && String(texto).trim()) propostasIA.set(caso, { proposta: texto, exame, id: crypto.randomUUID(), enviada: false }); else propostasIA.delete(caso);
+  };
+  ui.propostaIA = () => propostasIA.get(ui.activeId())?.proposta || "";
+  const gravarCorrecao = (exame, id, proposta, final) => !/^[a-z0-9-]{1,60}$/.test(exame || "") || mesmoTexto(proposta, final) ? Promise.resolve(false)
+    : G.putJson("ia/correcoes/" + exame + "/" + id + ".json", { exame, proposta, final, quando: new Date().toISOString() }, null, "IA: correção do Artur").then(() => true, () => false);
+  if (typeof applyGenerated === "function") { const antigoGerado = applyGenerated; applyGenerated = (...a) => { const r = antigoGerado(...a); ui.registrarIA(laudoTagged()); return r; }; }
+  if (typeof undoAllClaude === "function") { const antigoDesfazer = undoAllClaude; undoAllClaude = (...a) => { ui.registrarIA(null); return antigoDesfazer(...a); }; const b = document.getElementById("undoAllBtn"); if (b) b.onclick = undoAllClaude; }
   const antigoClipboard = copyToClipboard;
   copyToClipboard = async (...args) => {
     const caso = ui.activeId(), finalTexto = laudoTagged(), vinculo = T.sync.kvGet("_usg/vinculos").then(v => ({ id: v?.[caso] }), () => ({ erro: true }));
+    const reg = propostasIA.get(caso);
     // Inicia a cópia na folha atual antes que qualquer await permita trocar de aba.
     const ok = await antigoClipboard(...args);
+    if (ok && reg && !reg.enviada && !mesmoTexto(reg.proposta, finalTexto)) {
+      reg.enviada = true;   // uma vez por versão da IA
+      gravarCorrecao(reg.exame, reg.id, reg.proposta, finalTexto).then(g => { if (!g) reg.enviada = false; });
+    }
     if (ok) {
       try {
         const { id, erro } = await vinculo;
@@ -8065,10 +8085,8 @@ window.tutuSite.appReady = true;
         if (id) {
           const r = await G.getJson("fila-usg/" + id + ".json");
           // Aprendizado: proposta da IA → laudo que o Artur copiou (tools/ia_laudo.py usa nas próximas e no guia).
-          if (r?.json?.laudo && /^[a-z0-9-]{1,60}$/.test(r.json.exame || "")) {
-            await G.putJson("ia/correcoes/" + r.json.exame + "/" + id + ".json",
-              { exame: r.json.exame, proposta: r.json.laudo, final: finalTexto, quando: new Date().toISOString() }, null, "IA: correção do Artur").catch(() => {});
-          }
+          // Se a IA ajustou depois (Conversar/Gerar), essa versão é a proposta e já foi gravada acima.
+          if (r?.json?.laudo && !reg) await gravarCorrecao(r.json.exame, id, r.json.laudo, finalTexto);
           if (r?.json?.laudo) await aprenderVoz(r.json.texto, finalTexto).catch(() => {});
           if (r) await apagar(id, r.sha);
           await mudarVinculos(vinculos => { if (vinculos[caso] === id) delete vinculos[caso]; }); await atualizar();
@@ -8572,6 +8590,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
         pushVersion("Antes da correção");   // "Desfazer IA" (undoAllClaude) volta até aqui
         sheet.innerHTML = diffLaudoHtml(draft, novo);
         pushVersion("Ajustado na conversa (" + motor + ")");
+        ui.registrarIA?.(laudoTagged());   // última versão da IA: ao copiar com edições manuais vira ia/correcoes (114)
         renderAlerts(); updateCount(); scheduleCaseSave();
         acoes.hidden = false;
       }
