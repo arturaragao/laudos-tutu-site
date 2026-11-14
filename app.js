@@ -4902,7 +4902,7 @@ window.tutuSite.appReady = true;
   }, true);
 })();
 
-/* Document PiP: espelho local do caso ativo, aberto somente por gesto. */
+/* Popup local: espelho do caso ativo, posicionável pelo dividir-tela.ahk. */
 (() => {
   "use strict";
   const ui = window.tutuV2;
@@ -4956,12 +4956,12 @@ window.tutuSite.appReady = true;
   ui.openHUD = async () => {
     if (pip && !pip.closed) { pip.focus(); return; }
     if (opening) return;
-    if (!window.documentPictureInPicture?.requestWindow) {
-      fallback("Janelinha indisponível; modo compacto ativado (Ctrl+Shift+L)."); return;
-    }
     opening = true;
     try {
-      pip = await window.documentPictureInPicture.requestWindow({ width: 320, height: 180 });
+      // Popup comum permite WinMove e dispensa o sempre-por-cima do Document PiP.
+      // DOM e callbacks continuam locais, ligados à página de origem.
+      pip = window.open("", "tutu-pacs-hud", "popup=yes,width=360,height=600,left=40,top=40");
+      if (!pip) throw new Error("Popup bloqueado");
       const opened = pip;
       pip.addEventListener("pagehide", () => {
         if (pip !== opened) return;
@@ -4971,7 +4971,7 @@ window.tutuSite.appReady = true;
       }, { once: true });
       $("hudNotice")?.remove();
       const doc = pip.document;
-      doc.title = "Laudos · sobre o PACS"; doc.documentElement.lang = "pt-BR";
+      doc.title = "Tutu · painel PACS"; doc.documentElement.lang = "pt-BR";
       // Só CSS local já carregado; não busca fontes ou estilos externos.
       for (const sheet of document.styleSheets) {
         try { doc.head.append(ui.el("style", {}, [...sheet.cssRules].map(r => r.cssText).join("\n"))); }
@@ -5000,6 +5000,8 @@ window.tutuSite.appReady = true;
       fallback("Não foi possível abrir a janelinha; modo compacto ativado (Ctrl+Shift+L).");
     } finally { opening = false; }
   };
+  // O painel depende do estado e dos callbacks da página de origem.
+  window.addEventListener("pagehide", () => { if (pip && !pip.closed) pip.close(); });
 })();
 
 /* Volume local: mesma detecção/cálculo da calculadora, sem reconstruir a folha. */
