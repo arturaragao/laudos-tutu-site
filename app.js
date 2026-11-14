@@ -4283,7 +4283,10 @@ window.tutuSite.appReady = true;
   const move = (id, parent) => { const n = $(id); if (n) { moved[id] = n; parent.append(n); } return n; };
   document.body.classList.add("tutu-v2");
   const app = ui.app = document.querySelector(".app");
-  const mobile = matchMedia("(max-width:760px)");
+  // Largura reduzida também ocorre no PC ao lado do PACS.
+  const mobile = matchMedia("(max-width:760px) and (pointer:coarse)");
+  const narrow = matchMedia("(max-width:760px)");
+  ui.isMobile = () => mobile.matches;
   app.id = "tutuApp";
   const top = el("header", { id: "v2Top" });
   const tabs = el("nav", { id: "caseTabs", role: "tablist", "aria-label": "Casos abertos" });
@@ -4443,7 +4446,9 @@ window.tutuSite.appReady = true;
   // No celular os botões ficam no topo, acessíveis mesmo com as gavetas fechadas.
   const placeDrawers = () => {
     clearTimeout(leftPeekTimer); clearTimeout(rightPeekTimer);
-    if (mobile.matches) {
+    app.classList.toggle("mobile-device", mobile.matches);
+    app.classList.toggle("desktop-narrow", narrow.matches && !mobile.matches);
+    if (narrow.matches) {
       top.prepend(leftToggle); top.append(rightToggle);
       leftPinned = rightPinned = false;
     } else {
@@ -4454,6 +4459,7 @@ window.tutuSite.appReady = true;
     showLeft(leftPinned); showRight(rightPinned);
   };
   mobile.addEventListener("change", placeDrawers);
+  narrow.addEventListener("change", placeDrawers);
   placeDrawers();
   $("maskSearch").oninput = () => { document.querySelectorAll("#exams .exam").forEach(b => b.hidden = !TutuV2Core.score($("maskSearch").value, b.textContent)); };
   const render = renderExams;
@@ -8057,7 +8063,7 @@ window.tutuSite.appReady = true;
     if (fechar) { stop(); dialog.close(); }
   });
   dialog.addEventListener("cancel", stop); dialog.addEventListener("close", stop); window.addEventListener("pagehide", stop);
-  if (new URLSearchParams(location.search).get("audio") === "1" || window.matchMedia("(max-width: 760px)").matches) {
+  if (new URLSearchParams(location.search).get("audio") === "1" || ui.isMobile()) {
     dialog.classList.add("usg-full");
     const abrirAudio = () => {
       if (!ui.initialized) { requestAnimationFrame(abrirAudio); return; }

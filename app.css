@@ -715,7 +715,7 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 .v2-banco-selo[data-state="erro"]{color:var(--warn);background:#d59b2820}
 .v2-banco-selo[hidden]{display:none}
 
-/* Celular: uma folha inteira e gavetas que não participam da grade. */
+/* Janela estreita: folha inteira e laterais recolhidas fora da grade. */
 @media(max-width:760px) {
   body.tutu-v2 { min-width:0; width:100%; }
   .tutu-v2 #tutuApp { width:100%; margin:0; border:0; grid-template-columns:minmax(0,1fr)!important; grid-template-areas:"top" "center" "foot"; grid-template-rows:86px minmax(0,1fr) auto; }
@@ -758,6 +758,15 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
   #tutuApp .v2-footer-actions { padding-inline:10px; gap:8px; }
   #tutuApp #copiar kbd, #tutuApp #hudOpen { display:none; }
   #tutuApp .v2-footer-actions .v2-banco-selo { order:2; max-width:100%; }
+}
+/* No PC estreito o áudio continua um diálogo, aberto somente pelo usuário. */
+@media(max-width:760px) and (pointer:fine) {
+  .tutu-v2 #tutuApp { grid-template-rows:72px minmax(0,1fr) auto; }
+  .tutu-v2 #tutuApp #v2Left, .tutu-v2 #tutuApp #v2Right { top:72px; }
+  .tutu-v2 #tutuApp #copiar, .tutu-v2 #tutuApp #usgOpen { min-height:34px; font-size:12px; padding:5px 8px; }
+  .tutu-v2 #tutuApp #laudo { padding:24px 20px; }
+}
+@media(max-width:760px) and (pointer:coarse) {
   #usgDialog, #usgDialog.usg-full { inset:0; width:100%; max-width:100%; height:100dvh; max-height:100dvh; margin:0; border:0; border-radius:0; padding:max(12px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom)); background:var(--paper); color:var(--text); box-shadow:none; }
   #usgDialog[open] { gap:8px; }
   #usgDialog .usg-leitura { border-radius:16px; }
