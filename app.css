@@ -808,3 +808,15 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 .corretor-legenda del:not(.rm) { background:var(--p-red); color:var(--crit); }
 .corretor-aguarda { margin:12px 0 0; padding:10px 14px; border:1px dashed var(--line); border-radius:12px; color:var(--muted); font-size:13px; }
 @media(max-width:900px) { .corretor-folha { margin:0 8px 8px; padding:12px; } }
+
+/* Modo Frase (@) */
+::highlight(tutu-frase) { background: color-mix(in srgb, var(--accent, #b4793a) 28%, transparent); }
+#fraseBox { position: fixed; z-index: 60; overflow: auto; padding: 8px; border-radius: 10px; background: var(--paper, #fffaf2); color: var(--ink, #2b2620); border: 1px solid var(--line, #d8cdbb); box-shadow: 0 8px 28px rgba(0,0,0,.18); font-size: 13px; }
+#fraseBox[hidden] { display: none; }
+#fraseBox .fr-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+#fraseBox .fr-chip { background: var(--accent, #b4793a); color: #fff; border-radius: 999px; padding: 1px 8px; font-weight: 600; }
+#fraseBox .fr-q { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#fraseBox .fr-op { display: grid; grid-template-columns: 22px 1fr; gap: 0 6px; padding: 5px 6px; border-radius: 6px; cursor: pointer; }
+#fraseBox .fr-op[aria-selected="true"] { background: color-mix(in srgb, var(--accent, #b4793a) 18%, transparent); outline: 1px solid var(--accent, #b4793a); }
+#fraseBox .fr-op small, #fraseBox .fr-neg, #fraseBox .fr-dica, #fraseBox .fr-vazio { grid-column: 2; opacity: .75; font-size: 12px; }
+#fraseBox .fr-neg { margin-top: 4px; } #fraseBox .fr-dica { margin-top: 6px; font-size: 11px; opacity: .6; }

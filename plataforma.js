@@ -413,7 +413,7 @@
       if (slug === "notas-tomografia" && Array.isArray(c.doc?.pares)) out.pares = c.doc.pares.filter(p => Array.isArray(p) && p.length >= 4);   // achado -> conclusão (só nesta página)
       const lado = slug === "notas-tomografia" ? "nt" : "tc";
       const o = out[lado] || (out[lado] = { frases: [], atualizado: "" });
-      o.frases.push(...c.doc.frases.filter(e => Array.isArray(e) && e.length >= 4));
+      o.frases.push(...c.doc.frases.filter(e => Array.isArray(e) && e.length >= 4).map(e => e.length >= 6 ? e : [e[0], e[1], e[2], e[3], e[4] || null, c.doc.modalidade || "TC"]));   // e[4] = pares {a,c} do robô; e[5] = modalidade (modo Frase @)
       if (!o.atualizado || (slug === "notas-tc" || slug === "notas-tomografia")) o.atualizado = c.atualizado || o.atualizado;
     }
     return out;
