@@ -799,7 +799,8 @@ const BUILTIN_CMDS = [
   { fala:"conclusão", acao:"ir_conclusao" }, { fala:"achados", acao:"ir_achados" }, { fala:"técnica", acao:"ir_tecnica" }, { fala:"informações clínicas", acao:"ir_clinica" },
   { fala:"achados adicionais", acao:"ir_adicionais" }, { fala:"vá para achados adicionais", acao:"ir_adicionais" },
   { fala:"sugerir conclusão", acao:"sugerir_conclusao" }, { fala:"sugere conclusão", acao:"sugerir_conclusao" }, { fala:"conclusão automática", acao:"sugerir_conclusao" },
-  { fala:"revisar laudo", acao:"revisar" }, { fala:"apagar frase", acao:"apagar_frase" }, { fala:"apagar isso", acao:"apagar_isso" }
+  { fala:"revisar laudo", acao:"revisar" }, { fala:"apagar frase", acao:"apagar_frase" }, { fala:"apagar isso", acao:"apagar_isso" },
+  { fala:"estruturar ditado", acao:"estruturar" }, { fala:"estruturar laudo", acao:"estruturar" }, { fala:"organizar por órgão", acao:"estruturar" }, { fala:"organizar ditado", acao:"estruturar" }
 ];
 let frases = [], correcoes = [], comandos = [], macros = [];
 let dictOk = new Set();   // palavras/trechos que o médico confirmou como corretos
@@ -2258,7 +2259,9 @@ Responda apenas com o trecho corrigido, sem aspas e sem comentários.`;
       applyBlockFix(b, cur, fixed);
       updateCount(); updVolHint(); scheduleCaseSave();
       const eb = errorBlocks(cur, fixed).blocks;
-      learnPairs(eb);
+      const inseg = window.tutuVocab?.regraInsegura || (() => false);
+      learnPairs(eb.filter(b => !inseg(b.de, b.para)));
+      window.tutuVocab?.aprenderDeIA?.(cur, fixed, typeof current !== "undefined" && current ? current.id : "", { blocos: eb });
       emitExt("laudos-estat", { corr: eb.length || 1 });   // conta no painel diário da extensão
       const a = cur.split(/\s+/), c = fixed.split(/\s+/);
       const changed = c.filter(w => !a.includes(w)).slice(0, 4).join(" ");
@@ -3437,7 +3440,7 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
   const CEM = { cem: 100, cento: 100, duzentos: 200, duzentas: 200, trezentos: 300, trezentas: 300, quatrocentos: 400, quatrocentas: 400,
     quinhentos: 500, quinhentas: 500, seiscentos: 600, seiscentas: 600, setecentos: 700, setecentas: 700, oitocentos: 800, oitocentas: 800, novecentos: 900, novecentas: 900 };
   const numWord = w => { const x = f(w); return x in UN ? UN[x] : x in DEZ ? DEZ[x] : x in CEM ? CEM[x] : x === "mil" ? 1000 : null; };
-  const UNIT_RE = /^(cent[ií]metros?|mil[ií]metros?|mililitros?|ml|cm|mm|unidades?|hounsfield|uh|graus?|por\s?cento|%|anos?|meses|m[eê]s|dias?|semanas?|horas?)$/i;
+  const UNIT_RE = /^(cent[ií]metros?|mil[ií]metros?|mililitros?|gramas?|ml|cm|mm|g|unidades?|hounsfield|uh|graus?|por\s?cento|%|anos?|meses|m[eê]s|dias?|semanas?|horas?)$/i;
   const isDigits = w => /^\d+$/.test(w);
 
   // junta sequências de números por extenso ("vinte e três", "cento e dez") num valor
@@ -3471,7 +3474,8 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
       tok = out;
     }
     let t = tok.join(" ");
-    // 2) decimal falado e "por" entre números
+    // 2) decimal falado, negativo antes de UH e "por" entre números
+    t = t.replace(/\bmenos\s+(\d+(?:\s+v[ií]rgula\s+\d+)?)\s*(?=(?:unidades?\s+(?:de\s+)?)?(?:hounsfield|uh)\b)/gi, "-$1 ");
     t = t.replace(/(\d+)\s+v[ií]rgula\s+(\d+)/gi, "$1,$2");
     t = t.replace(/(\d+)\.(\d{1,2})(?=\s*(?:cm|mm|ml|x|×|por\b|cent|mil[ií]))/gi, "$1,$2");   // o Chrome às vezes usa ponto decimal
     t = t.replace(/(\d+(?:,\d+)?)\s*(?:por|x|×)\s*(?=\d)/gi, "$1 x ");
@@ -3567,6 +3571,8 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
     if (A === B) return true;
     return A.length === B.length && A.slice(0, -1) === B.slice(0, -1) && /[aoe]/.test(A.slice(-1)) && /[aoe]/.test(B.slice(-1));
   }
+  // Acordo Ortográfico 2009: ditongos abertos paroxítonos perderam o acento (mastóide -> mastoide, mucóide -> mucoide, intróito -> introito)
+  const pos2009 = w => String(w).replace(/ó(id[ea]s?|it[oa]s?|ia[s]?)$/i, "o$1").replace(/é(ias?)$/i, "e$1");
   const cacheVoc = new WeakMap();
   function vocIndex(vf) {
     if (!Array.isArray(vf)) return null;
@@ -3575,7 +3581,7 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
       const raw = new Set(), byFold = new Map(), byKey = new Map();
       for (const e of vf) {
         const w = String(e && e[0] != null ? e[0] : ""), f = +(e && e[1]) || 0; if (!w) continue;
-        const lw = w.toLowerCase(), fw = fold(w);
+        const lw = pos2009(w.toLowerCase()), fw = fold(lw);
         raw.add(lw);
         const cur = byFold.get(fw); if (!cur || f > cur.f) byFold.set(fw, { w: lw, f });
         if (fw.length >= 5 && /^[a-z]+$/.test(fw)) { const k = chave(fw); if (!byKey.has(k)) byKey.set(k, []); byKey.get(k).push({ w: lw, fw, f }); }
@@ -3588,6 +3594,8 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
   function corrigirFonetica(text, vf, opts) {
     const ix = vocIndex(vf); if (!ix || !text) return text;
     const minFreq = (opts && opts.minFreq) || 3;
+    const exList = opts && opts.vocabExame;
+    const exameSet = Array.isArray(exList) && exList.length ? new Set(exList.map(w => fold(pos2009(String(w))))) : null;
     let out = "", last = 0;
     for (const t of palavras(text)) {
       const f = t.f;
@@ -3597,10 +3605,12 @@ $("ntUpd").onclick = () => updateNtFromNotion(true);
       if (ehPrefixado(f)) continue;
       let best = null, bs = 0;
       for (const c of ix.byKey.get(chave(f)) || []) {
-        if (c.f < minFreq || PROTEGIDAS.has(c.fw) || c.fw === f && false) continue;
+        const inEx = exameSet && exameSet.has(c.fw);
+        if ((!inEx && c.f < minFreq) || PROTEGIDAS.has(c.fw)) continue;
         const d = lev(f, c.fw), sim = 1 - d / Math.max(f.length, c.fw.length);
         if (d > 2 || sim < 0.75 || (d > 0 && soFlexao(f, c.fw))) continue;
-        const sc = sim * 1000 + Math.log1p(c.f);
+        if (d === 0 && t.w.toLowerCase() === pos2009(c.w)) continue;
+        const sc = sim * 1000 + Math.log1p(c.f) + (inEx ? 50 : 0);
         if (sc > bs) { bs = sc; best = c; }
       }
       if (best) { out += text.slice(last, t.s) + casar(t.w, best.w); last = t.e; }
@@ -3851,7 +3861,7 @@ let vocabSet = null, exameSet = null, exameKey = "", vocabSig = "";
     const erros = (cfg.correcoes || []).filter(c => c && c.de && !c.ctx && !/^(auto ?texto|macro) /.test(c.de)).map(c => " " + vnorm(c.de) + " ");
     const score = t => {
       const ws = foldStr(t).split(/[^a-z0-9]+/);
-      let n = ws.reduce((s, w) => s + (exameSet.has(w) && w.length >= 5 ? 2 : vocabSet.has(w) && w.length >= 6 ? 1 : 0), 0);
+      let n = ws.reduce((s, w) => s + (exameSet.has(w) && w.length >= 4 ? 3.5 : vocabSet.has(w) && w.length >= 5 ? 1 : 0), 0);
       const v = " " + vnorm(t) + " "; for (const e of erros) if (v.includes(e)) n -= 1;
       return ng ? n + 0.25 * T.ngramScore(t, ng) : n;   // sequências de palavras do banco desempatam e reforçam
     };
@@ -3873,7 +3883,7 @@ const exameAtual = cfg => cfg.exameAtual || (document.getElementById("plantaoExa
       // a correção salva vale também para variantes próximas ("sub galeão", "subgaleão", "sub-galeal" -> "subgaleal")
       const vo = { vocabFreq: cfg.vocabFreq }, rs = cs.filter(c => !isMacro(c));
       t = T.aplicarVariantes(t, rs, vo);
-      t = T.melhorarPalavras(t, { vocabFreq: cfg.vocabFreq, ngramas: cfg.ngramas });
+      t = T.melhorarPalavras(t, { vocabFreq: cfg.vocabFreq, ngramas: cfg.ngramas, vocabExame: cfg.vocabExame });
       t = T.aplicarVariantes(t, rs, vo);
     }
     return expandPhrases(applyCorrections(t, cs.filter(isMacro)), cfg.frases).replace(/([.!?])\s*\.(?!\.)/g, "$1");
@@ -5020,7 +5030,29 @@ window.tutuSite.appReady = true;
     while ((sentence = sentences.exec(text)) && sentence[0]) {
       const part = sentence[0];
       if (closedOnly && !/[.!?\n]$/.test(part)) continue;
+      // Esteatose por atenuação UH (mesma fórmula de 80-calculadoras.js)
+      if (/(?:f[ií]gado|hep[aá]tic[ao]|esteatose)/i.test(part) && !/(?:esteatose\s+(?:leve|moderada|acentuada)|sem\s+sinais.*esteatose)/i.test(part)) {
+        const uhF = part.match(/(?:f[ií]gado|hep[aá]tic[ao]|esteatose)[^.!?\n]*?(-?\d+(?:[.,]\d+)?)\s*UH\b/i);
+        const uhB = part.match(/ba[çc]o[^.!?\n]*?(-?\d+(?:[.,]\d+)?)\s*UH\b/i);
+        if (uhF) {
+          const f = num(uhF[1]), b = uhB ? num(uhB[1]) : null;
+          if (f !== null && f >= -200 && f <= 200 && (b === null || (b >= -200 && b <= 200 && b !== 0))) {
+            let grade = null;
+            if (b !== null) {
+              const d = f - b, r = f / b;
+              if (f < 40 || d < -10) grade = "moderada a acentuada";
+              else if (r < 1) grade = "leve";
+            } else if (f < 40) grade = "moderada a acentuada";
+            const ins = grade ? `, compatível com esteatose ${grade}` : (b !== null ? ", sem sinais tomográficos significativos de esteatose" : "");
+            if (ins) {
+              const endPos = part.replace(/[.!?\s]+$/, "").length;
+              edits.push({ at: sentence.index + endPos, text: ins });
+            }
+          }
+        }
+      }
       if (/\bvol(?:ume)?\b|cm\s*(?:³|\^3|3)|\bml\b/i.test(part)) continue;
+      const querPeso = /\bpeso\b/i.test(part) && !/\b(?:g|gramas?)\b/i.test(part);
       let from = 0;
       for (const triple of findTriples(part)) {
         const start = part.indexOf(triple.trecho, from);
@@ -5032,7 +5064,7 @@ window.tutuSite.appReady = true;
             /^\s*(?:x|×|por)\s*\d/i.test(part.slice(end))) continue;
         // volStr é adaptativo; br é o mesmo formatador, com a precisão pedida na v2.
         const value = triple.vol >= 1 && triple.vol < 10 ? volStr(triple.vol) : br(triple.vol, 1);
-        edits.push({ at: sentence.index + end, text: ", com volume estimado de " + value + " cm³" });
+        edits.push({ at: sentence.index + end, text: querPeso ? `, com volume e peso estimados de ${value} cm³ (${value} g)` : ", com volume estimado de " + value + " cm³" });
       }
     }
     return edits;
@@ -5205,9 +5237,20 @@ window.tutuSite.appReady = true;
       const assUsr = correcoes.map(c => c.para).join("|");
       if (assUsr !== VZ.assUsr){ VZ.assUsr = assUsr; montaExtra(); }   // correção nova ou apagada: refaz o vocabulário já
       const el = $("voiceConfig"), t = el.textContent;
-      // exameAtual: a extensão aplica as substituições com escopo só no exame aberto
+      // exameAtual: a extensão aplica as substituições com escopo só no exame aberto; porExame reforça o vocabulário do exame ativo
       const ex = (typeof current !== "undefined" && current && current.id) ? current.id : null;
-      if (t && t.endsWith("}") && !/"ngramas"\s*:/.test(t.slice(0, 40))) el.textContent = t.slice(0, -1) + "," + VZ.extra + ',"exameAtual":' + JSON.stringify(ex) + "}";
+      const exHist = ex && Array.isArray(VZ.porExame[ex]) ? VZ.porExame[ex] : [];
+      if (t && t.endsWith("}") && !/"ngramas"\s*:/.test(t.slice(0, 40))){
+        let out = t;
+        if (exHist.length){
+          const cfg = JSON.parse(t), seen = new Set((cfg.vocabExame || []).map(foldS));
+          const merged = [...(cfg.vocabExame || [])];
+          for (const w of exHist){ const f = foldS(w); if (w && w.length >= 4 && !seen.has(f)){ seen.add(f); merged.push(w); } }
+          cfg.vocabExame = merged.slice(0, 200);
+          out = JSON.stringify(cfg);
+        }
+        el.textContent = out.slice(0, -1) + "," + VZ.extra + ',"exameAtual":' + JSON.stringify(ex) + "}";
+      }
     }catch(e){}
   };
   const republica = () => { montaExtra(); try{ publishVoice(); }catch(e){} };
@@ -5322,6 +5365,46 @@ window.tutuSite.appReady = true;
     await salvaRegras();
     return "pendente";
   }
+  /* Loop de aprendizado (IA corrigiu -> regra automática de voz, sem mexer em lado/negação/número). */
+  async function aprenderDeIAI(antes, depois, exame, opts){
+    if (!antes || !depois || antes === depois) return [];
+    const voc = typeof VOCAB !== "undefined" ? VOCAB : [];
+    const pares = [];
+    try{
+      if (window.TutuV2Core?.trocasVoz) pares.push(...window.TutuV2Core.trocasVoz(antes, depois, voc));
+    }catch(e){}
+    if (opts && Array.isArray(opts.blocos)){
+      const vistos = new Set(pares.map(p => foldS(p.de) + "|" + foldS(p.para)));
+      for (const b of opts.blocos){
+        const de = String(b && b.de || "").trim(), para = String(b && b.para || "").trim();
+        if (!de || !para || foldS(de) === foldS(para)) continue;
+        if (de.split(/\s+/).length > 4 || para.split(/\s+/).length > 4) continue;
+        const k = foldS(de) + "|" + foldS(para);
+        if (!vistos.has(k)){ vistos.add(k); pares.push({ de, para }); }
+      }
+    }
+    const criadas = [];
+    for (const p of pares){
+      const de = String(p.de || "").trim(), para = String(p.para || "").trim();
+      if (!de || !para || foldS(de) === foldS(para)) continue;
+      if (regraInsegura(de, para)) continue;
+      const pk = foldS(de) + ">" + foldS(para);
+      if (VZ.bloq.includes(pk)) continue;
+      const existe = VZ.regras.some(r => foldS(r.de).trim() === foldS(de).trim() && foldS(r.para) === foldS(para) && (!r.exame || r.exame === (exame || "")));
+      if (existe) continue;
+      const ws = foldS(de).split(/[^a-z0-9]+/).filter(Boolean);
+      const conhecida = typeof KNOWN !== "undefined" && ws.length > 0 && ws.every(w => w.length < 3 || KNOWN.has(w));
+      if (!conhecida && de.length >= 4){
+        if (await criarRegraI(de, para, exame || "", true)) criadas.push({ de, para, auto: true });
+      } else {
+        const res = await registrarI(de, para, exame || "");
+        if (res === "auto") criadas.push({ de, para, auto: true });
+      }
+    }
+    return criadas;
+  }
+  const aprenderDeIA = (antes, depois, exame, opts) => enfileira(() => aprenderDeIAI(antes, depois, exame, opts));
+
   document.addEventListener("laudos-correcao", e => {
     let d; try{ d = JSON.parse(e.detail); }catch(err){ return; }
     const exame = (d && d.exame) || (typeof current !== "undefined" && current ? current.id : "");
@@ -5388,7 +5471,7 @@ window.tutuSite.appReady = true;
   }
   const ready = (async () => { await carregaRegras(); await new Promise(r => setTimeout(r, 300)); await carregaVocab(); await fila; })();
   window.tutuVocab = {
-    ready, whenIdle: () => fila, addLaudo, criarRegra, desfazerUltima, registrar,
+    ready, whenIdle: () => fila, addLaudo, criarRegra, desfazerUltima, registrar, aprenderDeIA, regraInsegura,
     apagar: (de, exame) => apagarRegra(chave(de, exame), false),
     regras: () => VZ.regras.map(r => ({ ...r })), porExame: id => (VZ.porExame[id] || []).slice(),
     recalcula: () => enfileira(async () => { await recalcula(); republica(); })
@@ -5947,6 +6030,36 @@ window.tutuSite.appReady = true;
     return true;
   }
 
+  /* ---------- mescla sem perda das regras de voz (config/subst-v3) ---------- */
+  const foldR = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  function mergeSubstV3(a, b) {
+    const map = new Map();
+    const put = r => {
+      if (!r || !r.de || r.para == null) return;
+      const k = foldR(r.de) + "|" + (r.exame || "");
+      const prev = map.get(k);
+      if (!prev || String(r.criadoEm || "") >= String(prev.criadoEm || "")) map.set(k, { ...r });
+    };
+    for (const r of (a && a.regras) || []) put(r);
+    for (const r of (b && b.regras) || []) put(r);
+    const bloq = [...new Set([...((a && a.bloq) || []), ...((b && b.bloq) || [])])];
+    const bloqSet = new Set(bloq);
+    const regras = [...map.values()].filter(r => !bloqSet.has(foldR(r.de) + ">" + foldR(r.para)));
+    const pend = {};
+    for (const src of [a && a.pend, b && b.pend]) {
+      if (!src || typeof src !== "object") continue;
+      for (const [k, v] of Object.entries(src)) {
+        if (!v || !v.de) continue;
+        const cur = pend[k] || { de: v.de, para: v.para, n: 0, por: {} };
+        cur.n = Math.max(cur.n, +v.n || 0);
+        for (const [ex, cnt] of Object.entries(v.por || {})) cur.por[ex] = Math.max(cur.por[ex] || 0, +cnt || 0);
+        pend[k] = cur;
+      }
+    }
+    const hist = [...new Set([...((a && a.hist) || []), ...((b && b.hist) || [])])];
+    return { versao: Math.max((a && a.versao) || 1, (b && b.versao) || 1), regras, pend, bloq, hist };
+  }
+
   /* ---------- um documento-coleção: puxa, mescla nos dois sentidos, envia ---------- */
   async function syncCol(col, shas, mudadas) {
     for (let t = 0; t < TENTATIVAS; t++) {
@@ -5966,6 +6079,11 @@ window.tutuSite.appReady = true;
         if (ld.atualizado === null) {   // dado antigo, sem carimbo: igual ao remoto = adota; diferente = o remoto vence e o local fica guardado
           if (!(ld.has && !rd.apagado && stable(ld.data) === stable(rd.data))) await S.kvSet("_perdido/" + col + "/" + id, { data: ld.data, quando: new Date().toISOString() });
           aplicar.push({ id, expect: null, data: rd.data, atualizado: rd.atualizado, apagado: !!rd.apagado });
+        } else if (col === "config" && id === "subst-v3" && ld.has && !rd.apagado && rd.atualizado !== ld.atualizado && stable(ld.data) !== stable(rd.data)) {
+          const merged = mergeSubstV3(ld.data, rd.data);
+          const ts = ld.atualizado > rd.atualizado ? ld.atualizado : rd.atualizado;
+          if (stable(merged) !== stable(rd.data)) { out[id] = { data: merged, atualizado: S.nowIso(), apagado: false }; sobe = true; }
+          if (stable(merged) !== stable(ld.data)) aplicar.push({ id, expect: ld.atualizado, data: merged, atualizado: out[id] ? out[id].atualizado : ts, apagado: false });
         } else if (rd.atualizado > ld.atualizado) {
           aplicar.push({ id, expect: ld.atualizado, data: rd.data, atualizado: rd.atualizado, apagado: !!rd.apagado });
         } else if (ld.atualizado > rd.atualizado) {
@@ -7998,7 +8116,7 @@ window.tutuSite.appReady = true;
     const s = speech = new Speech(); s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
     const cfg = config(ex);
     if (window.SpeechRecognitionPhrase && "phrases" in s) {
-      try { s.phrases = [...new Set([...cfg.vocabExame, ...cfg.vocab])].slice(0, 300).map(w => new SpeechRecognitionPhrase(w, cfg.vocabExame.includes(w) ? 5 : 2.5)); } catch (_) {}
+      try { s.phrases = [...new Set([...cfg.vocabExame, ...cfg.vocab])].slice(0, 300).map(w => new SpeechRecognitionPhrase(w, cfg.vocabExame.includes(w) ? 8.0 : 2.0)); } catch (_) {}
     }
     let sessao = "";   // Android repete o acumulado da sessão em cada final: só entra o trecho novo (TutuV2Core.speechDelta)
     s.onstart = () => { sessao = ""; };
@@ -8147,30 +8265,33 @@ window.tutuSite.appReady = true;
   }
   /* Aprendizado de voz com a IA: ditado bruto x laudo copiado -> trocas curtas (ex.: "terapublica" -> "poplítea") viram correções de voz.
      Mesma regra de 90-inicio-eventos.js: palavra que já existe no português só vira automática na 2ª vez (learnPairs, limite 2). */
-  async function aprenderVoz(ditado, final) {
+  async function aprenderVoz(ditado, final, exame) {
     const voc = typeof VOCAB !== "undefined" ? VOCAB : [], trocas = TutuV2Core.trocasVoz(ditado, final, voc);
+    const inseg = window.tutuVocab?.regraInsegura || (() => false);
     for (const t of trocas) {
+      if (inseg(t.de, t.para)) continue;
       const ws = fold(t.de).split(/[^a-z0-9]+/).filter(Boolean);
       if (typeof KNOWN !== "undefined" && ws.length && ws.every(w => w.length < 3 || KNOWN.has(w))) await learnPairs([{ de: t.de, para: t.para, antes: t.antes, depois: t.depois, comContexto: true }], 2);
       else await addCorrecao(t.de, t.para);
       if (typeof VOCAB !== "undefined") for (const w of t.para.toLowerCase().split(/[^a-zà-úç-]+/)) if (w.length >= 5 && !VOCAB.includes(w)) VOCAB.unshift(w);
     }
+    await window.tutuVocab?.aprenderDeIA?.(ditado, final, exame || "");
     if (trocas.length) publishVoice();
   }
-  /* Aprendizado também nos ajustes da IA fora do Áudio (Conversar com a IA e Gerar): ui.registrarIA(texto) guarda a última versão da IA
+  /* Aprendizado também nos ajustes da IA fora do Áudio (Conversar com a IA e Gerar): ui.registrarIA(texto, antes) guarda a última versão da IA
      aceita no caso aberto (116 chama depois do diff; applyGenerated, abaixo, no Gerar); ao copiar, se o texto copiado difere dela,
-     grava a mesma correção ia/correcoes/<exame>/<id>.json, uma vez por versão. Desfazer a IA esquece a proposta. */
+     grava a mesma correção ia/correcoes/<exame>/<id>.json, uma vez por versão, e fecha o loop de voz (aprenderDeIA). Desfazer a IA esquece a proposta. */
   const propostasIA = new Map();
   const mesmoTexto = (a, b) => String(a).replace(/\s+/g, " ").trim() === String(b).replace(/\s+/g, " ").trim();
-  ui.registrarIA = texto => {
+  ui.registrarIA = (texto, antes) => {
     const caso = ui.activeId(), exame = typeof current !== "undefined" ? current?.id : "";
     if (!caso) return;
-    if (texto && String(texto).trim()) propostasIA.set(caso, { proposta: texto, exame, id: crypto.randomUUID(), enviada: false }); else propostasIA.delete(caso);
+    if (texto && String(texto).trim()) propostasIA.set(caso, { proposta: texto, antes: antes || "", exame, id: crypto.randomUUID(), enviada: false }); else propostasIA.delete(caso);
   };
   ui.propostaIA = () => propostasIA.get(ui.activeId())?.proposta || "";
   const gravarCorrecao = (exame, id, proposta, final) => !/^[a-z0-9-]{1,60}$/.test(exame || "") || mesmoTexto(proposta, final) ? Promise.resolve(false)
     : G.putJson("ia/correcoes/" + exame + "/" + id + ".json", { exame, proposta, final, quando: new Date().toISOString() }, null, "IA: correção do Artur").then(() => true, () => false);
-  if (typeof applyGenerated === "function") { const antigoGerado = applyGenerated; applyGenerated = (...a) => { const r = antigoGerado(...a); ui.registrarIA(laudoTagged()); return r; }; }
+  if (typeof applyGenerated === "function") { const antigoGerado = applyGenerated; applyGenerated = (...a) => { const antes = laudoTagged(); const r = antigoGerado(...a); ui.registrarIA(laudoTagged(), antes); return r; }; }
   if (typeof undoAllClaude === "function") { const antigoDesfazer = undoAllClaude; undoAllClaude = (...a) => { ui.registrarIA(null); return antigoDesfazer(...a); }; const b = document.getElementById("undoAllBtn"); if (b) b.onclick = undoAllClaude; }
   const antigoClipboard = copyToClipboard;
   copyToClipboard = async (...args) => {
@@ -8182,6 +8303,9 @@ window.tutuSite.appReady = true;
       reg.enviada = true;   // uma vez por versão da IA
       gravarCorrecao(reg.exame, reg.id, reg.proposta, finalTexto).then(g => { if (!g) reg.enviada = false; });
     }
+    if (ok && reg && reg.antes) {
+      window.tutuVocab?.aprenderDeIA?.(reg.antes, finalTexto, reg.exame).catch(() => {});
+    }
     if (ok) {
       try {
         const { id, erro } = await vinculo;
@@ -8191,7 +8315,7 @@ window.tutuSite.appReady = true;
           // Aprendizado: proposta da IA → laudo que o Artur copiou (tools/ia_laudo.py usa nas próximas e no guia).
           // Se a IA ajustou depois (Conversar/Gerar), essa versão é a proposta e já foi gravada acima.
           if (r?.json?.laudo && !reg) await gravarCorrecao(r.json.exame, id, r.json.laudo, finalTexto);
-          if (r?.json?.laudo) await aprenderVoz(r.json.texto, finalTexto).catch(() => {});
+          if (r?.json?.laudo) await aprenderVoz(r.json.texto, finalTexto, r.json.exame).catch(() => {});
           if (r) await apagar(id, r.sha);
           await mudarVinculos(vinculos => { if (vinculos[caso] === id) delete vinculos[caso]; }); await atualizar();
         }
@@ -8301,7 +8425,7 @@ window.tutuSite.appReady = true;
     if (!window.SpeechRecognitionPhrase || !("phrases" in s)) return;
     const exam = cfg.vocabExame || [];
     try { s.phrases = [...new Set([...exam, ...(cfg.vocab || [])])].slice(0, 300)
-      .map(w => new SpeechRecognitionPhrase(w, exam.includes(w) ? 5 : 2.5)); } catch (_) {}
+      .map(w => new SpeechRecognitionPhrase(w, exam.includes(w) ? 8.0 : 2.0)); } catch (_) {}
   }
   // Novo vocabulário vale a partir da próxima sessão do reconhecedor (reinício em onend).
   const vc = document.getElementById("voiceConfig");
@@ -8747,7 +8871,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
         pushVersion("Antes da correção");   // "Desfazer IA" (undoAllClaude) volta até aqui
         sheet.innerHTML = diffLaudoHtml(draft, novo);
         pushVersion("Ajustado na conversa (" + motor + ")");
-        ui.registrarIA?.(laudoTagged());   // última versão da IA: ao copiar com edições manuais vira ia/correcoes (114)
+        ui.registrarIA?.(laudoTagged(), draft);   // última versão da IA: ao copiar vira ia/correcoes e regra automática de voz (114)
         renderAlerts(); updateCount(); scheduleCaseSave();
         acoes.hidden = false;
       }
@@ -9369,8 +9493,50 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     } finally { clearTimeout(timer); }
   }
 
+  /* ---------- substituir frase normal do mesmo órgão na máscara ---------- */
+  const ORG_SYN = [
+    ["figad", "hepat", "esteat"], ["vesic", "bilia", "colecist", "colelit"], ["rim", "rins", "renal", "nefrolit", "hidronefr"],
+    ["baco", "esplen"], ["apend", "apendic"], ["pancre", "pancreat"], ["aort", "ateromat", "aneurism"],
+    ["adren", "suprarren"], ["bexig", "vesical"], ["pulm", "pulmon", "pneumon"], ["pleur", "derrame"],
+    ["tireoid", "bocio"], ["uter", "miom", "endometr"], ["ovar", "anex"], ["prostat"], ["alcas", "intestin", "colon", "divertic"]
+  ];
+  const orgExpand = set => {
+    const out = new Set(set);
+    for (const g of ORG_SYN) if (g.some(x => set.has(x) || [...set].some(t => t.startsWith(x) || x.startsWith(t)))) for (const x of g) out.add(x);
+    return out;
+  };
+  const ladoOrgao = t => /\bdireit[ao]s?\b/.test(fold(t)) ? "D" : /\besquerd[ao]s?\b/.test(fold(t)) ? "E" : "";
+  function encontrarParagrafoNormal(paragrafos, achados, query, maskNormals) {
+    if (!Array.isArray(paragrafos) || !paragrafos.length) return -1;
+    const alvoTxt = [...(achados || []), query || ""].join(" ");
+    const alvoToks = orgExpand(tokens(alvoTxt)), alvoLado = ladoOrgao(alvoTxt);
+    if (!alvoToks.size) return -1;
+    const bases = paragrafos.map((p, idx) => {
+      const txt = String(p && p.text != null ? p.text : p || "").trim();
+      if (!txt) return null;
+      if (maskNormals && maskNormals.size && !maskNormals.has(fold(txt))) return null;
+      const pref = fold(txt).split(/[:;]|\b(?:com|sem|apresenta\w*|de calibre|de dimens\w*|de aspecto|de configuracao|de contornos|de dimensoes|pervi\w*|calibres?|fluxo\w*|topic[ao]s?|normodistendid\w*|habitua\w*|preservad\w*|norma(?:l|is))\b/)[0];
+      const ts = [...tokens(pref)].filter(t => !/^(arter|segme|estru|paren|orgao)$/.test(t));
+      return ts.length ? { idx, ts, exp: orgExpand(new Set(ts)), lado: ladoOrgao(txt) } : null;
+    }).filter(Boolean);
+    if (!bases.length) return -1;
+    const ranks = bases.map(b => {
+      if (alvoLado && b.lado && alvoLado !== b.lado) return { idx: b.idx, sc: 0 };
+      let sc = 0;
+      for (const t of b.ts) {
+        if (!alvoToks.has(t) && ![...alvoToks].some(a => b.exp.has(a))) continue;
+        const n = bases.filter(x => x.ts.includes(t)).length || 1;
+        sc += 1 / n;
+      }
+      if (!sc && [...b.exp].some(t => alvoToks.has(t))) sc = 0.5;
+      if (sc && alvoLado && b.lado && alvoLado === b.lado) sc += 0.5;
+      return { idx: b.idx, sc };
+    }).sort((a, b) => b.sc - a.sc);
+    return ranks[0] && ranks[0].sc > 0 && ranks[0].sc > (ranks[1] ? ranks[1].sc : 0) ? ranks[0].idx : -1;
+  }
+
   const api = { fold, tokens, classe, paresDe, buildIndex, parseQuery, buscar, precisaIA, modalidadeDe, semContrasteDe, montarPromptIA, lerRespostaIA, validarIA, fluxoAjusteIA, montar, fraseParecer, trocarLado, ajustarMedidas, negativos, detectar, comandoFinal,
-    vazio, aprender, mesclar, aplicarNoTexto, ehNeg, limparNumeros };
+    vazio, aprender, mesclar, aplicarNoTexto, ehNeg, limparNumeros, encontrarParagrafoNormal };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuFrase = api;
 })(globalThis);
@@ -9627,14 +9793,46 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         const info = ui.conclusao && ui.conclusao.escrever;
         if (info && r.c.length) { try { ui.conclusao.escrever(r.c); } catch (_) {} }
       }
-      const rg = rangeFromOffsets(c.block, ini.inicio, c.caret);
-      const s = getSelection(); sheet.focus({ preventScroll: true }); s.removeAllRanges(); if (rg) s.addRange(rg);
+      const s = getSelection(); sheet.focus({ preventScroll: true });
       const textoPar = r.frase + (neg.length ? " " + neg.join(" ") : "");
       const linhas = par ? [textoPar] : r.a.concat(neg);
-      escrever(linhas.length ? linhas : [r.c.join(" ")]);
+      const outLinhas = linhas.length ? linhas : [r.c.join(" ")];
+      let alvoBloco = null;
+      if (!par) {
+        const ps = [...sheet.children], hi = ps.findIndex(p => F.fold(blockText(p).trim()) === "achados");
+        const ci = hi >= 0 ? ps.findIndex((p, i) => i > hi && /^conclus[aã]o\b/.test(F.fold(blockText(p).trim()))) : -1;
+        if (hi >= 0) {
+          const cand = ps.slice(hi + 1, ci >= 0 ? ci : ps.length);
+          let maskNormals = null;
+          try {
+            if (typeof current !== "undefined" && current) {
+              maskNormals = new Set();
+              for (const ln of String(maskOf(current) || "").split(/\r?\n/)) {
+                const mm = ln.trim().replace(/^\{\{[^}]*\}\}/, "").match(/^\[<(.*)>\]$/);
+                if (mm) maskNormals.add(F.fold(mm[1].replace(/<\/?[bui]>/gi, "").trim()));
+              }
+            }
+          } catch (_) {}
+          const idxAlvo = F.encontrarParagrafoNormal(cand.map(p => ({ text: blockText(p) })), r.a, m.query, maskNormals);
+          if (idxAlvo >= 0) alvoBloco = cand[idxAlvo];
+        }
+      }
+      let blocoBase = c.block;
+      if (alvoBloco) {
+        const rg = rangeFromOffsets(c.block, ini.inicio, c.caret);
+        s.removeAllRanges(); if (rg) { s.addRange(rg); document.execCommand("delete"); }
+        if (alvoBloco !== c.block && !blockText(c.block).trim()) c.block.remove();
+        const rAlvo = document.createRange(); rAlvo.selectNodeContents(alvoBloco);
+        s.removeAllRanges(); s.addRange(rAlvo);
+        blocoBase = alvoBloco;
+      } else {
+        const rg = rangeFromOffsets(c.block, ini.inicio, c.caret);
+        s.removeAllRanges(); if (rg) s.addRange(rg);
+      }
+      escrever(outLinhas);
       if (novoBloco && novoBloco.isConnected) caretAtStart(novoBloco); else document.execCommand("insertParagraph");     // cursor num parágrafo novo, pronto para o próximo achado
       const sel2 = getSelection(); sheetRange = sel2.rangeCount ? sel2.getRangeAt(0).cloneRange() : sheetRange;
-      const blocos = inseridos(c.block, linhas.length);
+      const blocos = inseridos(blocoBase, outLinhas.length);
       // frase que vai ser ajustada pela IA é sob medida: a edição dela não vira a preferida da consulta
       pendenteEdicao = plano ? null : { qkey: r.qkey, chave: r.chave, modo: par ? "parecer" : "laudo", blocks: blocos, textos: linhas.slice() };
       if (plano) { const nA = par ? 1 : Math.max(1, r.a.length); ajusteDepois = () => iniciarAjuste(plano, r, par, neg, blocos.slice(0, nA), linhas.slice(0, nA), r.c); }
@@ -9686,4 +9884,147 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
   ui.frase = { avaliar, confirmar, estado: () => modo && { query: modo.query, sel: modo.sel, n: modo.res.length, textos: modo.res.map(r => r.frase), contagens: modo.res.map(r => r.n) }, indice,
     ajuste: () => ({ pendentes: ajustes.size, sugestao: !!sugestao }) };
+})();
+
+/* Estruturar ditado corrido por órgão direto na máscara ativa (sem IA, local):
+   substitui o texto normal do órgão citado na máscara e mantém os demais intactos. */
+(function (root) {
+  "use strict";
+  const fold = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const depFrase = () => (typeof module !== "undefined" && module.exports ? require("./117-v2-frase.js") : root.TutuFrase);
+
+  function dividirFrases(texto) {
+    return String(texto || "")
+      .replace(/\[(?:identidade|identificador|data|assinatura|removido)\]/g, "")
+      .split(/\n+|(?<=[.!?;])\s+/)
+      .map(s => s.replace(/^[\s;]+|[\s;]+$/g, "").trim())
+      .filter(Boolean);
+  }
+
+  function estruturar(texto, paragrafos, maskNormals) {
+    const F = depFrase();
+    const frases = dividirFrases(texto);
+    const porOrgao = new Map();
+    const sobras = [];
+    for (const f of frases) {
+      const idx = F.encontrarParagrafoNormal(paragrafos, [f], "", maskNormals);
+      if (idx >= 0) {
+        if (!porOrgao.has(idx)) porOrgao.set(idx, []);
+        porOrgao.get(idx).push(f);
+      } else {
+        sobras.push(f);
+      }
+    }
+    const substituicoes = [...porOrgao.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([idx, fs]) => ({ idx, texto: fs.join(" ") }));
+    return { substituicoes, sobras };
+  }
+
+  const api = { dividirFrases, estruturar };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TutuEstruturar = api;
+})(globalThis);
+
+(() => {
+  "use strict";
+  if (typeof document === "undefined" || !window.tutuV2 || typeof sheet === "undefined") return;
+  const ui = window.tutuV2, E = window.TutuEstruturar, F = window.TutuFrase, el = ui.el;
+
+  function secoesAchados() {
+    const ps = [...sheet.children];
+    const hi = ps.findIndex(p => F.fold(blockText(p).trim()) === "achados");
+    const ci = hi >= 0 ? ps.findIndex((p, i) => i > hi && /^conclus[aã]o\b/.test(F.fold(blockText(p).trim()))) : -1;
+    if (hi < 0 || ci < 0) return null;
+    let maskNormals = null;
+    try {
+      if (typeof current !== "undefined" && current) {
+        maskNormals = new Set();
+        for (const ln of String(maskOf(current) || "").split(/\r?\n/)) {
+          const mm = ln.trim().replace(/^\{\{[^}]*\}\}/, "").match(/^\[<(.*)>\]$/);
+          if (mm) maskNormals.add(F.fold(mm[1].replace(/<\/?[bui]>/gi, "").trim()));
+        }
+      }
+    } catch (_) {}
+    return { ps, hi, ci, cand: ps.slice(hi + 1, ci), maskNormals };
+  }
+
+  function aplicarNaMascara(texto, removerOrigem) {
+    const sec = secoesAchados();
+    if (!sec) { setStatus("A máscara ativa precisa das seções Achados e Conclusão.", "err"); return false; }
+    const res = E.estruturar(texto, sec.cand.map(p => ({ text: blockText(p) })), sec.maskNormals);
+    if (!res.substituicoes.length && !res.sobras.length) { setStatus("Nada para estruturar.", "err"); return false; }
+    pushVersion("Antes de estruturar ditado");
+    if (removerOrigem) removerOrigem();
+    for (const s of res.substituicoes) {
+      const p = sec.cand[s.idx];
+      if (p && p.isConnected) p.textContent = s.texto;
+    }
+    for (const f of res.sobras) {
+      const p = document.createElement("p");
+      p.textContent = f;
+      if (sec.ps[sec.ci] && sec.ps[sec.ci].isConnected) sec.ps[sec.ci].before(p);
+      else sheet.append(p);
+    }
+    try { if (typeof suggestConclusion === "function") suggestConclusion(); } catch (_) {}
+    updateCount(); updVolHint(); renderAlerts(); scheduleCaseSave(); ui.updateOutline?.();
+    const nOrg = res.substituicoes.length, nSob = res.sobras.length;
+    setStatus(`Ditado estruturado: ${nOrg} órgão(s) atualizado(s)` + (nSob ? `, ${nSob} sem órgão único no fim de Achados.` : "."), "ok");
+    return true;
+  }
+
+  let dlg = null, ta = null;
+  function abrirDialogo() {
+    if (!dlg) {
+      dlg = el("dialog", { id: "estruturarDialog", "aria-labelledby": "estTitulo" });
+      ta = el("textarea", { rows: "6", placeholder: "Dite ou cole os achados corridos (ex.: Fígado com esteatose difusa. Vesícula biliar com cálculo de 8 mm.)" });
+      ta.style.cssText = "width:100%;box-sizing:border-box;margin:8px 0;font:inherit;padding:8px";
+      const ok = ui.button("Aplicar na máscara", () => { if (aplicarNaMascara(ta.value)) { ta.value = ""; dlg.close(); } }, { class: "btn pri" });
+      const cancel = ui.button("Cancelar", () => dlg.close(), { class: "btn" });
+      ta.addEventListener("keydown", ev => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); ok.click(); } });
+      dlg.append(el("h3", { id: "estTitulo", style: "margin:0 0 6px" }, "Estruturar ditado por órgão"), ta, el("div", { style: "display:flex;gap:8px;justify-content:flex-end" }, cancel, ok));
+      document.body.append(dlg);
+    }
+    if (!dlg.open) dlg.showModal();
+    ta.focus();
+  }
+
+  function executar() {
+    if (!secoesAchados()) { setStatus("Abra uma máscara com Achados e Conclusão para estruturar.", "err"); return; }
+    const sel = getSelection();
+    if (sel.rangeCount && !sel.isCollapsed && sheet.contains(sel.anchorNode)) {
+      const txt = sel.toString().trim();
+      if (txt) {
+        const rg = sel.getRangeAt(0).cloneRange();
+        aplicarNaMascara(txt, () => {
+          const s = getSelection(); s.removeAllRanges(); s.addRange(rg);
+          document.execCommand("delete");
+        });
+        return;
+      }
+    }
+    const sec = secoesAchados();
+    const blk = typeof caretBlock === "function" ? caretBlock() : null;
+    if (blk && sheet.contains(blk)) {
+      const txt = blockText(blk).trim();
+      const ehNormal = sec.maskNormals && sec.maskNormals.has(F.fold(txt));
+      const frases = E.dividirFrases(txt);
+      if (txt && (!ehNormal || frases.length > 1) && !isHeading(txt)) {
+        aplicarNaMascara(txt, () => { if (blk.isConnected && !sec.cand.includes(blk)) blk.remove(); else if (blk.isConnected && ehNormal) blk.textContent = ""; });
+        return;
+      }
+    }
+    abrirDialogo();
+  }
+
+  ui.actions.estruturar = { label: "Estruturar ditado por órgão", shortcut: "Alt+E", run: executar };
+  document.addEventListener("laudos-voz", e => {
+    let d; try { d = JSON.parse(e.detail); } catch (_) { return; }
+    if (d && d.acao === "estruturar") executar();
+  });
+  window.addEventListener("keydown", e => {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.code === "KeyE" || String(e.key || "").toLowerCase() === "e")) {
+      e.preventDefault(); executar();
+    }
+  });
 })();
