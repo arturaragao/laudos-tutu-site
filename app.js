@@ -390,14 +390,28 @@ function updMaskChip(){
 }
 function fmt(html, f){ if (f.underline) html = `<u>${html}</u>`; if (f.bold) html = `<b>${html}</b>`; return html; }
 let PSTYLE = `margin:0;font-family:${FORMAT.font},Helvetica,sans-serif;font-size:${FORMAT.size};line-height:normal`;
-const P = (inner, al) => `<p style="${PSTYLE}${al ? ";text-align:" + AL_CSS[al] : ""}">${inner}</p>`;
+/* al = "centro" | "centro|Calibri,12" | "|Calibri,12": alinhamento + fonte/tamanho do parágrafo (17/11/2026) */
+const alParts = al => { const [a, f] = String(al || "").split("|"); const m = /^([A-Za-z][A-Za-z ]{0,40}),(\d{1,2}(?:\.\d)?)$/.exec(f || ""); return { a: a || "", fn: m ? m[1] : "", fs: m ? m[2] : "" }; };
+const alCss = al => { const { a, fn, fs } = alParts(al); return (a ? ";text-align:" + AL_CSS[a] : "") + (fn ? `;font-family:${fn},Helvetica,sans-serif;font-size:${fs}pt` : ""); };
+const alData = al => { const { fn, fs } = alParts(al); return fn ? ` data-fonte="${esc(fn)},${fs}"` : ""; };
+const P = (inner, al) => `<p style="${PSTYLE}${alCss(al)}"${alData(al)}>${inner}</p>`;
 const BLANK = P("<br>");
 const stripTags = t => String(t).replace(/<\/?[bui]>/gi, "");
 const fmtInline = t => esc(t).replace(/&lt;(\/?)([bui])&gt;/gi, "<$1$2>");
 const ALIGN_RE = /^\{\{(centro|justificado|esquerda|direita)\}\}/;
+const FONT_RE = /^\{\{fonte:([A-Za-z][A-Za-z ]{0,40}),(\d{1,2}(?:\.\d)?)\}\}/;
+const FONTES = ["Arial", "Calibri", "Times New Roman", "Verdana", "Courier New"];
 const AL_CSS = { centro:"center", justificado:"justify", esquerda:"left", direita:"right" };
 const CSS_AL = { center:"centro", justify:"justificado", right:"direita" };
-const splitAlign = t => { t = String(t); const m = t.match(ALIGN_RE); return m ? { al: m[1], t: t.slice(m[0].length) } : { al: "", t }; };
+const splitAlign = t => {
+  t = String(t); let a = "", f = "", m;
+  for (let i = 0; i < 2; i++){
+    if (!a && (m = t.match(ALIGN_RE))){ a = m[1]; t = t.slice(m[0].length); }
+    else if (!f && (m = t.match(FONT_RE))){ f = m[1].trim() + "," + m[2]; t = t.slice(m[0].length); }
+  }
+  return { al: f ? a + "|" + f : a, t };
+};
+const alPrefix = al => { const { a, fn, fs } = alParts(al); return (a ? `{{${a}}}` : "") + (fn ? `{{fonte:${fn},${fs}}}` : ""); };
 const stripMarks = t => stripTags(splitAlign(t).t);
 const isHeading = t => HSET.has(norm(stripMarks(t)));
 const todayBR = () => { const d = new Date(); return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear(); };
@@ -406,14 +420,19 @@ const maskOf = ex => String(ex.mask).replace(/\{data\}/gi, todayBR());
 function serEditable(root){
   const lines = []; let cur = "", curAl = "";
   const BLOCK = /^(DIV|P|H[1-6]|BLOCKQUOTE|SECTION)$/;
-  const alignOf = el => { if (!el || el.nodeType !== 1) return ""; const a = (el.style && el.style.textAlign) || el.getAttribute("align") || ""; return CSS_AL[a] || (a === "left" ? "" : ""); };
+  const alignOf = el => {
+    if (!el || el.nodeType !== 1) return "";
+    const a = CSS_AL[(el.style && el.style.textAlign) || el.getAttribute("align") || ""] || "";
+    const f = alParts("|" + (el.getAttribute("data-fonte") || ""));   /* só o que foi escolhido nos botões de fonte */
+    return f.fn ? a + "|" + f.fn + "," + f.fs : a;
+  };
   const tagOf = c => {
     let tag = { B:"b", STRONG:"b", U:"u", I:"i", EM:"i" }[c.nodeName];
     if (!tag && c.nodeName === "SPAN"){ const st = c.getAttribute("style") || "";
       if (/font-weight:\s*(bold|[6-9]00)/.test(st)) tag = "b"; else if (/underline/.test(st)) tag = "u"; else if (/italic/.test(st)) tag = "i"; }
     return tag;
   };
-  const flush = force => { cur = cur.replace(/ {2,}/g, " ").replace(/^ +/, ""); if (cur !== "" || force) lines.push((curAl ? `{{${curAl}}}` : "") + cur); cur = ""; curAl = ""; };
+  const flush = force => { cur = cur.replace(/ {2,}/g, " ").replace(/^ +/, ""); if (cur !== "" || force) lines.push(alPrefix(curAl) + cur); cur = ""; curAl = ""; };
   function walk(node, al){
     for (const c of node.childNodes){
       if (c.nodeType === 3){ const v = c.nodeValue.replace(/ /g, " ").replace(/\n/g, " "); if (v){ cur += v; if (!curAl) curAl = al; } continue; }
@@ -441,7 +460,7 @@ function serEditable(root){
   flush(false);
   return lines.map(l => l.replace(/<(b|u|i)><\/\1>/g, "").replace(/<(b|u|i)>(\s*)<\/\1>/g, "$2")).join("\n").replace(/\n+$/, "");
 }
-const textToEditable = t => String(t).split("\n").map(l => { const { al, t: x } = splitAlign(l); return `<div${al ? ` style="text-align:${AL_CSS[al]}"` : ""}>${fmtInline(x) || "<br>"}</div>`; }).join("");
+const textToEditable = t => String(t).split("\n").map(l => { const { al, t: x } = splitAlign(l), st = alCss(al).slice(1); return `<div${st ? ` style="${st}"` : ""}${alData(al)}>${fmtInline(x) || "<br>"}</div>`; }).join("");
 function laudoTagged(){ return serEditable($("laudo")).replace(/\n{3,}/g,"\n\n").trim(); }
 const norm = s => s.trim().replace(/[:\s]+$/,"").toLowerCase();
 const HSET = new Set(HEADINGS.map(norm));
@@ -975,7 +994,7 @@ const ERR = {
   refused: "O Claude não respondeu a esse pedido. Reformule os achados.",
   empty_completion: "O Claude não devolveu texto. Tente reformular.",
 };
-const errMsg = e => ERR[e && e.code] || "Falha de conexão. Tente de novo.";
+const errMsg = e => ERR[e && e.code] || (e && (e.code === "ia_timeout" || e.code === "ia_erro" || e.code === "ponte_indisponivel") && e.message) || "Falha de conexão. Tente de novo.";
 
 
 /* ---------- revisão ---------- */
@@ -1007,7 +1026,7 @@ function showReview(text, pending){
 
 /* ---------- prompt do laudo ---------- */
 const RECS_RULE = `RECOMENDAÇÕES AUTOMÁTICAS (ativadas pelo médico): para achados incidentais com conduta definida em diretriz (ACR Incidental Findings: lesão renal, nódulo adrenal, cisto pancreático, lesão hepática, lesão anexial, nódulo tireoidiano; Fleischner para nódulo pulmonar; Bosniak 2019; Society for Vascular Surgery para aneurisma de aorta), acrescente a recomendação de seguimento em frase curta, citando a diretriz, junto ao item correspondente da conclusão (ou em linha própria no parecer). Não recomende nada para achados sem indicação de seguimento.`;
-const MARKS_RULE = `Algumas linhas podem começar com {{centro}}, {{justificado}} ou {{direita}} (alinhamento do texto): mantenha esses marcadores no início das linhas que vierem da máscara. Linhas que começam com "• " são itens de lista: mantenha o marcador.`;
+const MARKS_RULE = `Algumas linhas podem começar com {{centro}}, {{justificado}} ou {{direita}} (alinhamento do texto) e/ou {{fonte:Nome,tamanho}} (fonte da linha): mantenha esses marcadores no início das linhas que vierem da máscara. Linhas que começam com "• " são itens de lista: mantenha o marcador.`;
 function normalSetAll(){ const set = new Set(); for (const ex of [current, ...extras]) for (const x of normalSet(ex)) set.add(x); return set; }
 /* trechos que o médico acrescentou ou alterou em relação ao modelo (só isso orienta a busca no banco) */
 function userFindings(draft){
@@ -1220,7 +1239,9 @@ function clipboardHtml(){
      margens por extenso em pt; linha vazia com <br> virava duas linhas, então vai com &nbsp;. */
   const cpStyle = `margin-top:0pt;margin-bottom:0pt;margin-left:0pt;margin-right:0pt;text-indent:0pt;line-height:normal;font-family:${FORMAT.font},Helvetica,sans-serif;font-size:${FORMAT.size}`;
   tmp.querySelectorAll("p,div,li").forEach(n => {
-    const a = n.style.textAlign; n.setAttribute("style", cpStyle + (a ? ";text-align:" + a : ""));
+    const a = n.style.textAlign, f = alParts("|" + (n.getAttribute("data-fonte") || ""));
+    n.setAttribute("style", cpStyle + (a ? ";text-align:" + a : "") + (f.fn ? `;font-family:${f.fn},Helvetica,sans-serif;font-size:${f.fs}pt` : ""));
+    n.removeAttribute("data-fonte");
     if (n.tagName !== "LI" && !n.querySelector("p,div,ul,ol,img") && !n.textContent.replace(/ /g, " ").trim()) n.innerHTML = "&nbsp;";
   });
   tmp.querySelectorAll("ul,ol").forEach(n => n.setAttribute("style", `margin:0;padding-left:24px;font-family:${FORMAT.font},Helvetica,sans-serif;font-size:${FORMAT.size}`));
@@ -2955,7 +2976,32 @@ document.querySelectorAll(".fmt-bar").forEach(bar => {
     btn.addEventListener("mousedown", e => e.preventDefault());
     btn.onclick = () => { const t = $(bar.dataset.target); if (document.activeElement !== t) t.focus(); document.execCommand(btn.dataset.cmd, false, null); };
   });
+  /* 17/11/2026 (Artur): fonte e tamanho no editor de máscaras, por linha (parágrafo) selecionada */
+  let salva = null;
+  bar.querySelectorAll("select[data-fmt]").forEach(sel => {
+    sel.addEventListener("mousedown", () => { const s = getSelection(); salva = s.rangeCount ? s.getRangeAt(0).cloneRange() : null; });
+    sel.addEventListener("change", () => {
+      const t = $(bar.dataset.target), r = salva || (getSelection().rangeCount ? getSelection().getRangeAt(0) : null);
+      if (r && t.contains(r.commonAncestorContainer)) aplicarFonte(t, r, sel.dataset.fmt, sel.value);
+      sel.selectedIndex = 0; t.focus();
+    });
+  });
 });
+function aplicarFonte(root, range, campo, valor){
+  if ([...root.childNodes].some(n => n.nodeType === 3 && n.nodeValue.trim())) root.innerHTML = textToEditable(serEditable(root));
+  let linhas = [...root.children].filter(el => range.intersectsNode(el));
+  if (!linhas.length && root.firstElementChild) linhas = [root.firstElementChild];
+  linhas.forEach(el => {
+    const atual = alParts("|" + (el.getAttribute("data-fonte") || ""));
+    let fn = atual.fn, fs = atual.fs;
+    if (campo === "fonte") fn = valor; else fs = valor;
+    if (fn && !fs) fs = String(parseFloat(FORMAT.size) || 11);
+    if (fs && !fn) fn = FORMAT.font;
+    if (!valor && campo === "fonte"){ fn = ""; fs = ""; }
+    if (fn && fs){ el.setAttribute("data-fonte", fn + "," + fs); el.style.fontFamily = fn + ",Helvetica,sans-serif"; el.style.fontSize = fs + "pt"; }
+    else { el.removeAttribute("data-fonte"); el.style.removeProperty("font-family"); el.style.removeProperty("font-size"); }
+  });
+}
 
 
 /* ================= 9. Histórico ================= */
@@ -4251,6 +4297,7 @@ globalThis.usgVoice = { bestAlternative, posTexto, punct };
 
 /* Adaptação da interface existente, sem mudar layout nem módulos do artefato. */
 ERR.ponte_indisponivel = "Ponte local indisponível. Abra a ponte em 127.0.0.1:47831 para usar IA. As funções locais continuam disponíveis.";
+ERR.cancelled = "Operação cancelada.";
 queueMicrotask(() => { $("claudeState").textContent = "IA: ponte local (sob demanda)"; });
 $("bkDown").textContent = "Exportar backup";
 document.querySelector('label[for="bkFile"]').textContent = "Importar backup";
@@ -8192,8 +8239,16 @@ window.tutuSite.appReady = true;
   }
   const painel = el("details", { id: "usgInbox" }), cachePedidos = new Map();
   const lista = el("div", { id: "usgLista" }), inboxMsg = el("p", { id: "usgInboxMsg", role: "status" });
-  const sugestoes = el("details", { id: "usgSugestoes" });
-  painel.append(el("summary", {}, "Laudos Áudio"), button("Atualizar pedidos", () => atualizar()), inboxMsg, lista, sugestoes); ui.center.append(painel);
+  const sugestoes = el("details", { id: "usgSugestoes" }); sugestoes.hidden = true;   // 17/11: vazio mostrava "Saiba mais"
+  // 17/11/2026 (Artur): o botão mostra que foi clicado: "Atualizando…" e depois "Atualizado ✓ hh:mm"
+  const btnAtualizar = button("Atualizar pedidos", async () => {
+    btnAtualizar.disabled = true; btnAtualizar.dataset.estado = "atualizando"; btnAtualizar.textContent = "Atualizando…";
+    const ok = await atualizar(true);
+    btnAtualizar.disabled = false; btnAtualizar.dataset.estado = ok ? "ok" : "erro";
+    btnAtualizar.textContent = ok ? "Atualizado ✓ " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "Não atualizou — tente de novo";
+    clearTimeout(btnAtualizar._t); btnAtualizar._t = setTimeout(() => { btnAtualizar.textContent = "Atualizar pedidos"; delete btnAtualizar.dataset.estado; }, 4000);
+  }, { id: "usgAtualizar" });
+  painel.append(el("summary", {}, "Laudos Áudio"), btnAtualizar, inboxMsg, lista, sugestoes); ui.center.append(painel);
   let vinculosPendentes = Promise.resolve();
   function mudarVinculos(fn) {
     const tarefa = vinculosPendentes.then(async () => {
@@ -8231,6 +8286,7 @@ window.tutuSite.appReady = true;
     }
     sugestoes.replaceChildren(el("summary", {}, "Redação sugerida pelo banco — conferir antes de usar"));
     for (const r of refs) if (r.frases.length) { sugestoes.append(el("p", {}, r.f)); for (const s of r.frases) sugestoes.append(el("blockquote", {}, s)); }
+    sugestoes.hidden = sugestoes.children.length <= 1;
     return sobras.length;
   }
   async function abrir(id, d) {
@@ -8323,9 +8379,12 @@ window.tutuSite.appReady = true;
     }
     return ok;
   };
-  async function atualizar() {
-    if (listBusy || !G.token) return; listBusy = true;
-    try {
+  let atualizando = null;
+  async function atualizar(espera) {
+    if (!G.token) return false;
+    if (listBusy) return espera ? atualizando : false;
+    listBusy = true;
+    return atualizando = (async () => { try {
       const arquivos = (await G.list("fila-usg")).filter(f => /^[a-f0-9-]{36}\.json$/.test(f.name)), rows = [];
       for (const f of arquivos) {
         let r = cachePedidos.get(f.name);
@@ -8334,15 +8393,23 @@ window.tutuSite.appReady = true;
         const d = r.json, id = f.name.slice(0, -5), criado = Date.parse(d.criado);
         const expirado = Number.isFinite(criado) && Date.now() - criado >= 30 * 86400000;
         const row = el("div", { class: "usg-pedido", "data-id": id, "data-state": expirado ? "expirado" : "recebido" }), ex = EXAMS.find(e => e.id === d.exame);
-        const selo = expirado ? ["expirado", "expirado"] : d.laudo ? ["pronto", "laudo pronto (IA) ✓"] : d.ia === "erro" ? ["erro", "IA falhou (abre organizado localmente)"] : d.ia === "pendente" ? ["pendente", "IA organizando…"] : ["recebido", "recebido"];
+        // 17/11/2026 (Artur): mostrar o motivo do erro e avisar quando a IA está parada, para corrigir rápido
+        const minutos = Number.isFinite(criado) ? Math.floor((Date.now() - criado) / 60000) : 0;
+        const motivo = d.erro ? ": " + String(d.erro).slice(0, 160) : "";
+        const selo = expirado ? ["expirado", "expirado"] : d.laudo ? ["pronto", "laudo pronto (IA) ✓"]
+          : d.ia === "erro" ? ["erro", "IA falhou" + motivo + " (abre organizado localmente)"]
+          : d.ia === "pendente" ? (minutos >= 3 ? ["erro", `IA parada há ${minutos} min: confira se o PC com a ponte está ligado (abre organizado localmente)`] : ["pendente", "IA organizando…"])
+          : ["recebido", "recebido"];
         row.append(el("span", { class: "usg-nome" }, ex?.name || "Exame"), el("span", { class: "usg-selo", "data-k": selo[0] }, selo[1]), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
           try { await apagar(id, r.sha); await atualizar(); }
           catch (e) { inboxMsg.textContent = e.message; }
-        })); rows.push(row);
+        })); row._criado = Number.isFinite(criado) ? criado : 0; rows.push(row);
       }
+      rows.sort((a, b) => b._criado - a._criado);   // 17/11/2026 (Artur): mais recente primeiro
       lista.replaceChildren(...rows); inboxMsg.textContent = rows.length ? "Organização neste navegador. Revise antes de copiar." : "Nenhum pedido.";
-    } catch (_) { inboxMsg.textContent = "Fila indisponível; confira rede e chave em Sincronização."; }
-    finally { listBusy = false; }
+      return true;
+    } catch (_) { inboxMsg.textContent = "Fila indisponível; confira rede e chave em Sincronização."; return false; }
+    finally { listBusy = false; } })();
   }
   T.onChave(atualizar); setInterval(() => { if (!document.hidden) atualizar(); }, 15000);
   window.addEventListener("focus", atualizar); document.addEventListener("visibilitychange", () => { if (!document.hidden) atualizar(); }); atualizar();

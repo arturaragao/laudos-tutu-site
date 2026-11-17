@@ -125,10 +125,13 @@
   async function sample(input, options = {}){
     const texto = typeof input === "string" ? input : input.map(m => `${m.role}: ${m.content}`).join("\n\n");
     const controller = new AbortController();
+    let timedOut = false;
     const abort = () => controller.abort();
+    const onTimeout = () => { timedOut = true; controller.abort(); };
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();
-    const timeout = setTimeout(abort, 120000);
+    const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 95000;
+    const timeout = setTimeout(onTimeout, timeoutMs);
     try{
       // /ia2: Antigravity (Gemini) com o Claude de reserva; ponte antiga (sem /ia2, 404) cai na /ia (só Claude).
       const pedir = rota => fetch("http://127.0.0.1:47831/" + rota, {
@@ -137,16 +140,43 @@
       });
       let response = await pedir("ia2");
       if (response.status === 404) response = await pedir("ia");
-      if (!response.ok) throw new Error("Ponte local respondeu com erro.");
+      if (!response.ok){
+        let detalhe = "";
+        try{
+          const errJson = await response.json();
+          if (errJson && typeof errJson.erro === "string") detalhe = errJson.erro.trim();
+        }catch(_){}
+        const err = new Error(detalhe || `A ponte local respondeu com erro (HTTP ${response.status}).`);
+        err.code = response.status === 504 ? "ia_timeout" : "ia_erro";
+        err.tempo = response.status === 504;
+        err.status = response.status;
+        throw err;
+      }
       const result = await response.json();
       const text = typeof result === "string" ? result : (result.text ?? result.texto);
-      if (typeof text !== "string" || !text.trim()) throw new Error("Resposta vazia da ponte local.");
+      if (typeof text !== "string" || !text.trim()){
+        const err = new Error("Resposta vazia da ponte local.");
+        err.code = "empty_completion";
+        throw err;
+      }
       options.onText?.({ text });
       const motor = result.motor || "claude";
       sample.ultimo = { motor, modelo: result.modelo || "", aviso: result.aviso || "" };
       return { text, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "" };
     }catch(e){
-      if (options.signal?.aborted) throw new DOMException("Pedido cancelado.", "AbortError");
+      if (options.signal?.aborted){
+        const err = new Error("Pedido cancelado.");
+        err.name = "AbortError";
+        err.code = "cancelled";
+        throw err;
+      }
+      if (timedOut){
+        const err = new Error(`A IA demorou mais de ${Math.round(timeoutMs / 1000)} s e foi cancelada. Tente novamente.`);
+        err.code = "ia_timeout";
+        err.tempo = true;
+        throw err;
+      }
+      if (e && (e.code === "ia_timeout" || e.code === "ia_erro" || e.code === "empty_completion")) throw e;
       const error = new Error("Ponte local indisponível. Abra a ponte em 127.0.0.1:47831 para usar IA. As funções locais continuam disponíveis.");
       error.code = "ponte_indisponivel"; throw error;
     }finally{ clearTimeout(timeout); options.signal?.removeEventListener("abort", abort); }

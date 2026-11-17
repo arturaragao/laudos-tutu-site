@@ -321,6 +321,7 @@
   .fmt-bar button svg text{stroke:none;fill:currentColor;font:600 5px Arial,sans-serif}
   .fmt-bar button svg circle{fill:currentColor;stroke:none}
   .fmt-sep{width:1px;background:var(--line);margin:3px 4px}
+  .fmt-bar select.fmt-fonte{height:28px;border:1px solid var(--line);background:var(--panel-2);border-radius:4px;color:var(--text);font:13px Arial,Helvetica,sans-serif;max-width:150px}
   .fmt-bar{flex-wrap:wrap}
   .exam-group{font-family:var(--f-label);font-weight:600;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:8px 10px 2px}
   .macro-chips{display:flex;flex-wrap:wrap;gap:6px}
@@ -704,7 +705,10 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 @keyframes usg-pisca{50%{opacity:.25}}
 @media(prefers-reduced-motion:reduce){#usgDialog[data-estado="ouvindo"] .usg-onda{animation:none;opacity:.35;transform:scale(1.25)}#usgDialog[data-estado="ouvindo"] .usg-onda2{opacity:.2;transform:scale(1.5)}#usgDialog[data-estado="ouvindo"] #usgEstado::before{animation:none}}
 #usgMsg,#usgInboxMsg{overflow-wrap:anywhere}#usgInbox{margin:8px;padding:8px;border:1px solid var(--line,#aaa);border-radius:8px}
-#usgInbox summary{cursor:pointer;font-weight:600;min-height:32px}.usg-pedido{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}.usg-nome{flex:1;min-width:140px;font-weight:600}
+#usgInbox summary{cursor:pointer;font-weight:600;min-height:32px}
+#usgAtualizar{transition:background .15s,transform .05s}#usgAtualizar:active{transform:scale(.97)}
+#usgAtualizar[data-estado="atualizando"]{background:var(--p-yellow);color:var(--warn);cursor:progress}
+#usgAtualizar[data-estado="ok"]{background:var(--p-green);color:var(--changed)}#usgAtualizar[data-estado="erro"]{background:var(--p-red);color:var(--crit)}.usg-pedido{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}.usg-nome{flex:1;min-width:140px;font-weight:600}
 .usg-selo{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--p-blue);color:var(--info)}
 .usg-selo[data-k="pendente"]{background:var(--p-yellow);color:var(--warn)}.usg-selo[data-k="pronto"]{background:var(--p-green);color:var(--changed)}.usg-selo[data-k="erro"]{background:var(--p-red);color:var(--crit)}.usg-selo[data-k="expirado"]{background:var(--panel-2);color:var(--muted)}
 .usg-pedido button{min-height:44px}
