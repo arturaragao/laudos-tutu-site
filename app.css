@@ -708,7 +708,9 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #usgInbox summary{cursor:pointer;font-weight:600;min-height:32px}
 #usgAtualizar{transition:background .15s,transform .05s}#usgAtualizar:active{transform:scale(.97)}
 #usgAtualizar[data-estado="atualizando"]{background:var(--p-yellow);color:var(--warn);cursor:progress}
-#usgAtualizar[data-estado="ok"]{background:var(--p-green);color:var(--changed)}#usgAtualizar[data-estado="erro"]{background:var(--p-red);color:var(--crit)}.usg-pedido{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}.usg-nome{flex:1;min-width:140px;font-weight:600}
+#usgAtualizar[data-estado="ok"]{background:var(--p-green);color:var(--changed)}#usgAtualizar[data-estado="erro"]{background:var(--p-red);color:var(--crit)}.usg-pedido{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}.usg-nome{min-width:120px;font-weight:600}
+.usg-horas{flex:1;min-width:150px;font-size:12px;color:var(--muted)}
+.usg-pedido button.usg-x{min-width:0;width:24px;height:24px;padding:0;border:none;background:transparent;color:var(--muted);font-size:18px;line-height:1;border-radius:50%;cursor:pointer}.usg-pedido button.usg-x:hover{background:var(--p-red);color:var(--crit)}
 .usg-selo{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;background:var(--p-blue);color:var(--info)}
 .usg-selo[data-k="pendente"]{background:var(--p-yellow);color:var(--warn)}.usg-selo[data-k="pronto"]{background:var(--p-green);color:var(--changed)}.usg-selo[data-k="erro"]{background:var(--p-red);color:var(--crit)}.usg-selo[data-k="expirado"]{background:var(--panel-2);color:var(--muted)}
 .usg-pedido button{min-height:44px}
@@ -838,3 +840,35 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #fraseAjuste { position: fixed; z-index: 61; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: min(92vw, 640px); display: flex; gap: 8px; align-items: center; padding: 6px 12px; border-radius: 999px; font-size: 12px; background: var(--paper, #fffaf2); color: var(--ink, #2b2620); border: 1px solid var(--line, #d8cdbb); box-shadow: 0 2px 10px rgba(0,0,0,.12); }
 #fraseAjuste[hidden] { display: none; }
 #fraseAjuste .fa-b { font-size: 12px; padding: 2px 10px; }
+
+/* 17/11/2026 (Artur): topo em duas fileiras no PC (cima: marca + ações; baixo: abas + novo + Histórico) */
+.v2-top-break { display:none; }
+#saveState[hidden] { display:none; }
+@media(min-width:761px) {
+  .tutu-v2 #tutuApp:not(.compact) { grid-template-rows:86px minmax(0,1fr) auto; }
+  #tutuApp:not(.compact) #v2Top { flex-wrap:wrap; row-gap:0; align-content:stretch; padding:0 12px; }
+  #tutuApp:not(.compact) .v2-brand { order:0; display:flex; align-items:center; gap:9px; height:42px; font:600 19px "Literata",Georgia,serif; }
+  #tutuApp:not(.compact) .v2-brand img { border-radius:7px; display:block; }
+  #tutuApp:not(.compact) .v2-top-actions { order:1; margin-left:auto; height:42px; }
+  #tutuApp:not(.compact) .v2-top-break { order:2; display:block; flex-basis:100%; height:0; }
+  #tutuApp:not(.compact) #caseTabs { order:3; height:43px; }
+  #tutuApp:not(.compact) #newCaseTab { order:4; align-self:center; }
+  #tutuApp:not(.compact) #histTopBtn { order:5; align-self:center; }
+}
+#tutuApp.compact .v2-brand { display:none; }
+
+/* 17/11/2026 (Artur): Copiar laudo / Conversar / Áudio maiores, logo abaixo do texto e acompanhando a rolagem */
+#v2Center > .v2-footer-actions { position:sticky; bottom:0; z-index:4; justify-content:center; gap:10px; margin:10px auto 0; padding:10px 0 12px;
+  background:linear-gradient(to top, var(--ground) 75%, transparent); }
+#v2Center > .v2-footer-actions button { display:flex; align-items:center; gap:7px; min-height:42px; padding:8px 18px; font-size:15px; border-radius:12px;
+  border:1px solid var(--line); background:var(--paper); color:var(--text); box-shadow:0 1px 3px #3027191f; cursor:pointer; transition:transform .06s, box-shadow .15s, filter .15s; }
+#v2Center > .v2-footer-actions button:hover { box-shadow:0 3px 8px #3027192e; filter:brightness(1.03); }
+#v2Center > .v2-footer-actions button:active { transform:translateY(1px) scale(.98); }
+#v2Center > .v2-footer-actions #copiar { background:var(--accent); color:var(--accent-ink); border-color:transparent; min-width:170px; justify-content:center; font-weight:600; }
+#v2Center > .v2-footer-actions kbd { font-size:11px; opacity:.85; }
+/* a barra de botões encosta no fim da área central (o sticky ignora o padding de baixo) */
+#v2Center:has(> .v2-footer-actions) { padding-bottom:0 !important; }
+#v2Center > .v2-footer-actions { margin-bottom:0; }
+#v2Center > .v2-footer-actions { bottom:52px; padding-bottom:8px; }
+#tutuApp.compact #v2Center > .v2-footer-actions { bottom:0; }
+@media(max-width:760px){ #v2Center > .v2-footer-actions { bottom:0; } }

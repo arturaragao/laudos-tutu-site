@@ -4346,11 +4346,15 @@ window.tutuSite.appReady = true;
   ui.isMobile = () => mobile.matches;
   app.id = "tutuApp";
   const top = el("header", { id: "v2Top" });
+  // 17/11/2026 (Artur): fileira de cima com o ícone e "Laudos" à esquerda; sincronizado, Ctrl K, ⚙ e ☾ à direita
+  const brand = el("div", { class: "v2-brand", id: "v2Brand" });
+  brand.append(el("img", { src: "icones/laudos-192.png", alt: "", width: "26", height: "26" }), "Laudos");
+  top.append(brand, el("span", { class: "v2-top-break", "aria-hidden": "true" }));
   const tabs = el("nav", { id: "caseTabs", role: "tablist", "aria-label": "Casos abertos" });
   top.append(tabs, button("+", () => ui.newTab(), { id: "newCaseTab", title: "Novo caso", "aria-label": "Novo caso" }),
     button("Histórico", () => openHistory(), { id: "histTopBtn", title: "Todos os exames salvos (os 4 mais recentes ficam nas abas)" }));
   const actions = el("div", { class: "v2-top-actions" });
-  actions.append(el("span", { id: "saveState", role: "status" }, "salvo agora"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }),
+  actions.append(el("span", { id: "saveState", role: "status", hidden: "" }, "salvo agora"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }),
     button("⚙", () => ui.settings(!app.classList.contains("settings-open")), { id: "settingsTop", title: "Configurações · Ctrl+,", "aria-label": "Configurações" }));
   const footerActions = ui.footerActions = el("div", { class: "v2-footer-actions" });
   move("copiar", footerActions); $("copiar").textContent = "Copiar laudo";
@@ -4412,7 +4416,7 @@ window.tutuSite.appReady = true;
   ui.panels.Classificar.append(el("p", { class: "meta" }, "Escolha a ferramenta para preencher os critérios e inserir o resultado na folha."));
   ui.calculator = key => { openModal("calcModal"); showCalc(key); };
   const footer = el("footer", { id: "v2Footer" });
-  footer.append(footerActions);
+  $("laudoBox").after(footerActions);   // 17/11/2026 (Artur): logo abaixo do texto do laudo, maiores
   const voice = el("div", { id: "voicePill", role: "status", "aria-live": "polite" });
   voice.append(el("span", { id: "voiceDot", "aria-hidden": "true" }, "●"), el("span", { id: "voiceLabel" }, "Voz · Alt S"), button("F1 · Ditar", () => ui.dictate(), { id: "voiceToggle" }));
   const settings = $("setModal"); settings.classList.add("v2-settings"); settings.removeAttribute("aria-modal"); settings.setAttribute("role", "region");
@@ -4496,7 +4500,7 @@ window.tutuSite.appReady = true;
   });
   ui.compact = () => { app.classList.toggle("compact"); ui.settings(false); ui.positionPalette?.(); };
   ui.night = () => { const night = document.body.classList.toggle("sepia-night"); store.set("v2Night", night ? "1" : "0"); $("nightToggle").textContent = night ? "Sépia dia" : "Sépia noite"; $("nightToggle").setAttribute("aria-pressed", String(night)); $("themeButton").textContent = night ? "☀" : "☾"; };
-  top.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
+  actions.append(button("☾", () => ui.night(), { id: "themeButton", title: "Alternar sépia dia/noite", "aria-label": "Alternar sépia dia/noite" }));
   if (store.get("v2Night") === "1") ui.night();
   showLeft(leftPinned);
   showRight(rightPinned);
@@ -4586,7 +4590,8 @@ window.tutuSite.appReady = true;
   doCopy = async () => { if (copying) return; copying = true; try { return await oldCopy(); } finally { copying = false; } };
   const clone = value => structuredClone(value);
   // Texto fixo: só reescreve se mudou (sem piscar enquanto o médico digita).
-  const setSave = text => { const n = $("saveState"); if (n.textContent !== text) n.textContent = text; };
+  // 17/11/2026: "salvo agora" saiu (o "sincronizado" diz o mesmo); só aparece se der falha
+  const setSave = text => { const n = $("saveState"); if (n.textContent !== text) n.textContent = text; n.hidden = text === "salvo agora"; };
   const stamp = () => new Date().toISOString();
   const newId = () => dayKey() + "-" + crypto.randomUUID();
   const cleanHTML = () => {
@@ -4801,7 +4806,7 @@ window.tutuSite.appReady = true;
       const b = ui.button("", () => ui.actions[action].run(), { title: ui.actions[action].label + " · " + key });
       b.append(ui.el("kbd", {}, key), ui.el("span", {}, ui.actions[action].label)); shortcuts.append(b);
     }
-    foot.replaceChildren(ui.footerActions, shortcuts);
+    foot.replaceChildren(shortcuts);   // 17/11/2026: os botões (Copiar, Conversar, Áudio) ficam logo abaixo do laudo
   };
   ui.renderShortcuts();
   const keyEditor = ui.el("div", { class: "v2-key-editor" });
@@ -8400,10 +8405,14 @@ window.tutuSite.appReady = true;
           : d.ia === "erro" ? ["erro", "IA falhou" + motivo + " (abre organizado localmente)"]
           : d.ia === "pendente" ? (minutos >= 3 ? ["erro", `IA parada há ${minutos} min: confira se o PC com a ponte está ligado (abre organizado localmente)`] : ["pendente", "IA organizando…"])
           : ["recebido", "recebido"];
-        row.append(el("span", { class: "usg-nome" }, ex?.name || "Exame"), el("span", { class: "usg-selo", "data-k": selo[0] }, selo[1]), button("Abrir como exame novo", () => abrir(id, d)), button("Descartar pedido", async () => {
+        // 17/11/2026 (Artur): hora do envio e do laudo pronto ao lado do exame; descartar vira um × pequeno
+        const hora = iso => { const t = Date.parse(iso || ""); return Number.isFinite(t) ? new Date(t).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", "") : ""; };
+        const horas = el("span", { class: "usg-horas" }, "enviado " + (hora(d.criado) || "—") + (hora(d.pronto) ? " · pronto " + hora(d.pronto) : ""));
+        row.append(el("span", { class: "usg-nome" }, ex?.name || "Exame"), horas, el("span", { class: "usg-selo", "data-k": selo[0] }, selo[1]), button("Abrir como exame novo", () => abrir(id, d)), button("×", async () => {
+          if (!confirm("Apagar este pedido da lista?")) return;
           try { await apagar(id, r.sha); await atualizar(); }
           catch (e) { inboxMsg.textContent = e.message; }
-        })); row._criado = Number.isFinite(criado) ? criado : 0; rows.push(row);
+        }, { class: "usg-x", title: "Descartar pedido", "aria-label": "Descartar pedido" })); row._criado = Number.isFinite(criado) ? criado : 0; rows.push(row);
       }
       rows.sort((a, b) => b._criado - a._criado);   // 17/11/2026 (Artur): mais recente primeiro
       lista.replaceChildren(...rows); inboxMsg.textContent = rows.length ? "Organização neste navegador. Revise antes de copiar." : "Nenhum pedido.";
