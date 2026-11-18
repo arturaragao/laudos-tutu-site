@@ -4374,7 +4374,7 @@ window.tutuSite.appReady = true;
   ["tasyBar", "compBox", "laudoBox", "volHint", "corrNote"].forEach(id => move(id, center));
   const right = ui.right = el("aside", { id: "v2Right", "aria-label": "Ferramentas do laudo" });
   const rnav = el("nav", { id: "rightTabs", role: "tablist", "aria-label": "Ferramentas" });
-  const names = ["Revisar", "Classificar", "IA", "Calc", "Aprendido"], icons = ["✓", "◇", "✦", "∑", "↺"];
+  const names = ["Revisar", "Classificar", "IA", "Calc", "Aprendido", "Sugestões"], icons = ["✓", "◇", "✦", "∑", "↺", "◈"];
   ui.panels = {};
   names.forEach((name, i) => {
     const b = button("", () => ui.panel(name), { role: "tab", id: "rightTab" + i, "aria-controls": "rightPanel" + i, "aria-selected": String(i === 0), title: name });
@@ -4454,6 +4454,7 @@ window.tutuSite.appReady = true;
     setRightPinned(true);
     Object.entries(ui.panels).forEach(([n, p]) => { p.hidden = n !== name; $(p.getAttribute("aria-labelledby")).setAttribute("aria-selected", String(n === name)); });
     $("rightToggle").setAttribute("aria-expanded", "true");
+    ui.onPanel?.(name);
   };
   let leftPinned = store.get("v2LeftMini") !== "1" && !mobile.matches;
   let leftPeekTimer = null;
@@ -4791,13 +4792,14 @@ window.tutuSite.appReady = true;
     copiar: { label: "Copiar", run: () => $("copiar").click() },
     gerar: { label: "IA", run: () => { ui.panel("IA"); $("gerar").click(); } },
     conferir: { label: "Conferir", run: () => { ui.panel("Revisar"); conferirLocal(); } },
+    sugestoes: { label: "Sugestões", run: () => ui.toggleSugestoes ? ui.toggleSugestoes() : ui.panel("Sugestões") },
     classificar: { label: "Classificar", run: () => ui.panel("Classificar") },
     desfazer: { label: "Desfazer", run: () => { ui.volume?.cancel(); undoVersion(); } },
     compacto: { label: "Compacto", run: () => ui.compact() },
     hud: { label: "Janelinha sobre o PACS", run: () => ui.openHUD() }
   };
   // Objeto único editável: rodapé e execução usam exatamente a mesma configuração.
-  ui.shortcuts = { F1: "ditar", F2: "proximo", F3: "normal", F4: "copiar", F6: "gerar", F7: "conferir", F8: "classificar", F9: "desfazer", "Ctrl+Shift+L": "compacto" };
+  ui.shortcuts = { F1: "ditar", F2: "proximo", F3: "normal", F4: "copiar", F6: "gerar", F7: "conferir", F8: "sugestoes", "Shift+F8": "classificar", F9: "desfazer", "Ctrl+Shift+L": "compacto" };
   try { const saved = JSON.parse(store.get("v2Shortcuts") || "null"); if (saved && Object.values(saved).every(a => ui.actions[a])) Object.assign(ui.shortcuts, saved); } catch (_) {}
   const foot = $("v2Footer");
   ui.renderShortcuts = () => {
@@ -4858,7 +4860,11 @@ window.tutuSite.appReady = true;
     for (const ex of EXAMS) add("Máscara", shortName(ex), () => ui.newTab(ex.id), (ex.voz || []).join(" "));
     for (const f of frases) add("Autotexto", f.nome, () => insert(f.texto), f.texto);
     for (const m of macros) add("Macro", m.nome, () => insert(m.texto), m.texto);
-    for (const [id, entry] of Object.entries(ui.actions)) add("Ação", entry.label, entry.run, id);
+    const shortcutOf = id => Object.entries(ui.shortcuts).filter(([, a]) => a === id).map(([k]) => k).join(", ");
+    for (const [id, entry] of Object.entries(ui.actions)) {
+      const sc = shortcutOf(id);
+      add("Ação", entry.label + (sc ? " · " + sc : ""), entry.run, id + (sc ? " " + sc : ""));
+    }
     for (const c of [...BUILTIN_CMDS, ...comandos]) add("Comando", c.fala, () => runCommand(c.acao));
     for (const [key, label] of Object.entries(CALCS)) add("Calculadora", label, () => ui.calculator(key));
     add("Histórico", "Hoje / Histórico de exames", () => openHistory());
@@ -10103,4 +10109,999 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       e.preventDefault(); executar();
     }
   });
+})();
+
+/* Árvore de sugestões no painel direito (F8): local, instantânea, sem IA e sem rede.
+   Parte 1 (pura, testada em Node): detecção do órgão do cursor (palavras-chave + SYN + máscara), índice ponderado
+   (máscara > bancos/laudos dos chefes > exemplos), pares achado → conclusão sem medidas, filtro e ranking por frequência.
+   Parte 2 (tela): aba "Sugestões" (F8 abre/fecha), filtro ao digitar, teclado (↑/↓/→/←/Enter/Esc), inserção e debounce 150 ms. */
+(function (root) {
+  "use strict";
+  const F = root.TutuFrase || (typeof require !== "undefined" ? require("./117-v2-frase.js") : null);
+  const C = root.TutuConclusao || (typeof require !== "undefined" ? require("./110-v2-conclusao.js") : null);
+  const Core = root.TutuV2Core || (typeof require !== "undefined" ? require("./98-v2-core.js") : null);
+
+  const fold = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const DEFAULT_SYN = (() => {
+    const m = {};
+    for (const g of ["figad hepat", "renal rins", "vesic bilia", "encef cereb", "cisto cisti", "calcu litia", "linfo linfa", "derra efusa", "hipod hipoa", "dilat ectas", "estea gordu", "baco esple", "tromb embol"]) {
+      const w = g.split(" ");
+      for (const a of w) m[a] = w.filter(b => b !== a);
+    }
+    return m;
+  })();
+  const getSyn = () => (typeof SYN !== "undefined" && SYN) || root.SYN || DEFAULT_SYN;
+
+  const NORMAL_CONCLUSION = "Exame dentro dos limites da normalidade.";
+  const STOP_TK = new Set(("para pela pelo pelas pelos com sem uma umas uns sobre entre como mais menos cerca medindo mede medem aspecto sinais sinal area areas regiao " +
+    "terco direito direita esquerdo esquerda bilateral pequena pequeno leve leves discreto discreta moderada moderado acentuada acentuado " +
+    "dos das nos nas que ele ela seu sua suas seus ate apos durante pode podendo apresenta apresentam observa observam nota notam visualiza visualizam " +
+    "normal normais habitual habituais preservado preservada preservados preservadas dimensoes morfologia contornos atenuacao densidade ecogenicidade calibre").split(" "));
+
+  /* ---------- catálogo de órgãos/estruturas ---------- */
+  const ORGAOS = [
+    { id: "figado", label: "Fígado", regiao: "ABDOME",
+      re: /\b(figad\w*|(?<!extra-|intra-)hepat\w*|supra-?hepat\w*|sistema\s+porta|veia\s+porta|segmento\s+(?:i|ii|iii|iv|v|vi|vii|viii|iva|ivb)\b|lobo\s+(?:caudado|quadrado|hepatic\w*))\b/,
+      weakRe: /\b(esteat?\w*|cirros\w*|hemangioma|li-?rads|gordu\w*\s+hepat\w*)\b/ },
+    { id: "vesicula", label: "Vesícula biliar", regiao: "ABDOME",
+      re: /\b(vesicul\w*(?!\s+seminal|\s+seminais)|colecist\w*|colelit\w*|barro\s+biliar|lama\s+biliar|vesicula\s+biliar)\b/,
+      weakRe: /\b(murphy\s+ultrassonografic\w*|vesicula\s+excluida)\b/ },
+    { id: "vias_biliares", label: "Vias biliares", regiao: "ABDOME",
+      re: /\b(vias?\s+biliares?|via\s+biliar|coledoc\w*|colang\w*|hepatico\s+comum|aerobilia|pneumobilia)\b/,
+      weakRe: /\b(biliar\w*|ictericia\s+obstrutiva)\b/ },
+    { id: "pancreas", label: "Pâncreas", regiao: "ABDOME",
+      re: /\b(pancre\w*|wirsung|processo\s+uncinado)\b/,
+      weakRe: /\b(pancreatit\w*|balthazar)\b/ },
+    { id: "baco", label: "Baço", regiao: "ABDOME",
+      re: /\b(baco|esple\w*)\b/,
+      weakRe: /\b(esplenomegal\w*|esplenose)\b/ },
+    { id: "adrenais", label: "Adrenais", regiao: "ABDOME",
+      re: /\b(adrenal|adrenais|suprarrenal|suprarrenais)\b/,
+      weakRe: /\b(adenoma\s+adrenal|feocromocitoma)\b/ },
+    { id: "rins", label: "Rins e vias urinárias", regiao: "ABDOME",
+      re: /\b(rim|rins|renal|renais|pielic\w*|calic\w*|ureter\w*|nefrolit\w*|hidronefr\w*|pielonefr\w*|parapielic\w*)\b/,
+      weakRe: /\b(bosniak|duplo\s+j|cateter\s+ureteral|nefropat\w*)\b/ },
+    { id: "bexiga", label: "Bexiga", regiao: "ABDOME",
+      re: /\b(bexig\w*|vesical|vesicais|perivesical|pos-?miccional)\b/,
+      weakRe: /\b(cistit\w*|diverticulo\s+vesical|trabeculac\w*\s+vesical)\b/ },
+    { id: "prostata", label: "Próstata", regiao: "ABDOME",
+      re: /\b(prostat\w*|vesiculas?\s+seminais?)\b/,
+      weakRe: /\b(pi-?rads|hiperplasia\s+prostatica|hpb)\b/ },
+    { id: "utero", label: "Útero", regiao: "ABDOME",
+      re: /\b(uter\w*|endometr\w*|miometr\w*|colo\s+uterin\w*|histerectom\w*)\b/,
+      weakRe: /\b(mioma\w*|leiomioma\w*|adenomiose|diu\b)\b/ },
+    { id: "ovarios", label: "Ovários e anexos", regiao: "ABDOME",
+      re: /\b(ovar\w*|anex\w*|tuba\w*|trompa\w*|paraovari\w*)\b/,
+      weakRe: /\b(o-?rads|folicul\w*|hidrossalpinge|endometrioma)\b/ },
+    { id: "alcas", label: "Alças intestinais e apêndice", regiao: "ABDOME",
+      re: /\b(alca\w*|intestin\w*|colon|colic\w*|sigmoid\w*|ceco\b|apendic\w*|reto\b|perirret\w*|estomag\w*|gastr\w*|duoden\w*|ileo\b|jejun\w*)\b/,
+      weakRe: /\b(diverticul\w*|apendicolit\w*|pneumatose|obstrucao\s+intestinal)\b/ },
+    { id: "peritonio", label: "Peritônio e parede abdominal", regiao: "ABDOME",
+      re: /\b(periton\w*|retroperiton\w*|mesent\w*|oment\w*|liquido\s+livre|ascit\w*|pneumoperiton\w*|parede\s+abdominal|inguinal|inguinais|umbilical|epigastric\w*|incisional)\b/,
+      weakRe: /\b(hernia\w*|paniculite|eventracao)\b/ },
+    { id: "aorta", label: "Aorta e ilíacas", regiao: "ABDOME",
+      re: /\b(aort\w*|(?:arterias?|veias?)\s+iliac\w*|iliac[oa]s?\s+(?:comum|comuns|interna|externa)|tronco\s+celiaco|mesenterica\s+(?:superior|inferior)|veia\s+cava)\b/,
+      weakRe: /\b(aneurism\w*|ateromat\w*|disseccao\s+aort\w*)\b/ },
+    { id: "carotidas", label: "Carótidas e vertebrais", regiao: "PESCOÇO",
+      re: /\b(carotid\w*|bulbo\s+carotide\w*|arterias?\s+vertebra(?:l|is)|bifurcacao\s+carotide\w*)\b/,
+      weakRe: /\b(espessamento\s+medio-?intimal|placa\s+carotide\w*)\b/ },
+    { id: "vasos_membros", label: "Artérias e veias de membros", regiao: "ANGIO MMII",
+      re: /\b((?:arteria|veia)s?\s+(?:femoral|femorais|poplite\w*|tibial|tibiais|fibular\w*|pedios\w*|braquial|braquiais|radial|radiais|ulnar\w*|subclavi\w*|axilar\w*|safen\w*)|safena\w*|femoral\s+(?:comum|superficial|profunda)|poplite\w*|tibial\s+(?:anterior|posterior)|mmii\b|mmss\b|membros?\s+(?:inferiores?|superiores?))\b/,
+      weakRe: /\b(tvp\b|trombose\s+venosa|insuficiencia\s+venosa|fluxo\s+(?:trifasico|bifasico|monofasico)|vps\b)\b/ },
+    { id: "tireoide", label: "Tireoide", regiao: "PESCOÇO",
+      re: /\b(tireoid\w*|tireo\w*|istmo\s+tireo\w*|paratireo\w*)\b/,
+      weakRe: /\b(ti-?rads|bocio|tireoidite)\b/ },
+    { id: "mamas", label: "Mamas", regiao: "MAMA",
+      re: /\b(mama|mamas|mamar\w*|retroareolar|axila\w*)\b/,
+      weakRe: /\b(bi-?rads|fibroadenoma|ectasia\s+ductal|microcalcificac\w*)\b/ },
+    { id: "linfonodos", label: "Linfonodos", regiao: "GERAL",
+      re: /\b(linf[oa]\w*|adenomegal\w*)\b/,
+      weakRe: /\b(hiloadenomegal\w*|linfadenopatia)\b/ },
+    { id: "pulmao", label: "Pulmões e vias aéreas", regiao: "TÓRAX",
+      re: /\b(pulm\w*|bronq\w*|traque\w*|lingula|lobo\s+(?:superior|medio|inferior))\b/,
+      weakRe: /\b(vidro\s+fosco|consolidac\w*|atelectas\w*|enfisem\w*|lung-?rads|tep\b|tromboembol\w*)\b/ },
+    { id: "pleura", label: "Pleura", regiao: "TÓRAX",
+      re: /\b(pleur\w*|pneumotorax|hemotorax|hidropneumotorax)\b/,
+      weakRe: /\b(empiema|derrame\s+pleural|efusao\s+pleural)\b/ },
+    { id: "mediastino", label: "Mediastino e coração", regiao: "TÓRAX",
+      re: /\b(mediast\w*|corac\w*|cardiac\w*|pericard\w*|coronari\w*|esofag\w*|timo\b)\b/,
+      weakRe: /\b(cardiomegal\w*|derrame\s+pericardic\w*)\b/ },
+    { id: "encefalo", label: "Encéfalo e crânio", regiao: "CRÂNIO",
+      re: /\b(encef\w*|cereb\w*|sistema\s+ventricular|ventricul\w*\s+(?:latera(?:l|is)|cerebra(?:l|is))|terceiro\s+ventriculo|quarto\s+ventriculo|sulco\w*|cisterna\w*|substancia\s+branca|calota|fossa\s+posterior|linha\s+media|hipocamp\w*)\b/,
+      weakRe: /\b(subdural|epidural|subaracnoid\w*|isquemi\w*|avc\b|leucoaraiose|microangiopatia)\b/ },
+    { id: "seios_face", label: "Seios da face, órbitas e mastoides", regiao: "CABEÇA",
+      re: /\b(seios?\s+(?:paranasais|da\s+face|maxilar\w*|fronta(?:l|is)|esfenoid\w*|etmoid\w*)|mastoid\w*|orbit\w*|concha\w*\s+nasais?|septo\s+nasal)\b/,
+      weakRe: /\b(sinusop\w*|rinossinus\w*|velamento\s+sinusal)\b/ },
+    { id: "ossos_coluna", label: "Ossos, coluna e articulações", regiao: "COLUNA",
+      re: /\b(osse\w*|coluna|vertebr\w*|disco\b|discal|discais|canal\s+vertebral|forame\w*|sacroil\w*|costel\w*|ombro|joelho|quadril|tornozelo|menisco|tendao|tendin\w*|manguito)\b/,
+      weakRe: /\b(espondil\w*|osteofit\w*|fratura\w*|protus\w*|abaulamento\s+discal|bursite|artrose)\b/ },
+  ];
+  const ORGAO_MAP = new Map(ORGAOS.map(o => [o.id, o]));
+
+  /* Expande radicais via SYN (04-banco-busca.js) */
+  function expandSynText(f) {
+    const syn = getSyn();
+    const extra = [];
+    for (const w of f.split(/[^a-z0-9]+/)) {
+      if (w.length < 4) continue;
+      const s = w.slice(0, 5);
+      if (syn[s]) for (const x of syn[s]) extra.push(x);
+    }
+    return extra.length ? f + " " + extra.join(" ") : f;
+  }
+
+  function matchOrgaos(texto) {
+    const f = fold(texto).trim();
+    if (!f) return [];
+    const exp = expandSynText(f);
+    const hits = [];
+    for (const o of ORGAOS) {
+      let sc = 0;
+      const m1 = f.match(new RegExp(o.re.source, "g"));
+      if (m1) sc += 10 * m1.length;
+      const m2 = f.match(new RegExp(o.weakRe.source, "g"));
+      if (m2) sc += 4 * m2.length;
+      if (!sc && exp !== f) {
+        if (o.re.test(exp)) sc += 3;
+        else if (o.weakRe.test(exp)) sc += 2;
+      }
+      if (sc > 0) hits.push({ id: o.id, sc });
+    }
+    hits.sort((a, b) => b.sc - a.sc);
+    return hits;
+  }
+
+  function orgaosDoExame(exame) {
+    if (!exame) return [];
+    const out = [], add = id => { if (id && !out.includes(id)) out.push(id); };
+    for (const h of matchOrgaos(exame.name || "")) add(h.id);
+    const mask = String(exame.mask || "");
+    for (const raw of mask.split(/\r?\n/)) {
+      const ln = raw.replace(/^\{\{[^}]*\}\}/g, "").replace(/<\/?[bui]>/gi, "").replace(/^\[<|>]$/g, "").trim();
+      if (!ln) continue;
+      for (const h of matchOrgaos(ln)) if (h.sc >= 10) add(h.id);
+    }
+    const fn = fold([exame.name, ...(exame.groups || [])].join(" "));
+    if (!out.length) {
+      if (/\babdom|pelv/.test(fn)) for (const id of ["figado", "vesicula", "vias_biliares", "pancreas", "baco", "adrenais", "rins", "bexiga", "alcas", "peritonio", "aorta", "linfonodos"]) add(id);
+      if (/\btorax|pulm|tep\b/.test(fn)) for (const id of ["pulmao", "pleura", "mediastino", "aorta", "linfonodos"]) add(id);
+      if (/\bcranio|encef/.test(fn)) for (const id of ["encefalo", "seios_face"]) add(id);
+      if (/\bcolun|lombar|cervical|toracica/.test(fn)) add("ossos_coluna");
+    }
+    return out;
+  }
+
+  function detectarOrgao(paragrafo, ctx) {
+    ctx = ctx || {};
+    const exOrgs = orgaosDoExame(ctx.exame);
+    const hits = matchOrgaos(paragrafo);
+    if (hits.length) {
+      const top = hits[0];
+      const tied = hits.filter(h => h.sc === top.sc);
+      const pick = (tied.find(h => exOrgs.includes(h.id)) || top).id;
+      return { orgao: pick, label: ORGAO_MAP.get(pick).label, fonte: "paragrafo", candidatos: hits.map(h => h.id) };
+    }
+    if (ctx.anterior) {
+      const ant = matchOrgaos(ctx.anterior);
+      if (ant.length) {
+        const pick = ant[0].id;
+        return { orgao: pick, label: ORGAO_MAP.get(pick).label, fonte: "anterior", candidatos: ant.map(h => h.id) };
+      }
+    }
+    if (exOrgs.length) {
+      return { orgao: exOrgs[0], label: ORGAO_MAP.get(exOrgs[0]).label, fonte: "exame", candidatos: exOrgs };
+    }
+    return { orgao: null, label: "", fonte: null, candidatos: [] };
+  }
+
+  /* ---------- classificação normal x alteração e limpeza ---------- */
+  const ABNORMAL_RE = /\b(esteat\w*|hipoatenu\w*|hiperatenu\w*|hipoecog\w*|hiperecog\w*|hipodens\w*|hiperdens\w*|reducao\s+(?:difusa|focal|dos\s+coeficientes|da\s+atenuacao)|cisto\w*|nodul\w*|calcul\w*|litias\w*|colelit\w*|nefrolit\w*|espessament\w*|dilatac\w*|ectasi\w*|derram\w*|lesa[oõ]\w*|lesoes|massas?|fratura\w*|estenose\w*|oclusa[oõ]|aneurism\w*|tromb\w*|diverticul\w*|hernia\w*|edema\w*|consolidac\w*|opacidad\w*|atelectas\w*|linfonodomegal\w*|linfadenop\w*|esplenomegal\w*|hepatomegal\w*|hidronefros\w*|pneumotorax|pneumoperitoni\w*|ascite|liquido livre|colecao|colecoes|abscess\w*|neoplas\w*|metast\w*|hemangioma\w*|adenoma\w*|isquemi\w*|infart\w*|hemorrag\w*|hematoma\w*|calcificac\w*|ateromat\w*|protus\w*|abaulament\w*|rotura|ruptura|bocio|atrofi\w*|hipertrofi\w*)\b/;
+  const NORMAL_RE = /\b(norma(?:l|is)|normalidade|preservad\w*|habituais|habitual|topic[oa]s?|normodistendid\w*|pervi[oa]s?|trifasic\w*|centrad[oa]s?|integra\w*|aerad[oa]s?|livres?|sem altera\w*|sem sinais|sem evidenc\w*|ausencia de)\b/;
+  const NEG_CLAUSE = /(?:\bsem\b|\bausencia de\b|\bnao ha\b|\bnao se observ\w*|\bnao se evidenci\w*|\bnao foram\b|\bnenhum[a]?\b)[^.;,]*/g;
+
+  function ehNormalTexto(t) {
+    const f = fold(t).trim();
+    if (!f) return false;
+    const pos = f.replace(NEG_CLAUSE, " ");
+    if (ABNORMAL_RE.test(pos)) return false;
+    // 17/11/2026: "normodistendida, observando-se imagem polipoide … 6 mm" não é normal (medida ou achado descrito)
+    if (/\d/.test(pos) || /\b(polip\w*|imagem|imagens|realce|falhas?\s+de\s+enchimento|conteudo|observando-se|evidenciando-se|nota-se|notam-se)\b/.test(pos)) return false;
+    if (NORMAL_RE.test(f) || (F && F.ehNeg(f))) return true;
+    return false;
+  }
+
+  const MEDIDA_RE = /(?:\d+(?:[.,]\d+)?(?:\s*[x×]\s*\d+(?:[.,]\d+)?)*|\b_+)\s*(?:mm|cm|ml|cc|hu|uh|%|m)\b/gi;
+  const PREAMBULO_MED = /,?\s*(?:com\s+)?(?:di[aâ]metro|volume(?:\s+estimado)?|calibre|espessura|extens[aã]o|eixo)\s+(?:de\s+|aproximad[oa]\s+de\s+|m[aá]xim[oa]\s+de\s+)?(?=\d|_+)/gi;
+  const LIMPA_LIXO = s => String(s || "").replace(/^\s*\{\{[^}]*\}\}/g, "").replace(/<\/?[bui]>/gi, "").replace(/^[\s*\\•-]+/, "").replace(/\s+/g, " ").trim();
+
+  function limparConclusao(texto, ladoAchado) {
+    let t = LIMPA_LIXO(texto).replace(/^\s*(?:\d+\s*[.)]|[-•*])\s*/, "").replace(/^\s*conclus[aã]o\s*:\s*/i, "");
+    if (!t) return null;
+    if (C && C.ehListaNomes && C.ehListaNomes(t)) return null;
+    t = t.replace(PREAMBULO_MED, " ").replace(/,?\s*medindo\s+(?:\d+(?:[.,]\d+)?|_+)(?:\s*[x×]\s*(?:\d+(?:[.,]\d+)?|_+))*\s*(?:mm|cm|ml|cc|hu|uh)?\b/gi, "");
+    if (C && C.limparCandidata) {
+      const c = C.limparCandidata(t, ladoAchado || "");
+      if (c && !MEDIDA_RE.test(c)) {
+        MEDIDA_RE.lastIndex = 0;
+        return c;
+      }
+      MEDIDA_RE.lastIndex = 0;
+    }
+    // Fallback se limparCandidata retornou null por algum detalhe não-métrico; ainda remove qualquer medida/número
+    const prot = [];
+    const guarda = m => { prot.push(m); return "\u0001" + String.fromCharCode(96 + prot.length) + "\u0001"; };
+    t = t.replace(/\b(?:bosniak|li-?rads|bi-?rads|ti-?rads|pi-?rads|o-?rads|lung-?rads)\s*(?:iv|iii|ii|i|v|\d)[a-f]?\b/gi, guarda);
+    if (C && C.limparComparacao) { t = C.limparComparacao(t); if (t == null) return null; }
+    t = (C && C.limparMedidas ? C.limparMedidas(t) : t.replace(MEDIDA_RE, ""))
+      .replace(/\{([^{}|]*\|[^{}]*)\}/g, "").replace(/_{2,}/g, "")
+      .replace(/\s+([,.;])/g, "$1").replace(/,\s*([.;])/g, "$1").replace(/[,;\s]+$/, "").replace(/\.+$/, "").trim();
+    if (/\d/.test(t) || t.length < 5) return null;
+    t = t.replace(/\u0001([a-z])\u0001/g, (_m, ch) => prot[ch.charCodeAt(0) - 97]);
+    return t.charAt(0).toUpperCase() + t.slice(1) + ".";
+  }
+
+  const chaveFrase = t => fold(t).replace(/\d+(?:[.,]\d+)?/g, "#").replace(/_{2,}/g, "#").replace(/[^a-z0-9# ]+/g, " ").replace(/\s+/g, " ").trim();
+  function tokensClinicos(t) {
+    const syn = getSyn();
+    const out = new Set();
+    for (const w of fold(t).split(/[^a-z0-9]+/)) {
+      if (w.length < 3 || /^\d+$/.test(w) || STOP_TK.has(w)) continue;
+      const st = w.length >= 5 ? w.replace(/(?:oes|aes)$/, "ao").replace(/ais$/, "al").replace(/[aeo]s?$/, "") : w;
+      out.add(st);
+      const s5 = w.slice(0, 5);
+      if (syn[s5]) for (const x of syn[s5]) out.add(x);
+    }
+    return out;
+  }
+
+  /* ---------- extração da máscara ("Textos padrões:" + [<...>]) ---------- */
+  const HEADING_RE = /^(?:informa[cç][õo]es\s+cl[ií]nicas|t[eé]cnica(?:\s+de\s+exame)?|achados(?:\s+adicionais)?|conclus[aã]o|impress[aã]o)\s*:?$/i;
+  function extrairMascara(exame) {
+    const out = [];
+    if (!exame || !exame.mask) return out;
+    const rawLines = String(exame.mask).split(/\r?\n/);
+    let emPadroes = false;
+    for (const raw of rawLines) {
+      const semAl = raw.replace(/^(?:\{\{[^}]*\}\})+/g, "").replace(/<\/?[bui]>/gi, "").trim();
+      if (!semAl) continue;
+      const mPad = semAl.match(/^textos?\s+padr(?:ão|ões|ao|oes)\s*:?\s*(.*)$/i);
+      if (mPad) {
+        emPadroes = true;
+        if (mPad[1] && mPad[1].trim()) out.push(mPad[1].trim());
+        continue;
+      }
+      if (emPadroes) {
+        if (HEADING_RE.test(semAl)) { emPadroes = false; continue; }
+        const clean = semAl.replace(/^\[<|>]$/g, "").replace(/^\[|\]$/g, "").replace(/^[-•*]\s*/, "").trim();
+        if (clean && clean !== "<>" && !/^\d+\.?$/.test(clean) && clean.length >= 10) out.push(clean);
+        continue;
+      }
+      let m = semAl.match(/^\[<(.*)>\](?:\s*)$/);
+      if (!m) m = semAl.match(/^\[(.*)\]$/);
+      if (m && m[1] && m[1].trim() && m[1].trim() !== "<>") {
+        const clean = m[1].trim();
+        if (clean.length >= 10) out.push(clean);
+      }
+    }
+    return out;
+  }
+
+  /* ---------- índice da árvore ---------- */
+  const AREA_IGNORADA = /^(exames?|estudo|acompanhar|geral)\b/;
+  const SECAO_IGNORADA = /^(exames?|acompanhar|tecnica|indicacao|protocolo|comparacao)\b/;
+  const PII_RE = /\b(dr\.?a?|crm|paciente|prontu[aá]rio|atendimento|cpf)\b|\b\d{6,}\b/i;
+  const PESOS = { mascara: 4, laudos: 3, banco: 2, exemplos: 1.5 };
+  const FONTE_PRIO = { mascara: 4, banco: 3, laudos: 2, exemplos: 1 };
+
+  function ehMelhorTexto(novo, atual, fonteNova, fonteAtual) {
+    if (!atual) return true;
+    const pN = FONTE_PRIO[fonteNova] || 0, pA = FONTE_PRIO[fonteAtual] || 0;
+    if (pN !== pA) return pN > pA;
+    const nTemNum = /\d/.test(novo), aTemNum = /\d/.test(atual);
+    if (nTemNum !== aTemNum) return !nTemNum;
+    return novo.length < atual.length;
+  }
+
+  function buildIndex(fontes) {
+    fontes = fontes || {};
+    const porOrgao = new Map();
+    const conclPool = new Map();
+    const exame = fontes.mascara || null;
+    const modal = fontes.modal || (F && exame ? F.modalidadeDe(exame) : null);
+
+    const ensureOrgao = orgId => {
+      if (!porOrgao.has(orgId)) porOrgao.set(orgId, new Map());
+      return porOrgao.get(orgId);
+    };
+
+    const addPoolConc = (orgId, cTexto, fonte, peso) => {
+      const c = limparConclusao(cTexto, "");
+      if (!c || ehNormalTexto(c)) return;
+      if (!conclPool.has(orgId)) conclPool.set(orgId, new Map());
+      const m = conclPool.get(orgId), ck = chaveFrase(c);
+      if (!ck) return;
+      const cur = m.get(ck);
+      if (cur) { cur.freq += 1; cur.peso += peso; }
+      else m.set(ck, { texto: c, freq: 1, peso, fonte, tk: tokensClinicos(c) });
+    };
+
+    const COMP_DESC_RE = /\b(exames? anteriore?s?|estudos? anteriore?s?|em relacao ao|em comparacao|comparad[oa]\s+(?:ao|com)|\{data\})\b/;
+    const addItem = (descRaw, concsRaw, orgHint, fonte, count) => {
+      const desc = LIMPA_LIXO(descRaw);
+      if (!desc || desc.length < 12 || desc.length > 420 || PII_RE.test(desc)) return;
+      if (C && C.ehListaNomes && C.ehListaNomes(desc)) return;
+      if (COMP_DESC_RE.test(fold(desc))) return;
+      const n = Math.max(1, +count || 1);
+      const peso = (PESOS[fonte] || 1) * n;
+
+      // detecta órgão (frase primeiro, depois dica da seção/título)
+      let hits = matchOrgaos(desc);
+      if (!hits.length && orgHint) hits = matchOrgaos(orgHint);
+      const orgId = hits.length ? hits[0].id : "geral";
+
+      const key = chaveFrase(desc);
+      if (!key) return;
+      const grupo = ehNormalTexto(desc) ? "normal" : "alteracoes";
+      const map = ensureOrgao(orgId);
+      let entry = map.get(key);
+      if (!entry) {
+        entry = { id: orgId + "|" + key, texto: desc, grupo, freq: 0, peso: 0, fonte, tokens: tokensClinicos(desc), conclusoes: new Map() };
+        map.set(key, entry);
+      } else if (ehMelhorTexto(desc, entry.texto, fonte, entry.fonte)) {
+        entry.texto = desc;
+        entry.fonte = fonte;
+      }
+      entry.freq += n;
+      entry.peso += peso;
+      if (grupo === "normal" && fonte === "mascara") entry.grupo = "normal";
+
+      const lado = C && C.ladoDe ? C.ladoDe(desc) : "";
+      for (const cr of concsRaw || []) {
+        const cleanC = limparConclusao(cr, lado);
+        if (!cleanC) continue;
+        if (grupo === "alteracoes" && ehNormalTexto(cleanC)) continue;
+        const ck = chaveFrase(cleanC);
+        if (!ck) continue;
+        const ce = entry.conclusoes.get(ck);
+        if (ce) { ce.freq += n; ce.peso += peso; }
+        else entry.conclusoes.set(ck, { texto: cleanC, freq: n, peso, fonte });
+        if (grupo === "alteracoes") addPoolConc(orgId, cleanC, fonte, peso);
+      }
+    };
+
+    // (a) Máscara aberta: "Textos padrões:" e [<...>]
+    for (const ln of extrairMascara(exame)) {
+      const partes = ln.split(/\s*(?:->|→)\s*/);
+      if (partes.length >= 2) addItem(partes[0], [partes[1]], exame?.name, "mascara", 1);
+      else addItem(ln, ehNormalTexto(ln) ? [NORMAL_CONCLUSION] : [], exame?.name, "mascara", 1);
+    }
+
+    // (b) Bancos carregados no site (BANK_TC, BANK_NT, Radio/USG, BANK_PARES)
+    const allBanks = [...(fontes.bankTC || []), ...(fontes.bankNT || [])];
+    for (const e of allBanks) {
+      if (!Array.isArray(e) || e.length < 4) continue;
+      const area = String(e[0] || ""), secao = String(e[1] || ""), titulo = String(e[2] || ""), texto = String(e[3] || "");
+      const eModal = F ? F.modalidadeDe({ name: e[5] || "TC" }) || String(e[5] || "TC").toUpperCase() : String(e[5] || "TC").toUpperCase();
+      if (modal && eModal && eModal !== modal) continue;
+      const af = fold(area).trim(), sf = fold(secao).trim();
+      if (AREA_IGNORADA.test(af) || SECAO_IGNORADA.test(sf)) continue;
+
+      const ehLaudos = /^laudos\b/.test(sf);
+      const ehLaudosConc = /^laudos\s*·\s*conclus/.test(sf);
+      const ehLaudosTec = /^laudos\s*·\s*(tecnica|comparacao)/.test(sf);
+      if (ehLaudosTec) continue;
+
+      if (ehLaudosConc) {
+        const orgHint = titulo + " " + area;
+        for (const raw of texto.split("\n")) {
+          const l = LIMPA_LIXO(raw);
+          if (!l || PII_RE.test(l)) continue;
+          const hs = matchOrgaos(l);
+          const oid = hs.length ? hs[0].id : (matchOrgaos(orgHint)[0]?.id || "geral");
+          addPoolConc(oid, l, "laudos", PESOS.laudos);
+        }
+        continue;
+      }
+
+      if (ehLaudos) {
+        const orgHint = titulo + " " + area;
+        for (const raw of texto.split("\n")) addItem(raw, [], orgHint, "laudos", 1);
+        continue;
+      }
+
+      // BANK_TC / Radio / USG
+      const fonte = "banco";
+      const orgHint = secao + " " + titulo + " " + area;
+      if (/^normal\b/.test(sf) || /\b(normal|normais|normalidade)\b/.test(fold(titulo))) {
+        for (const raw of texto.split("\n")) {
+          const l = LIMPA_LIXO(raw);
+          if (l) addItem(l, [NORMAL_CONCLUSION], orgHint, fonte, 1);
+        }
+        continue;
+      }
+
+      if (F && F.paresDe) {
+        const rawLines = texto.split("\n").map(LIMPA_LIXO).filter(Boolean);
+        const { pares } = F.paresDe(e);
+        const usados = new Set();
+        const ehConcCurta = l => {
+          const lc = limparConclusao(l, "");
+          if (!lc || lc.split(/\s+/).length > 12) return false;
+          const fl = fold(l);
+          if (/\b(observ\w+|apresent\w+|visualiz\w+|nota-se|notam-se|identific\w+|paredes|contornos|dimensoes|realce|atenuacao|ecogenicidade)\b/.test(fl)) return false;
+          return true;
+        };
+        if (!Array.isArray(e[4]) && rawLines.length >= 2 && pares.every(p => p.origem === "titulo") && ehConcCurta(rawLines[rawLines.length - 1])) {
+          const concLine = rawLines[rawLines.length - 1];
+          usados.add(fold(concLine));
+          for (const l of rawLines.slice(0, -1)) {
+            usados.add(fold(l));
+            addItem(l, [concLine], orgHint, fonte, 1);
+          }
+        } else {
+          for (const p of pares) {
+            for (const a of p.a || []) {
+              usados.add(fold(LIMPA_LIXO(a)));
+              addItem(a, p.c || [], orgHint, fonte, 1);
+            }
+          }
+        }
+        // linhas descritivas que não entraram em nenhum par (ex.: entradas só com descrição ou frases curtas sem verbo)
+        if (usados.size === 0 && rawLines.length) {
+          const descFallback = rawLines.length > 1 ? rawLines.slice(0, -1) : rawLines;
+          const concFallback = rawLines.length > 1 ? [rawLines[rawLines.length - 1]] : (titulo ? [titulo.split("›").pop().trim()] : []);
+          for (const l of descFallback) {
+            usados.add(fold(l));
+            addItem(l, concFallback, orgHint, fonte, 1);
+          }
+        }
+        for (const l of rawLines) {
+          if (usados.has(fold(l))) continue;
+          if (F.classe && F.classe(l) === "A") {
+            const titC = titulo ? [titulo.split("›").pop().trim()] : [];
+            addItem(l, titC, orgHint, fonte, 1);
+          } else if (ehNormalTexto(l)) {
+            addItem(l, [NORMAL_CONCLUSION], orgHint, fonte, 1);
+          }
+        }
+      }
+    }
+
+    // (b.2) Pares reais dos laudos (BANK_PARES: [regiao, orgao, achado, conclusao, n])
+    for (const p of fontes.pares || []) {
+      if (!Array.isArray(p) || p.length < 4) continue;
+      if (modal && modal !== "TC") continue;   // notas-tomografia.json é de TC
+      const orgHint = String(p[1] || "") + " " + String(p[0] || "");
+      addItem(p[2], [p[3]], orgHint, "laudos", Math.max(1, +p[4] || 1));
+    }
+
+    // (c) Exemplos do médico (coleção db "exemplos": { examId: [laudoTexto, ...] })
+    const examsById = new Map((fontes.exams || []).map(x => [x.id, x]));
+    const exemplos = fontes.exemplos || {};
+    for (const [exId, lista] of Object.entries(exemplos)) {
+      const exObj = examsById.get(exId);
+      const exModal = F && exObj ? F.modalidadeDe(exObj) : null;
+      if (modal && exModal && exModal !== modal) continue;
+      const hint = exObj ? exObj.name : exId;
+      for (const texto of Array.isArray(lista) ? lista : []) {
+        const linhas = String(texto).split("\n").map(LIMPA_LIXO).filter(l => l.length >= 12 && !PII_RE.test(l));
+        const descL = [], concL = [];
+        for (const l of linhas) {
+          if (HEADING_RE.test(l)) continue;
+          if (/^\d+\s*[.)]\s*/.test(l) || (F && F.classe && F.classe(l) === "C")) concL.push(l);
+          else descL.push(l);
+        }
+        if (!descL.length && concL.length) {
+          if (concL.length === 1) descL.push(concL[0]);
+          else descL.push(...concL.slice(0, -1));
+        }
+        for (const d of descL) {
+          const dTk = tokensClinicos(d);
+          const matchedC = concL.filter(c => {
+            const cTk = tokensClinicos(c);
+            let k = 0; for (const x of cTk) if (dTk.has(x)) k++;
+            return k >= 1;
+          });
+          addItem(d, matchedC, hint, "exemplos", 1);
+        }
+      }
+    }
+
+    // Pareamento por pool do mesmo órgão (rápido); C.sugerir fica sob demanda na consulta
+    const orgaos = new Map();
+    for (const [orgId, map] of porOrgao) {
+      const pool = [...(conclPool.get(orgId)?.values() || [])].sort((a, b) => b.peso - a.peso);
+      const itens = [];
+      for (const it of map.values()) {
+        if (it.grupo === "alteracoes" && it.conclusoes.size === 0 && pool.length) {
+          for (const pc of pool) {
+            let k = 0; for (const t of pc.tk) if (it.tokens.has(t)) k++;
+            if (k >= Math.min(2, pc.tk.size) && (!C || !C.valida || C.valida(pc.texto, it.texto))) {
+              it.conclusoes.set(chaveFrase(pc.texto), { texto: pc.texto, freq: pc.freq, peso: pc.peso * 0.5, fonte: pc.fonte });
+              if (it.conclusoes.size >= 2) break;
+            }
+          }
+        }
+        const conclusoes = [...it.conclusoes.values()].sort((a, b) => b.peso - a.peso || b.freq - a.freq || a.texto.length - b.texto.length);
+        itens.push({ id: it.id, texto: it.texto, grupo: it.grupo, freq: it.freq, peso: it.peso, fonte: it.fonte, tokens: it.tokens, conclusoes });
+      }
+      orgaos.set(orgId, itens);
+    }
+    return { orgaos, modal, bankTC: fontes.bankTC || [], pares: fontes.pares || [], concIdx: null, paresIdx: null };
+  }
+
+  /* ---------- consulta da árvore (contexto + filtro) ---------- */
+  function matchFiltro(qFold, qTokens, texto) {
+    if (!qFold) return 1;
+    const f = fold(texto);
+    if (f.includes(qFold)) return 100 + qFold.length / Math.max(1, f.length);
+    if (Core && Core.score) {
+      const sc = Core.score(qFold, texto);
+      if (sc > 0) return sc;
+    }
+    if (qTokens.size) {
+      const tk = tokensClinicos(texto);
+      let hit = 0; for (const t of qTokens) if (tk.has(t)) hit++;
+      if (hit === qTokens.size) return 40;
+      if (hit > 0 && qTokens.size > 1) return 15 * hit / qTokens.size;
+    }
+    return 0;
+  }
+
+  function consultarArvore(indice, opts) {
+    opts = opts || {};
+    const det = detectarOrgao(opts.paragrafo || "", { anterior: opts.anterior, exame: opts.exame });
+    const exOrgs = orgaosDoExame(opts.exame);
+    const qFold = fold(opts.filtro || "").trim();
+    const qTokens = qFold ? tokensClinicos(qFold) : new Set();
+
+    // Se o parágrafo já tem termos clínicos alterados (além de frase normal), reforça frases parecidas
+    const parEhNormal = ehNormalTexto(opts.paragrafo || "");
+    const ctxTokens = (!parEhNormal && opts.paragrafo) ? tokensClinicos(opts.paragrafo) : new Set();
+
+    const ordemIds = [];
+    const pushOrg = id => { if (id && indice.orgaos.has(id) && !ordemIds.includes(id)) ordemIds.push(id); };
+    pushOrg(det.orgao);
+    for (const id of det.candidatos) pushOrg(id);
+    for (const id of exOrgs) pushOrg(id);
+    if (qFold || !ordemIds.length) {
+      for (const o of ORGAOS) pushOrg(o.id);
+      pushOrg("geral");
+    }
+
+    const orgaosOut = [];
+    for (const orgId of ordemIds) {
+      const rawItens = indice.orgaos.get(orgId) || [];
+      const orgMeta = ORGAO_MAP.get(orgId) || { id: orgId, label: "Geral" };
+      const normal = [], alteracoes = [];
+
+      for (const it of rawItens) {
+        let fScore = qFold ? Math.max(matchFiltro(qFold, qTokens, it.texto), matchFiltro(qFold, qTokens, orgMeta.label) * 0.4,
+          ...it.conclusoes.map(c => matchFiltro(qFold, qTokens, c.texto) * 0.9)) : 1;
+        if (qFold && fScore <= 0) continue;
+
+        let ctxBonus = 0;
+        if (ctxTokens.size && it.grupo === "alteracoes") {
+          let hit = 0; for (const t of ctxTokens) if (it.tokens.has(t)) hit++;
+          if (hit > 0) ctxBonus = hit * 8;
+        }
+        const rank = it.peso + ctxBonus + (qFold ? fScore * 0.25 : 0);
+        const item = { id: it.id, texto: it.texto, grupo: it.grupo, freq: it.freq, peso: it.peso, fonte: it.fonte, conclusoes: it.conclusoes, rank };
+        if (it.grupo === "normal") normal.push(item);
+        else alteracoes.push(item);
+      }
+
+      if (!normal.length && !alteracoes.length) continue;
+      const cmp = (a, b) => b.rank - a.rank || b.peso - a.peso || b.freq - a.freq || a.texto.length - b.texto.length;
+      normal.sort(cmp);
+      alteracoes.sort(cmp);
+      const limitN = qFold ? 15 : 8, limitA = qFold ? 30 : 25;
+      orgaosOut.push({
+        id: orgId, label: orgMeta.label,
+        detectado: orgId === det.orgao,
+        normal: normal.slice(0, limitN),
+        alteracoes: alteracoes.slice(0, limitA),
+      });
+    }
+
+    return { orgaoDetectado: det, orgaos: orgaosOut };
+  }
+
+  const api = { ORGAOS, fold, matchOrgaos, orgaosDoExame, detectarOrgao, ehNormalTexto, limparConclusao, extrairMascara, buildIndex, consultarArvore, chaveFrase };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TutuSugestoes = api;
+})(globalThis);
+
+/* ====================== Tela (Painel direito · F8) ====================== */
+(() => {
+  "use strict";
+  if (typeof document === "undefined" || !window.tutuV2 || typeof sheet === "undefined") return;
+  const ui = window.tutuV2, S = window.TutuSugestoes, C = window.TutuConclusao, F = window.TutuFrase;
+  const NOME = "Sugestões", DEBOUNCE_MS = 150;
+  const panel = ui.panels[NOME];
+  if (!panel) return;
+
+  const h = (tag, attrs = {}, ...kids) => {
+    const n = ui.el(tag, attrs);
+    for (const k of kids) if (k !== "" && k != null) n.append(k);
+    return n;
+  };
+
+  /* ---------- estado e cache do índice ---------- */
+  let idx = null, idxSig = "", timer = 0;
+  let lastBlock = null, lastResult = null, selectedId = null;
+  const expandedOrg = new Set(), collapsedGrp = new Set(), expandedDesc = new Set();
+
+  function calcSig() {
+    const exLen = Object.values(examples || {}).reduce((n, l) => n + (l ? l.length : 0), 0);
+    return [current?.id || "", current?.mask?.length || 0, BANK_TC.length, BANK_NT.length,
+      (window.BANK_PARES || []).length, exLen, (BANK[BANK.length - 1]?.[3] || "").length].join(":");
+  }
+  function getIndex() {
+    const sig = calcSig();
+    if (!idx || sig !== idxSig) {
+      idx = S.buildIndex({ mascara: current, bankTC: window.BANK_TC, bankNT: window.BANK_NT, pares: window.BANK_PARES || [], exemplos: examples || {}, exams: EXAMS });
+      idxSig = sig;
+    }
+    return idx;
+  }
+  document.addEventListener("tutu-bancos", () => { idx = null; if (isOpen()) atualizar(true); });
+
+  const isOpen = () => !panel.hidden && !ui.app.classList.contains("right-mini") && !ui.app.classList.contains("focus-mode");
+
+  /* ---------- montagem do painel ---------- */
+  panel.id = "rightPanelSugestoes";
+  const ctxBar = h("div", { id: "sugCtx", class: "sug-ctx" }, "Cursor na folha");
+  const filtroEl = h("input", { id: "sugFiltro", type: "search", placeholder: "Filtrar achados ou conclusões…", "aria-label": "Filtrar sugestões", autocomplete: "off" });
+  const arvoreEl = h("div", { id: "sugArvore", role: "tree", "aria-label": "Árvore de sugestões por órgão" });
+  const dicaEl = h("p", { class: "sug-dica" }, "↑ ↓ escolher · → expandir · Enter inserir · Esc fechar");
+  panel.append(ctxBar, filtroEl, arvoreEl, dicaEl);
+
+  /* ---------- captura do parágrafo onde está o cursor ---------- */
+  function readCursorBlock() {
+    const sel = getSelection();
+    if (sel.rangeCount && sheet.contains(sel.anchorNode)) {
+      const b = typeof caretBlock === "function" ? caretBlock() : null;
+      if (b && sheet.contains(b)) { lastBlock = b; return b; }
+    }
+    if (lastBlock && sheet.contains(lastBlock)) return lastBlock;
+    if (typeof sheetRange !== "undefined" && sheetRange && sheet.contains(sheetRange.startContainer)) {
+      let b = sheetRange.startContainer.nodeType === 1 ? sheetRange.startContainer : sheetRange.startContainer.parentElement;
+      while (b && b.parentElement !== sheet) b = b.parentElement;
+      if (b) { lastBlock = b; return b; }
+    }
+    return null;
+  }
+
+  function maskNormalSet() {
+    const set = new Set();
+    try {
+      for (const ln of S.extrairMascara(current)) set.add(S.fold(ln));
+    } catch (_) {}
+    return set;
+  }
+
+  /* ---------- inserção na folha ---------- */
+  function inserirDescricao(texto) {
+    const target = readCursorBlock();
+    const ps = [...sheet.children];
+    let blk = target;
+    if (!blk || !sheet.contains(blk)) {
+      const hi = ps.findIndex(p => S.fold(blockText(p).trim()) === "achados");
+      blk = (hi >= 0 ? ps[hi + 1] : null) || sheet.lastElementChild;
+    }
+    pushVersion("Antes da sugestão");
+    sheet.focus({ preventScroll: true });
+    const normals = maskNormalSet();
+    const curTxt = blk ? blockText(blk).trim() : "";
+
+    if (!blk || isHeading(curTxt)) {
+      const p = document.createElement("p");
+      p.setAttribute("style", PSTYLE);
+      p.textContent = texto;
+      if (blk && blk.isConnected) blk.after(p); else sheet.append(p);
+      blk = p;
+    } else if (!curTxt || curTxt === "[<>]" || normals.has(S.fold(curTxt)) || (!/[.!?]$/.test(curTxt) && curTxt.length <= 60)) {
+      const r = document.createRange();
+      r.selectNodeContents(blk);
+      const sel = getSelection();
+      sel.removeAllRanges(); sel.addRange(r);
+      if (!document.execCommand || !document.execCommand("insertText", false, texto)) blk.textContent = texto;
+    } else {
+      const r = rangeAtEnd(blk);
+      const sel = getSelection();
+      sel.removeAllRanges(); sel.addRange(r);
+      const add = (/[.!?]$/.test(curTxt) ? " " : ". ") + texto;
+      if (!document.execCommand || !document.execCommand("insertText", false, add)) blk.textContent += add;
+    }
+
+    lastBlock = blk;
+    try { sheetRange = rangeAtEnd(blk); } catch (_) {}
+    updateCount(); updVolHint(); renderAlerts(); scheduleCaseSave();
+    pushVersion("Sugestão inserida");
+    setStatus("Descrição inserida.", "ok");
+  }
+
+  function inserirConclusao(texto) {
+    const clean = S.limparConclusao(texto, "") || texto;
+    const ps = [...sheet.children], hi = ps.findIndex(p => norm(p.textContent) === "conclusão");
+    if (hi < 0) {
+      pushVersion("Antes da sugestão");
+      insertAtCaret(clean);
+      updateCount(); renderAlerts(); scheduleCaseSave();
+      pushVersion("Conclusão inserida");
+      setStatus("Conclusão inserida no cursor.", "ok");
+      return;
+    }
+    let end = hi + 1;
+    while (end < ps.length && !isHeading(ps[end].textContent.trim())) end++;
+    const blocos = ps.slice(hi + 1, end);
+    const soNum = t => /^\s*\d+\s*[.)]?\s*$/.test(t);
+    const cheios = blocos.filter(b => { const t = b.textContent.trim(); return t && !soNum(t); });
+    const linhas = cheios.map(b => b.textContent.trim());
+    if (C && C.jaTem && C.jaTem(clean, linhas)) {
+      setStatus("Essa conclusão já consta na folha.");
+      return;
+    }
+    pushVersion("Antes da conclusão sugerida");
+    const normConcFold = S.fold("Exame dentro dos limites da normalidade.");
+    if (cheios.length === 1 && S.fold(cheios[0].textContent.replace(/^\s*\d+\s*[.)]\s*/, "").replace(/\.+$/, "").trim()) === normConcFold.replace(/\.+$/, "") && S.fold(clean) !== normConcFold) {
+      cheios[0].textContent = "1. " + clean;
+    } else {
+      const placeholder = blocos.find(b => soNum(b.textContent));
+      const nums = cheios.map(b => +(b.textContent.trim().match(/^(\d+)\s*[.)]/) || [])[1]).filter(Boolean);
+      const nextNum = nums.length ? Math.max(...nums) + 1 : cheios.length + 1;
+      if (placeholder) {
+        const num = (placeholder.textContent.trim().match(/^(\d+)/) || [])[1] || nextNum;
+        placeholder.textContent = num + ". " + clean;
+      } else {
+        const p = document.createElement("p");
+        p.setAttribute("style", PSTYLE);
+        p.textContent = nextNum + ". " + clean;
+        const ultimo = cheios[cheios.length - 1] || ps[hi];
+        ultimo.after(p);
+      }
+    }
+    updateCount(); renderAlerts(); scheduleCaseSave();
+    pushVersion("Conclusão inserida");
+    setStatus("Conclusão inserida: " + clean, "ok");
+  }
+
+  /* ---------- renderização da árvore ---------- */
+  function visibleNodes() {
+    return [...arvoreEl.querySelectorAll("[data-node-id]")];
+  }
+
+  function setSelected(id) {
+    selectedId = id;
+    for (const el of visibleNodes()) {
+      const on = el.dataset.nodeId === id;
+      el.setAttribute("aria-selected", String(on));
+      el.classList.toggle("sug-ativo", on);
+      if (on) el.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function renderTree(res, resetExp) {
+    lastResult = res;
+    const det = res.orgaoDetectado;
+    ctxBar.textContent = det.orgao
+      ? (det.fonte === "exame" ? "Exame: " : "Órgão: ") + det.label
+      : "Selecione ou dite um órgão na folha";
+
+    if (resetExp) {
+      expandedOrg.clear();
+      if (det.orgao) expandedOrg.add(det.orgao);
+      else if (res.orgaos[0]) expandedOrg.add(res.orgaos[0].id);
+    }
+
+    const qOn = !!filtroEl.value.trim();
+    arvoreEl.replaceChildren();
+    if (!res.orgaos.length) {
+      arvoreEl.append(h("p", { class: "sug-vazio" }, qOn ? "Nenhuma sugestão para esse filtro." : "Nenhuma sugestão disponível para esta máscara."));
+      selectedId = null;
+      return;
+    }
+
+    for (const org of res.orgaos) {
+      const orgOpen = qOn || expandedOrg.has(org.id);
+      const totalOrg = org.normal.length + org.alteracoes.length;
+      const orgBtn = h("button", {
+        type: "button", class: "sug-node sug-org", role: "treeitem", "aria-expanded": String(orgOpen),
+        "aria-selected": "false", "data-node-id": "org:" + org.id, "data-kind": "org", "data-org": org.id
+      }, h("span", { class: "sug-chev" }, orgOpen ? "▾" : "▸"), h("span", { class: "sug-lbl" }, org.label),
+        org.detectado ? h("em", { class: "sug-tag" }, "cursor") : "",
+        h("em", { class: "sug-cnt" }, String(totalOrg)));
+      orgBtn.addEventListener("mousedown", e => e.preventDefault());
+      orgBtn.addEventListener("click", () => {
+        if (expandedOrg.has(org.id)) expandedOrg.delete(org.id); else expandedOrg.add(org.id);
+        setSelected("org:" + org.id);
+        renderTree(lastResult, false);
+      });
+      arvoreEl.append(orgBtn);
+      if (!orgOpen) continue;
+
+      const grupos = [
+        ["normal", "Normal", org.normal],
+        ["alteracoes", "Alterações comuns", org.alteracoes],
+      ];
+      for (const [gk, gLabel, itens] of grupos) {
+        if (!itens.length) continue;
+        const gKey = org.id + ":" + gk;
+        const gOpen = qOn || !collapsedGrp.has(gKey);
+        const grpBtn = h("button", {
+          type: "button", class: "sug-node sug-grp", role: "treeitem", "aria-expanded": String(gOpen),
+          "aria-selected": "false", "data-node-id": "grp:" + gKey, "data-kind": "grp", "data-grp": gKey
+        }, h("span", { class: "sug-chev" }, gOpen ? "▾" : "▸"), h("span", { class: "sug-lbl" }, gLabel), h("em", { class: "sug-cnt" }, String(itens.length)));
+        grpBtn.addEventListener("mousedown", e => e.preventDefault());
+        grpBtn.addEventListener("click", () => {
+          if (collapsedGrp.has(gKey)) collapsedGrp.delete(gKey); else collapsedGrp.add(gKey);
+          setSelected("grp:" + gKey);
+          renderTree(lastResult, false);
+        });
+        arvoreEl.append(grpBtn);
+        if (!gOpen) continue;
+
+        for (const item of itens) {
+          const dOpen = expandedDesc.has(item.id);
+          const temC = item.conclusoes && item.conclusoes.length > 0;
+          const descId = "desc:" + item.id;
+          const descBtn = h("button", {
+            type: "button", class: "sug-node sug-desc" + (dOpen ? " sug-escolhida" : ""), role: "treeitem",
+            ...(temC ? { "aria-expanded": String(dOpen) } : {}),
+            "aria-selected": "false", "data-node-id": descId, "data-kind": "desc", title: item.texto
+          },
+            h("span", { class: "sug-chev sug-desc-tog", title: temC ? "Mostrar/ocultar conclusões pareadas" : "" }, temC ? (dOpen ? "▾" : "▸") : "•"),
+            h("span", { class: "sug-txt" }, item.texto),
+            h("em", { class: "sug-freq", title: "Frequência nas fontes" }, "×" + item.freq)
+          );
+          descBtn.addEventListener("mousedown", e => e.preventDefault());
+          descBtn.addEventListener("click", ev => {
+            if (ev.target.closest(".sug-desc-tog") && temC) {
+              if (expandedDesc.has(item.id)) expandedDesc.delete(item.id); else expandedDesc.add(item.id);
+              setSelected(descId);
+              renderTree(lastResult, false);
+              return;
+            }
+            inserirDescricao(item.texto);
+            if (temC) expandedDesc.add(item.id);
+            setSelected(descId);
+            renderTree(lastResult, false);
+          });
+          arvoreEl.append(descBtn);
+
+          if (dOpen && temC) {
+            for (let ci = 0; ci < item.conclusoes.length; ci++) {
+              const c = item.conclusoes[ci];
+              const cId = "conc:" + item.id + ":" + ci;
+              const cBtn = h("button", {
+                type: "button", class: "sug-node sug-conc", role: "treeitem",
+                "aria-selected": "false", "data-node-id": cId, "data-kind": "conc", title: c.texto
+              },
+                h("span", { class: "sug-badge" }, "Conclusão"),
+                h("span", { class: "sug-txt" }, c.texto),
+                h("em", { class: "sug-freq", title: "Frequência nas fontes" }, "×" + c.freq)
+              );
+              cBtn.addEventListener("mousedown", e => e.preventDefault());
+              cBtn.addEventListener("click", () => {
+                inserirConclusao(c.texto);
+                setSelected(cId);
+              });
+              arvoreEl.append(cBtn);
+            }
+          }
+        }
+      }
+    }
+
+    const nodes = visibleNodes();
+    if (selectedId && nodes.some(n => n.dataset.nodeId === selectedId)) setSelected(selectedId);
+    else {
+      const firstDesc = nodes.find(n => n.dataset.kind === "desc") || nodes[0];
+      if (firstDesc) setSelected(firstDesc.dataset.nodeId);
+    }
+  }
+
+  let lastParaKey = "";
+  function atualizar(forcar) {
+    if (!isOpen()) return;
+    const blk = readCursorBlock();
+    const para = blk ? blockText(blk).trim() : "";
+    const prev = blk && blk.previousElementSibling ? blockText(blk.previousElementSibling).trim() : "";
+    const paraKey = (current?.id || "") + "|" + para + "|" + prev;
+    const mudouOrgao = forcar || paraKey !== lastParaKey;
+    lastParaKey = paraKey;
+    const res = S.consultarArvore(getIndex(), { paragrafo: para, anterior: prev, exame: current, filtro: filtroEl.value });
+    const resetExp = mudouOrgao && (!lastResult || lastResult.orgaoDetectado.orgao !== res.orgaoDetectado.orgao);
+    renderTree(res, resetExp || !!forcar);
+  }
+
+  function agendar() {
+    readCursorBlock();
+    if (!isOpen()) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => atualizar(false), DEBOUNCE_MS);
+  }
+
+  /* ---------- abrir / fechar F8 e navegação por teclado ---------- */
+  function abrir() {
+    readCursorBlock();
+    ui.panel(NOME);
+    atualizar(true);
+    setTimeout(() => filtroEl.focus({ preventScroll: true }), 0);
+  }
+  function fechar() {
+    if (!ui.app.classList.contains("right-mini")) ui.toggleRight();
+    focusSheet();
+  }
+  ui.toggleSugestoes = () => {
+    if (isOpen()) fechar(); else abrir();
+  };
+
+  const prevOnPanel = ui.onPanel;
+  ui.onPanel = name => {
+    prevOnPanel?.(name);
+    if (name === NOME) atualizar(true);
+  };
+
+  filtroEl.addEventListener("input", () => {
+    selectedId = null;
+    atualizar(false);
+  });
+
+  panel.addEventListener("keydown", e => {
+    const nodes = visibleNodes();
+    if (e.key === "Escape") {
+      e.preventDefault(); e.stopPropagation();
+      fechar();
+      return;
+    }
+    if (!nodes.length) return;
+    let i = nodes.findIndex(n => n.dataset.nodeId === selectedId);
+    if (i < 0) i = 0;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault(); e.stopPropagation();
+      setSelected(nodes[(i + 1) % nodes.length].dataset.nodeId);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault(); e.stopPropagation();
+      setSelected(nodes[(i - 1 + nodes.length) % nodes.length].dataset.nodeId);
+    } else if (e.key === "ArrowRight") {
+      const cur = nodes[i];
+      if (!cur) return;
+      if (cur.dataset.kind === "org" && cur.getAttribute("aria-expanded") === "false") {
+        e.preventDefault(); e.stopPropagation();
+        expandedOrg.add(cur.dataset.org); renderTree(lastResult, false);
+      } else if (cur.dataset.kind === "grp" && cur.getAttribute("aria-expanded") === "false") {
+        e.preventDefault(); e.stopPropagation();
+        collapsedGrp.delete(cur.dataset.grp); renderTree(lastResult, false);
+      } else if (cur.dataset.kind === "desc" && cur.getAttribute("aria-expanded") === "false") {
+        e.preventDefault(); e.stopPropagation();
+        expandedDesc.add(cur.dataset.nodeId.slice(5)); renderTree(lastResult, false);
+      }
+    } else if (e.key === "ArrowLeft") {
+      const cur = nodes[i];
+      if (!cur) return;
+      if (cur.dataset.kind === "desc" && cur.getAttribute("aria-expanded") === "true") {
+        e.preventDefault(); e.stopPropagation();
+        expandedDesc.delete(cur.dataset.nodeId.slice(5)); renderTree(lastResult, false);
+      } else if (cur.dataset.kind === "grp" && cur.getAttribute("aria-expanded") === "true") {
+        e.preventDefault(); e.stopPropagation();
+        collapsedGrp.add(cur.dataset.grp); renderTree(lastResult, false);
+      } else if (cur.dataset.kind === "org" && cur.getAttribute("aria-expanded") === "true") {
+        e.preventDefault(); e.stopPropagation();
+        expandedOrg.delete(cur.dataset.org); renderTree(lastResult, false);
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault(); e.stopPropagation();
+      nodes[i]?.click();
+    }
+  });
+
+  document.addEventListener("selectionchange", agendar);
+  sheet.addEventListener("input", agendar);
+  sheet.addEventListener("keyup", agendar);
+  sheet.addEventListener("mouseup", agendar);
+
+  ui.sugestoes = { abrir, fechar, atualizar: () => atualizar(true), estado: () => lastResult };
 })();
