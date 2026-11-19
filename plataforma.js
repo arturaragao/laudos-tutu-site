@@ -186,20 +186,88 @@
     try{ return JSON.parse(text.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "")); }
     catch(e){ throw new Error("A ponte local devolveu JSON inválido. Tente novamente."); }
   };
-  async function directStream({ exame, mascara, texto } = {}, onDelta, options = {}){
+  const PONTE_TOKEN_KEY = "tutu_ponte_token";
+  const PONTE_URL_KEY = "tutu_ponte_url";
+  const PONTE_ORIGEM_AUTORIZADA = "https://desktop-7q8eafr.tail37a2ed.ts.net";
+  function validarPonteUrl(raw){
+    try{
+      const u = new URL(String(raw || "").trim());
+      if (u.username || u.password || u.port) return "";
+      if (u.pathname !== "/" || u.search || u.hash) return "";
+      return u.origin === PONTE_ORIGEM_AUTORIZADA ? PONTE_ORIGEM_AUTORIZADA : "";
+    }catch(_){ return ""; }
+  }
+  function lerPonte(){
+    try{
+      const token = (localStorage.getItem(PONTE_TOKEN_KEY) || "").trim();
+      const url = validarPonteUrl(localStorage.getItem(PONTE_URL_KEY) || "");
+      return token && url ? { token, url } : null;
+    }catch(_){ return null; }
+  }
+  function salvarPonte(token, url){
+    const urlOk = validarPonteUrl(url);
+    const tokOk = String(token || "").trim();
+    if (!tokOk || !urlOk) return false;
+    try{
+      localStorage.setItem(PONTE_TOKEN_KEY, tokOk);
+      localStorage.setItem(PONTE_URL_KEY, urlOk);
+    }catch(_){ return false; }
+    document.dispatchEvent(new CustomEvent("tutu-ponte-mudou"));
+    return true;
+  }
+  function desparearPonte(){
+    try{
+      localStorage.removeItem(PONTE_TOKEN_KEY);
+      localStorage.removeItem(PONTE_URL_KEY);
+    }catch(_){}
+    document.dispatchEvent(new CustomEvent("tutu-ponte-mudou"));
+  }
+  let pontePareadaMsg = "";
+  (function checarHashPareamento(){
+    try{
+      const h = location.hash || "";
+      if (!h || h.length < 2) return;
+      const params = new URLSearchParams(h.slice(1));
+      if (!params.has("ponte") || !params.has("ponteUrl")) return;
+      const tok = String(params.get("ponte") || "").trim();
+      const urlOk = validarPonteUrl(params.get("ponteUrl"));
+      if (!tok || !urlOk) return;
+      if (typeof confirm === "function" && !confirm("Parear este aparelho com a ponte do PC?")) {
+        try{ history.replaceState(null, "", location.pathname + location.search); }catch(_){}
+        return;
+      }
+      if (!salvarPonte(tok, urlOk)) return;
+      try{ history.replaceState(null, "", location.pathname + location.search); }catch(_){}
+      pontePareadaMsg = "Ponte do PC pareada ✓";
+      const st = document.getElementById("status");
+      if (st) st.textContent = pontePareadaMsg;
+    }catch(_){}
+  })();
+  if (pontePareadaMsg){
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (window.tutuV2?.initialized || Date.now() - t0 > 10000){
+        clearInterval(iv);
+        if (typeof setStatus === "function") setStatus(pontePareadaMsg, "ok");
+        else { const st = document.getElementById("status"); if (st) st.textContent = pontePareadaMsg; }
+      }
+    }, 50);
+  }
+  const ehCelular = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "") ||
+    (typeof window !== "undefined" && window.innerWidth > 0 && window.innerWidth <= 768);
+  async function tentarDirectEndpoint(url, headers, connectMs, bodyStr, onDelta, options = {}){
     const controller = new AbortController();
     let timedOut = false;
     const abort = () => controller.abort();
     options.signal?.addEventListener("abort", abort, { once: true });
     if (options.signal?.aborted) abort();
-    const connectMs = Number(options.connectTimeoutMs) > 0 ? Number(options.connectTimeoutMs) : 1500;
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, connectMs);
     let response;
     try{
-      response = await fetch("http://127.0.0.1:47831/direct", {
+      response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exame: exame || "", mascara: mascara || "", texto: texto || "" }),
+        headers,
+        body: bodyStr,
         signal: controller.signal
       });
     }catch(_){
@@ -210,8 +278,9 @@
         err.name = "AbortError"; err.code = "cancelled";
         throw err;
       }
-      const err = new Error("Ponte local indisponível para Direct.");
+      const err = new Error("Ponte indisponível para Direct.");
       err.code = "ponte_indisponivel";
+      err.fase = "conexao";
       throw err;
     }
     clearTimeout(timer);
@@ -219,8 +288,10 @@
     if (response.status !== 200 || !ct.includes("text/event-stream") || !response.body){
       try{ await response.body?.cancel(); }catch(_){}
       options.signal?.removeEventListener("abort", abort);
-      const err = new Error("Ponte local indisponível para Direct.");
-      err.code = "ponte_indisponivel";
+      const err = new Error(response.status === 401 ? "Token da ponte recusado — parear de novo." : "Ponte indisponível para Direct.");
+      err.code = response.status === 401 ? "ponte_nao_autorizada" : "ponte_indisponivel";
+      err.status = response.status;
+      err.fase = "conexao";
       throw err;
     }
     const reader = response.body.getReader();
@@ -282,9 +353,47 @@
         err.name = "AbortError"; err.code = "cancelled";
         throw err;
       }
+      if (e && !e.fase) e.fase = "stream";
       throw e;
     }finally{
       options.signal?.removeEventListener("abort", abort);
+    }
+  }
+  async function directStream({ exame, mascara, texto } = {}, onDelta, options = {}){
+    const bodyStr = JSON.stringify({ exame: exame || "", mascara: mascara || "", texto: texto || "" });
+    const localMs = Number(options.connectTimeoutMs) > 0 ? Number(options.connectTimeoutMs) : 1500;
+    const remoteMs = Number(options.remoteConnectTimeoutMs) > 0 ? Number(options.remoteConnectTimeoutMs) : 2500;
+    if (!ehCelular()){
+      try{
+        return await tentarDirectEndpoint("http://127.0.0.1:47831/direct", { "Content-Type": "application/json" }, localMs, bodyStr, onDelta, options);
+      }catch(e){
+        if (e?.code === "cancelled" || e?.fase === "stream") throw e;
+      }
+    }
+    const ponte = lerPonte();
+    if (!ponte){
+      const err = new Error("Ponte local indisponível para Direct.");
+      err.code = "ponte_indisponivel";
+      throw err;
+    }
+    try{
+      return await tentarDirectEndpoint(
+        ponte.url + "/direct",
+        { "Content-Type": "application/json", "X-Tutu-Token": ponte.token },
+        remoteMs,
+        bodyStr,
+        onDelta,
+        options
+      );
+    }catch(e){
+      if (e?.status === 401){
+        desparearPonte();
+        const err = new Error("Token da ponte recusado — parear de novo.");
+        err.code = "ponte_nao_autorizada";
+        err.status = 401;
+        throw err;
+      }
+      throw e;
     }
   }
   const downloads = { async save({ filename, data, mimeType = "application/json" }){
@@ -565,7 +674,8 @@
     document.dispatchEvent(new CustomEvent("laudos-chave-salvar", { detail: JSON.stringify({ token: t }) }));
   }
   window.tutuSite = { ready, db, importBackup, exportBackup, mergeBank, saveBankNT, sync, gh, setToken, pedirChave,
-    onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream };
+    onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream,
+    ponteStatus: () => { const p = lerPonte(); return { pareada: !!p, url: p?.url || "" }; }, desparearPonte };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
   // Fonte: repo de dados (cache local) > bancos/*.js (reserva, só no PC) + o que foi importado/guardado no IndexedDB.
   const loadScript = src => new Promise(resolve => {

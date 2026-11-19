@@ -6413,8 +6413,29 @@ window.tutuSite.appReady = true;
     const link = el("a", { href: "https://github.com/settings/personal-access-tokens/new", target: "_blank", rel: "noopener noreferrer", id: "syncLink" }, "criar a chave no GitHub");
     const ajuda = el("p", { class: "meta" }, "Seus dados (correções, autotextos, regras, casos, bancos) ficam no repositório privado laudos-tutu-dados e acompanham você em todos os PCs. Para ligar: ");
     ajuda.append(link, document.createTextNode(" (fine-grained token, só o repositório laudos-tutu-dados, permissões Contents e Actions em Read and write) e cole abaixo. Em outro PC com o mesmo perfil do Chrome a chave chega sozinha pela extensão. Nunca vai para o git."));
+    const ponteEl = el("p", { id: "ponteStatus", class: "meta" });
+    const desparear = ui.button("Desparear", () => {
+      T.desparearPonte?.();
+      atualizarPonte();
+      say("Ponte do PC despareada.");
+    }, { id: "ponteDesparear" });
+    const ponteLink = el("a", {
+      id: "ponteParearLink",
+      href: "https://desktop-7q8eafr.tail37a2ed.ts.net/direct/parear",
+      target: "_blank",
+      rel: "noopener noreferrer"
+    }, "https://desktop-7q8eafr.tail37a2ed.ts.net/direct/parear");
+    const ponteAjuda = el("p", { class: "meta" }, "Parear no celular: ");
+    ponteAjuda.append(ponteLink);
+    const atualizarPonte = () => {
+      const st = T.ponteStatus?.() || { pareada: false };
+      ponteEl.textContent = "Ponte do PC no celular: " + (st.pareada ? "pareada" : "não pareada");
+      desparear.disabled = !st.pareada;
+    };
+    atualizarPonte();
+    document.addEventListener("tutu-ponte-mudou", atualizarPonte);
     const sec = el("section", { id: "syncSec" });
-    sec.append(el("h2", {}, "Sincronização entre PCs"), selo, ajuda, campo, salvar, agora, notion, msg, infoEl);
+    sec.append(el("h2", {}, "Sincronização entre PCs"), selo, ajuda, campo, salvar, agora, notion, msg, infoEl, ponteEl, desparear, ponteAjuda);
     host.append(sec);
   }
   ui.actions.notion = { label: "Atualizar do Notion agora", run: notionAgora };
@@ -8374,6 +8395,7 @@ window.tutuSite.appReady = true;
       const fresh = filtrar(texto.value, ex); if (!fresh) throw Error("Dite ou digite os achados.");
       const nPalavras = (fresh.trim().match(/\S+/g) || []).length;
       const usarDirect = modoIA === "direct" || (modoIA === "auto" && nPalavras <= 80);
+      let avisoPonte = "";
       if (usarDirect && typeof T.directStream === "function" && ui.initialized && !genBusy && !corrBusy) {
         dizer("Gerando laudo na ponte…");
         let casoCriado = false, abaCriadaId = null, ultimoTexto = "", renderTimer = 0;
@@ -8414,14 +8436,20 @@ window.tutuSite.appReady = true;
           setStatus("Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
           texto.value = ""; enviado = true; atualizarUI(); dizer("Laudo pronto ✓");
           return;
-        } catch (_) {
+        } catch (err) {
           if (renderTimer) { clearTimeout(renderTimer); renderTimer = 0; }
           if (casoCriado) {
             if (abaCriadaId) ui.closeTab?.(abaCriadaId);
             else ui.closeCurrent?.();
             if (!dialog.open) dialog.showModal();
           }
-          dizer("Ponte indisponível — enviando para a fila…");
+          if (err?.code === "ponte_nao_autorizada") {
+            avisoPonte = "Token da ponte inválido — parear de novo.";
+            setStatus?.("Ponte não autorizada — parear de novo.", "err");
+            dizer("Ponte não autorizada (parear de novo) — enviando para a fila…");
+          } else {
+            dizer("Ponte indisponível — enviando para a fila…");
+          }
         }
       }
       if (!G.token) throw Error("Salve a chave em Configurações › Sincronização.");
@@ -8429,7 +8457,11 @@ window.tutuSite.appReady = true;
       if (!r.ok || !(await r.json()).private) throw Error("A fila exige o repositório privado de dados.");
       await G.putJson("fila-usg/" + crypto.randomUUID() + ".json", { exame: ex.id, nome: ex.name, mascara: maskOf(ex), modo: "audio", texto: fresh, ia: "pendente", criado: new Date().toISOString() }, null, "USG: texto anônimo");
       agendarDisparoFilaIA();
-      texto.value = ""; enviado = true; atualizarUI(); dizer("Enviado ✓ — a IA organiza em ~1 min; o laudo aparece em Laudos Áudio aqui e nos PCs."); await atualizar();
+      texto.value = ""; enviado = true; atualizarUI();
+      dizer(avisoPonte
+        ? `Enviado ✓ — a IA organiza em ~1 min; ${avisoPonte}`
+        : "Enviado ✓ — a IA organiza em ~1 min; o laudo aparece em Laudos Áudio aqui e nos PCs.");
+      await atualizar();
     } catch (e) { dizer(/fetch/i.test(e.message) ? "Rede indisponível. O texto permanece nesta tela para tentar novamente." : e.message); }
     finally { busy = false; enviar.disabled = false; atualizarUI(); }
   }
