@@ -8236,6 +8236,27 @@ window.tutuSite.appReady = true;
   const enviar = button("Enviar para a IA", () => enviarPedido(), { id: "usgEnviar" });
   const estado = el("p", { id: "usgEstado", "aria-live": "polite" }), contador = el("span", { id: "usgContador" });
   const legenda = el("p", { id: "usgLegenda" }), fechar = button("×", () => { stop(); dialog.close(); }, { id: "usgFechar", "aria-label": "Fechar", title: "Fechar" });
+  const MODO_IA_KEY = "usgModoIA";
+  const lerModoIA = () => {
+    try { const v = localStorage.getItem(MODO_IA_KEY); return v === "direct" || v === "completo" || v === "auto" ? v : "auto"; }
+    catch (_) { return "auto"; }
+  };
+  let modoIA = lerModoIA();
+  const modoBtns = [
+    ["auto", "Auto", "Até 80 palavras vai direto pela ponte; acima disso vai para a fila"],
+    ["direct", "Direct", "Sempre tenta gerar na hora pela ponte local"],
+    ["completo", "Completo", "Sempre envia para a fila completa no GitHub"]
+  ].map(([k, rotulo, title]) => button(rotulo, () => {
+    modoIA = k;
+    try { localStorage.setItem(MODO_IA_KEY, k); } catch (_) {}
+    atualizarModoUI();
+  }, { type: "button", role: "radio", "data-modo": k, title, "aria-checked": "false" }));
+  const modoWrap = el("div", { id: "usgModoIA", class: "usg-modo-ia", role: "radiogroup", "aria-label": "Modo da IA" });
+  modoWrap.append(...modoBtns);
+  function atualizarModoUI() {
+    for (const b of modoBtns) b.setAttribute("aria-checked", b.dataset.modo === modoIA ? "true" : "false");
+  }
+  atualizarModoUI();
   let enviado = false;
   /* Estado visual único: ouvindo / pausado (com texto) / vazio / enviado. Só estilo e rótulos; a lógica de áudio não passa por aqui. */
   function atualizarUI() {
@@ -8351,6 +8372,58 @@ window.tutuSite.appReady = true;
       if (!ex) throw Error("Não reconheci o exame. Diga no começo do áudio (ex.: \"doppler arterial de membro inferior\", \"parecer de TC de abdome total\") ou escolha no menu.");
       if (!exame.value) dizer("Exame reconhecido no áudio: " + ex.name);
       const fresh = filtrar(texto.value, ex); if (!fresh) throw Error("Dite ou digite os achados.");
+      const nPalavras = (fresh.trim().match(/\S+/g) || []).length;
+      const usarDirect = modoIA === "direct" || (modoIA === "auto" && nPalavras <= 80);
+      if (usarDirect && typeof T.directStream === "function" && ui.initialized && !genBusy && !corrBusy) {
+        dizer("Gerando laudo na ponte…");
+        let casoCriado = false, abaCriadaId = null, ultimoTexto = "", renderTimer = 0;
+        const aplicarFolha = txt => {
+          if (!casoCriado) {
+            ui.newTab(ex.id);
+            abaCriadaId = ui.activeId?.() || null;
+            casoCriado = true;
+            if (dialog.open) dialog.close();
+          }
+          sheet.innerHTML = modelSheetHtml({ ...ex, mask: txt });
+          updateCount();
+        };
+        try {
+          const res = await T.directStream(
+            { exame: ex.id, mascara: maskOf(ex), texto: fresh },
+            (_delta, acum) => {
+              ultimoTexto = acum;
+              if (!casoCriado) {
+                aplicarFolha(acum);
+                return;
+              }
+              if (!renderTimer) {
+                renderTimer = setTimeout(() => {
+                  renderTimer = 0;
+                  aplicarFolha(ultimoTexto);
+                }, 80);
+              }
+            }
+          );
+          if (renderTimer) { clearTimeout(renderTimer); renderTimer = 0; }
+          const laudoFinal = (res?.laudo || ultimoTexto || "").trim();
+          if (!laudoFinal) throw Error("Resposta vazia do Direct.");
+          aplicarFolha(laudoFinal);
+          renderAlerts();
+          ui.registrarIA?.(laudoTagged(), fresh, { direct: true });
+          await ui.flush();
+          setStatus("Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
+          texto.value = ""; enviado = true; atualizarUI(); dizer("Laudo pronto ✓");
+          return;
+        } catch (_) {
+          if (renderTimer) { clearTimeout(renderTimer); renderTimer = 0; }
+          if (casoCriado) {
+            if (abaCriadaId) ui.closeTab?.(abaCriadaId);
+            else ui.closeCurrent?.();
+            if (!dialog.open) dialog.showModal();
+          }
+          dizer("Ponte indisponível — enviando para a fila…");
+        }
+      }
       if (!G.token) throw Error("Salve a chave em Configurações › Sincronização.");
       const r = await fetch("https://api.github.com/repos/" + G.repo, { cache: "no-store", headers: { Authorization: "Bearer " + G.token } });
       if (!r.ok || !(await r.json()).private) throw Error("A fila exige o repositório privado de dados.");
@@ -8364,7 +8437,7 @@ window.tutuSite.appReady = true;
   micSlot.append(el("span", { class: "usg-onda", "aria-hidden": "true" }), el("span", { class: "usg-onda usg-onda2", "aria-hidden": "true" }), iniciar, parar);
   leitura.append(texto, parcial);
   cab.append(el("h2", { id: "usgTitulo" }, "Audio"), el("label", { for: "usgExame", class: "usg-sr" }, "Exame"), exame, fechar);
-  meta.append(estado, contador);
+  meta.append(estado, modoWrap, contador);
   dialog.append(cab, el("p", { id: "usgModo", class: "usg-sr" }, "Áudio"), meta, leitura, msg, enviar, micSlot, legenda);
   atualizarUI();
   document.body.append(dialog);
@@ -8494,10 +8567,10 @@ window.tutuSite.appReady = true;
      grava a mesma correção ia/correcoes/<exame>/<id>.json, uma vez por versão, e fecha o loop de voz (aprenderDeIA). Desfazer a IA esquece a proposta. */
   const propostasIA = new Map();
   const mesmoTexto = (a, b) => String(a).replace(/\s+/g, " ").trim() === String(b).replace(/\s+/g, " ").trim();
-  ui.registrarIA = (texto, antes) => {
+  ui.registrarIA = (texto, antes, opts) => {
     const caso = ui.activeId(), exame = typeof current !== "undefined" ? current?.id : "";
     if (!caso) return;
-    if (texto && String(texto).trim()) propostasIA.set(caso, { proposta: texto, antes: antes || "", exame, id: crypto.randomUUID(), enviada: false }); else propostasIA.delete(caso);
+    if (texto && String(texto).trim()) propostasIA.set(caso, { proposta: texto, antes: antes || "", exame, id: crypto.randomUUID(), enviada: false, direct: !!opts?.direct }); else propostasIA.delete(caso);
   };
   ui.propostaIA = () => propostasIA.get(ui.activeId())?.proposta || "";
   const gravarCorrecao = (exame, id, proposta, final) => !/^[a-z0-9-]{1,60}$/.test(exame || "") || mesmoTexto(proposta, final) ? Promise.resolve(false)
@@ -8515,7 +8588,8 @@ window.tutuSite.appReady = true;
       gravarCorrecao(reg.exame, reg.id, reg.proposta, finalTexto).then(g => { if (!g) reg.enviada = false; });
     }
     if (ok && reg && reg.antes) {
-      window.tutuVocab?.aprenderDeIA?.(reg.antes, finalTexto, reg.exame).catch(() => {});
+      if (reg.direct) aprenderVoz(reg.antes, finalTexto, reg.exame).catch(() => {});
+      else window.tutuVocab?.aprenderDeIA?.(reg.antes, finalTexto, reg.exame).catch(() => {});
     }
     if (ok) {
       try {

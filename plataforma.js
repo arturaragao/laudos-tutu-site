@@ -186,6 +186,107 @@
     try{ return JSON.parse(text.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "")); }
     catch(e){ throw new Error("A ponte local devolveu JSON inválido. Tente novamente."); }
   };
+  async function directStream({ exame, mascara, texto } = {}, onDelta, options = {}){
+    const controller = new AbortController();
+    let timedOut = false;
+    const abort = () => controller.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    const connectMs = Number(options.connectTimeoutMs) > 0 ? Number(options.connectTimeoutMs) : 1500;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, connectMs);
+    let response;
+    try{
+      response = await fetch("http://127.0.0.1:47831/direct", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exame: exame || "", mascara: mascara || "", texto: texto || "" }),
+        signal: controller.signal
+      });
+    }catch(_){
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+      if (options.signal?.aborted && !timedOut){
+        const err = new Error("Pedido cancelado.");
+        err.name = "AbortError"; err.code = "cancelled";
+        throw err;
+      }
+      const err = new Error("Ponte local indisponível para Direct.");
+      err.code = "ponte_indisponivel";
+      throw err;
+    }
+    clearTimeout(timer);
+    const ct = (response.headers.get("content-type") || "").toLowerCase();
+    if (response.status !== 200 || !ct.includes("text/event-stream") || !response.body){
+      try{ await response.body?.cancel(); }catch(_){}
+      options.signal?.removeEventListener("abort", abort);
+      const err = new Error("Ponte local indisponível para Direct.");
+      err.code = "ponte_indisponivel";
+      throw err;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "", acum = "", finalizado = null;
+    const processarBloco = bloco => {
+      const linhas = bloco.split("\n");
+      let ev = "message";
+      const dados = [];
+      for (const l of linhas){
+        if (!l || l.startsWith(":")) continue;
+        if (l.startsWith("event:")) ev = l.slice(6).trim() || "message";
+        else if (l.startsWith("data:")) dados.push(l.slice(5).replace(/^ /, ""));
+      }
+      if (!dados.length) return;
+      let payload;
+      try{ payload = JSON.parse(dados.join("\n")); }
+      catch(_){ throw new Error("Resposta SSE inválida da ponte."); }
+      if (ev === "erro"){
+        const err = new Error(payload?.motivo || "Erro no Direct.");
+        err.code = "direct_erro";
+        throw err;
+      }
+      if (ev === "done"){
+        finalizado = {
+          laudo: typeof payload?.laudo === "string" ? payload.laudo : acum,
+          motor: payload?.motor || "",
+          modelo: payload?.modelo || ""
+        };
+        return;
+      }
+      if (typeof payload?.delta === "string" && payload.delta){
+        acum += payload.delta;
+        onDelta?.(payload.delta, acum);
+      }
+    };
+    try{
+      while (true){
+        const { value, done } = await reader.read();
+        if (value) buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, "\n");
+        if (done) buffer += decoder.decode().replace(/\r\n?/g, "\n");
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1){
+          const bloco = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          processarBloco(bloco);
+          if (finalizado) return finalizado;
+        }
+        if (done){
+          if (buffer.trim()) processarBloco(buffer);
+          if (finalizado) return finalizado;
+          throw new Error("Stream Direct encerrado antes da conclusão.");
+        }
+      }
+    }catch(e){
+      try{ await reader.cancel(); }catch(_){}
+      if (options.signal?.aborted){
+        const err = new Error("Pedido cancelado.");
+        err.name = "AbortError"; err.code = "cancelled";
+        throw err;
+      }
+      throw e;
+    }finally{
+      options.signal?.removeEventListener("abort", abort);
+    }
+  }
   const downloads = { async save({ filename, data, mimeType = "application/json" }){
     const url = URL.createObjectURL(new Blob([data], { type: mimeType }));
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename;
@@ -464,7 +565,7 @@
     document.dispatchEvent(new CustomEvent("laudos-chave-salvar", { detail: JSON.stringify({ token: t }) }));
   }
   window.tutuSite = { ready, db, importBackup, exportBackup, mergeBank, saveBankNT, sync, gh, setToken, pedirChave,
-    onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData };
+    onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
   // Fonte: repo de dados (cache local) > bancos/*.js (reserva, só no PC) + o que foi importado/guardado no IndexedDB.
   const loadScript = src => new Promise(resolve => {

@@ -679,12 +679,15 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #usgDialog #usgExame{flex:1;min-width:0;min-height:44px;box-sizing:border-box;padding:0 10px;font:inherit;font-size:15px;color:var(--text);background:var(--panel,#f4ede0);border:1px solid var(--line,#ccc);border-radius:12px}
 #usgDialog #usgFechar{flex:0 0 44px;width:44px;padding:0;font-size:32px;line-height:1;border-radius:50%;background:transparent;color:var(--muted);border:1px solid transparent}
 #usgDialog #usgFechar:hover{background:var(--panel-2,#0001);color:var(--text)}
-.usg-meta{display:flex;align-items:baseline;justify-content:space-between;gap:10px;min-height:22px}
+.usg-meta{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 10px;min-height:22px}
 #usgEstado{font-weight:600;font-size:14px;color:var(--muted)}
 #usgDialog[data-estado="ouvindo"] #usgEstado{color:var(--crit)}
 #usgDialog[data-estado="ouvindo"] #usgEstado::before{content:"";display:inline-block;width:9px;height:9px;margin-right:7px;border-radius:50%;background:var(--crit);animation:usg-pisca 1.2s ease-in-out infinite}
 #usgDialog[data-estado="pausado"] #usgEstado,#usgDialog[data-estado="enviado"] #usgEstado{color:var(--changed,var(--ok))}
 #usgContador{font-size:12px;color:var(--muted)}
+.usg-modo-ia{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--line,#ccc);border-radius:999px;background:var(--panel,#f4ede0)}
+#usgDialog .usg-modo-ia button{min-height:24px;padding:2px 9px;border:0;border-radius:999px;background:transparent;color:var(--muted);font-size:11px;font-weight:600;cursor:pointer;line-height:1.2}
+#usgDialog .usg-modo-ia button[aria-checked="true"]{background:var(--accent);color:var(--accent-ink)}
 .usg-leitura{display:flex;flex-direction:column;min-height:0;flex:1 1 auto;background:var(--panel,#f4ede0);border:1px solid var(--line,#ccc);border-radius:14px;overflow:hidden}
 #usgDialog[data-estado="ouvindo"] .usg-leitura{border-color:var(--crit)}
 #usgTexto{box-sizing:border-box;display:block;flex:1 1 auto;width:100%;min-height:170px;margin:0;padding:14px 14px 6px;border:0;outline:0;background:transparent;color:var(--text);font:inherit;font-size:18px;line-height:1.6;resize:none;overflow:auto}
