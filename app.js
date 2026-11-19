@@ -8099,7 +8099,10 @@ window.tutuSite.appReady = true;
   "use strict";
   if (typeof document === "undefined") return;
   const ui = window.tutuV2, T = window.tutuSite, G = T.gh, U = window.TutuUSG, el = ui.el, button = ui.button;
-  let speech = null, ouvindo = false, busy = false, listBusy = false;
+  let speech = null, ouvindo = false, busy = false, listBusy = false, dicaFilaMostrada = false;
+  const FILA_IA_DISPATCH_URL = "https://api.github.com/repos/arturaragao/fila-ia/actions/workflows/fila.yml/dispatches";
+  const FILA_IA_ATRASO_MS = 130000;
+  const FILA_IA_DICA = "Pedido salvo. Para a IA começar na hora com o PC desligado, dê à chave acesso 'Actions: leitura e escrita' no repo fila-ia (Configurações › Sincronização).";
   const ANDROID = /Android/i.test(navigator.userAgent);
   /* Tela acesa enquanto grava (Wake Lock); o navegador solta ao trocar de app, então pede de novo ao voltar. */
   let tela = null;
@@ -8198,6 +8201,32 @@ window.tutuSite.appReady = true;
     s.start(); ouvindo = true; manterTela(); iniciar.disabled = true; parar.disabled = false; exame.disabled = true; atualizarUI();
     dizer("Ouvindo em pt-BR. Dite só achados: o reconhecimento pode usar o serviço de voz do navegador.");
   }
+  async function dispararFilaIA() {
+    try {
+      if (!G.token) return;
+      const r = await fetch(FILA_IA_DISPATCH_URL, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + G.token,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ ref: "main" })
+      });
+      if (!r.ok && !dicaFilaMostrada) {
+        dicaFilaMostrada = true;
+        dizer(FILA_IA_DICA);
+      }
+    } catch (_) {
+      if (!dicaFilaMostrada) {
+        dicaFilaMostrada = true;
+        dizer(FILA_IA_DICA);
+      }
+    }
+  }
+  function agendarDisparoFilaIA() {
+    setTimeout(() => { dispararFilaIA(); }, FILA_IA_ATRASO_MS);
+  }
   async function enviarPedido() {
     if (busy) return;
     if (ouvindo) { dizer("Pare o ditado antes de enviar."); return; }
@@ -8212,6 +8241,7 @@ window.tutuSite.appReady = true;
       const r = await fetch("https://api.github.com/repos/" + G.repo, { cache: "no-store", headers: { Authorization: "Bearer " + G.token } });
       if (!r.ok || !(await r.json()).private) throw Error("A fila exige o repositório privado de dados.");
       await G.putJson("fila-usg/" + crypto.randomUUID() + ".json", { exame: ex.id, nome: ex.name, mascara: maskOf(ex), modo: "audio", texto: fresh, ia: "pendente", criado: new Date().toISOString() }, null, "USG: texto anônimo");
+      agendarDisparoFilaIA();
       texto.value = ""; enviado = true; atualizarUI(); dizer("Enviado ✓ — a IA organiza em ~1 min; o laudo aparece em Laudos Áudio aqui e nos PCs."); await atualizar();
     } catch (e) { dizer(/fetch/i.test(e.message) ? "Rede indisponível. O texto permanece nesta tela para tentar novamente." : e.message); }
     finally { busy = false; enviar.disabled = false; atualizarUI(); }
