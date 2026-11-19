@@ -2458,8 +2458,111 @@ function wrapSample(s0){
 
 
 /* ================= Conferir local (sem Claude, sem tokens): roda primeiro; o Claude só se o médico pedir ================= */
+function foldIndexed(text){
+  let folded = ""; const idxMap = [];
+  for (let i = 0; i < text.length; i++){
+    const c = text[i].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    for (let j = 0; j < c.length; j++){ folded += c[j]; idxMap.push(i); }
+  }
+  return { folded, slice: (a, b) => text.slice(idxMap[a], idxMap[b - 1] + 1) };
+}
+function detectModality(text){
+  const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+  const matchMod = s => {
+    if (/\b(us|usg|ultrassonografia|ultrassom|ultra-sonografia|ecografia)\b/.test(s)) return "USG";
+    if (/\b(rm|ressonancia|angio-?rm|colangio-?rm)\b/.test(s)) return "RM";
+    if (/\b(tc|tomografia|angio-?tc|angiotomografia)\b/.test(s)) return "TC";
+    if (/\b(rx|radiografia|raio-?x|raios-?x)\b/.test(s)) return "RX";
+    if (/\b(mamografia|mmg)\b/.test(s)) return "MAMO";
+    return null;
+  };
+  const firstMod = matchMod(fold(lines[0] || ""));
+  if (firstMod) return firstMod;
+  const curMod = typeof current !== "undefined" && current ? matchMod(fold((current.name || "") + " " + String(current.mask || "").split("\n")[0])) : null;
+  if (curMod) return curMod;
+  const iA = lines.findIndex(l => /^(achados|analise|impressao|conclusao|indicacao|clinica|informacoes clinicas|comparacao|laudo anterior|tecnica)\b/.test(fold(l)));
+  const head = fold((iA > 0 ? lines.slice(0, iA) : lines.slice(0, 2)).join(" "));
+  return matchMod(head);
+}
+function extractBodyForTerms(text){
+  const reBody = /^(?:achados(?:\s+adicionais)?|analise|impressao(?:\s+diagnostica)?|conclusao|opiniao)(?:\s*:)?$/i;
+  const reBodyInline = /^(?:achados(?:\s+adicionais)?|analise|impressao(?:\s+diagnostica)?|conclusao|opiniao)\s*:\s*(.+)$/i;
+  const reIgnore = /^(?:indicacao(?:\s+clinica)?|clinica|informacoes\s+clinicas|historia\s+clinica|dados\s+clinicos|comparacao|exame\s+anterior|laudo\s+anterior|estudo\s+anterior|tecnica(?:\s+de\s+exame)?)(?:\s*:|$)/i;
+  const lines = text.split("\n");
+  const hasBody = lines.some(l => { const f = fold(l.trim()); return reBody.test(f) || reBodyInline.test(f); });
+  const out = [];
+  let inBody = !hasBody, inIgnore = false;
+  for (const l of lines){
+    const f = fold(l.trim());
+    if (reBody.test(f)){ inBody = true; inIgnore = false; continue; }
+    if (reBodyInline.test(f)){ inBody = true; inIgnore = false; out.push(l.replace(/^[^:]+:\s*/, "")); continue; }
+    if (reIgnore.test(f)){ if (hasBody) inBody = false; else inIgnore = true; continue; }
+    if (!hasBody && !f){ inIgnore = false; continue; }
+    if (inBody && !inIgnore) out.push(l);
+  }
+  return out.join("\n");
+}
+function isSemContraste(text){
+  const lines = text.split("\n");
+  const iA = lines.findIndex(l => fold(l.trim()) === "achados");
+  const head = fold(iA >= 0 ? lines.slice(0, iA).join("\n") : (lines[0] || ""));
+  if (/\bsem\s+(?:a\s+)?(?:injecao\s+(?:endovenosa|venosa)\s+de\s+|uso\s+de\s+|administracao\s+de\s+|meio\s+de\s+)?contraste\b/.test(head)) return true;
+  if (/\bcom\s+(?:a\s+)?(?:injecao\s+(?:endovenosa|venosa)\s+de\s+|uso\s+de\s+|meio\s+de\s+)?contraste\b/.test(head)) return false;
+  return typeof current !== "undefined" && current && fold(current.proto || "").includes("sem contraste");
+}
+function isNegatedBefore(folded, pos){
+  const win = folded.slice(Math.max(0, pos - 80), pos);
+  const clause = win.split(/[.,;\n(:]/).pop() || "";
+  return /\b(?:sem|ausencia\s+de|ausente|nao\s+ha|nao\s+se\s+(?:observ(?:a|am|ou)|evidenci(?:a|am|ou)|identific(?:a|am|ou))|nao\s+apresenta|nao\s+exibe|nao\s+mostra|nao\s+possui|negativ[oa]\s+para|afastando)\b/.test(clause);
+}
+function isVertebralLevel(folded, pos, len){
+  const before = (folded.slice(Math.max(0, pos - 45), pos).split(/[.!?\n]/).pop() || "");
+  const after = (folded.slice(pos + len, pos + len + 25).split(/[.!?\n]/)[0] || "");
+  if (/\b(?:vertebras?|corpos?\s+vertebra(?:l|is)|nive(?:l|is)|segmentos?|discos?|fraturas?|colapsos?|coluna)\b/.test(before)) return true;
+  if (/(?:^|[\s,(])(?:c[1-7]|t(?:[1-9]|1[0-2])|l[1-5])\s*(?:[-–\/]|(?:e|a)\b)\s*$/.test(before)) return true;
+  if (/^\s*(?:[-–\/]|(?:e|a)\b)\s*(?:c[1-7]|t(?:[1-9]|1[0-2])|l[1-5])\b/.test(after)) return true;
+  return false;
+}
+function checkTermosModalidade(text){
+  const al = [], mod = detectModality(text), semC = isSemContraste(text);
+  const body = extractBodyForTerms(text);
+  const { folded, slice } = foldIndexed(body);
+  const MOD_RULES = [
+    { origem: "USG", invalida: ["TC", "RM", "RX"], re: /\b(?:ecogenicidade|(?:an|hipo|hiper|iso)?ecogenic[oa]s?|(?:an|hipo|hiper|iso)?ecoic[oa]s?|sombra\s+acustica)\b/g },
+    { origem: "TC",  invalida: ["USG", "RM"],      re: /\b(?:densidade|atenuacao|(?:hipo|hiper|iso)?dens[oa]s?|uh)\b/g },
+    { origem: "RM",  invalida: ["TC", "USG"],      re: /\b(?:(?:hiper|hipo|iso)(?:sinal|intens[oa]s?)|t1|t2|difusao|sinal)\b/g },
+    { origem: "USG (Doppler)", invalida: ["TC", "RM", "RX", "MAMO"], re: /\b(?:fluxo\s+ao\s+)?doppler\b/g }
+  ];
+  if (mod){
+    for (const r of MOD_RULES){
+      if (!r.invalida.includes(mod)) continue;
+      r.re.lastIndex = 0; let m;
+      while ((m = r.re.exec(folded))){
+        const tok = m[0];
+        if (tok === "sinal" && /^(?:inflamat|d[eoa]s?\s|clinic|indiret|diret)/.test(folded.slice(m.index + tok.length).trimStart())) continue;
+        if ((tok === "t1" || tok === "t2") && isVertebralLevel(folded, m.index, tok.length)) continue;
+        if (mod === "USG" && tok === "atenuacao" && /^\s+(?:acustica|posterior|sonora)\b/.test(folded.slice(m.index + tok.length))) continue;
+        if (mod === "USG" && /^dens[oa]s?$/.test(tok) && /\b(?:conteudo|liquido|material|bile|secrecao)\b/.test(folded.slice(Math.max(0, m.index - 35), m.index).split(/[.,;\n(:]/).pop() || "")) continue;
+        if (isNegatedBefore(folded, m.index)) continue;
+        const raw = slice(m.index, m.index + tok.length);
+        al.push(["Modalidade", `Termo de ${r.origem} ("${raw}") em laudo de ${mod}.`]);
+      }
+    }
+  }
+  if (semC){
+    const reC = /\b(?:(?:hiper|hipo)?-?realce|impregnac(?:ao|oes)|captacao\s+(?:de|do|pelo)\s+(?:meio\s+de\s+)?contraste|wash[\s-]?out|fase\s+(?:arterial|portal))\b/g;
+    let m;
+    while ((m = reC.exec(folded))){
+      if (isNegatedBefore(folded, m.index)) continue;
+      const raw = slice(m.index, m.index + m[0].length);
+      al.push(["Contraste", `Termo de contraste ("${raw}") em exame sem contraste.`]);
+    }
+  }
+  return al;
+}
 function localChecks(){
   const al = computeAlerts(), text = laudoText(); if (!text.trim()) return al;
+  al.push(...checkTermosModalidade(text));
   const lines = text.split("\n").map(l => l.trim()), NS = normalSetAll();
   const idx = h => lines.findIndex(l => norm(l) === h);
   const iA = idx("achados"), iC = idx("conclusão"), iX = idx("achados adicionais");
@@ -4136,11 +4239,22 @@ globalThis.usgVoice = { bestAlternative, posTexto, punct };
   /* Erros fonéticos frequentes do reconhecimento do Chrome no ditado médico (12/11/2026, áudio arterial do Artur).
      "sem" sai como "onze" e o conversor de números vira "11": "11 estenoses" -> "sem estenoses". */
   const SEM_DEPOIS = "estenos|altera|sinai|evid[eê]nci|les[õo]|placa|trombo|cole[çc]|l[ií]quido|dilata|fluxo|calcifica|n[oó]dulo|cisto|espessa|refluxo|sinal|particularidade|anormalidade|ectasia|aneurisma|oclus|deformidade|irregularidade";
+  const NIVEL_VERT = "C[1-7]|T(?:1[0-2]|[1-9])|L[1-5]|S1";
   const FALA_FIX = [
     [new RegExp("\\b(?:11|onze)(\\s+)(?=(?:" + SEM_DEPOIS + "))", "gi"), "sem$1"],
     [/\bvps\b/gi, "VPS"], [/\bvd\b/g, "VD"], [/\bir\b/g, "IR"],
     [/\bp[eé]rvi(o|a|os|as)\b/gi, "pérvi$1"], [/\btrif[aá]sic/gi, "trifásic"], [/\bbif[aá]sic/gi, "bifásic"], [/\bmonof[aá]sic/gi, "monofásic"],
     [/\bpopl[ií]te(a|o)\b/gi, "poplíte$1"],
+    [/\b(\d+)\s+v[ií]rgula\s+(\d+)\b/gi, "$1,$2"],
+    [/\b(\d+(?:[.,]\d+)?)\s*cent[ií]metros?\s+c[uú]bicos?\b/gi, "$1 cm³"],
+    [/\b(\d+(?:[.,]\d+)?)\s*cent[ií]metros?\b/gi, "$1 cm"],
+    [/\b(\d+(?:[.,]\d+)?)\s*mil[ií]metros?\b/gi, "$1 mm"],
+    [/\b(\d+(?:[.,]\d+)?)\s*mililitros?\b/gi, "$1 mL"],
+    [/\b(\d+(?:,\d+|\s+\d)?)\s+por\s+(\d+(?:,\d+|\s+\d)?)(?:\s+por\s+(\d+(?:,\d+|\s+\d)?))?\s*(mm|cm)\b/gi,
+      (_, a, b, c, u) => [a, b, c].filter(Boolean).map(n => n.replace(/\s+/g, ",")).join(" x ") + " " + u.toLowerCase()],
+    [/\b(\d+)\s+(\d)\s*(mm|cm)\b/gi, (_, a, b, u) => `${a},${b} ${u.toLowerCase()}`],
+    [new RegExp(`\\b(${NIVEL_VERT})(?:\\s*\\.\\s*|\\s*[-–]\\s*|\\s+)(${NIVEL_VERT})\\b`, "gi"),
+      (_, a, b) => a.toUpperCase() + "-" + b.toUpperCase()],
   ];
   const fixFala = t => FALA_FIX.reduce((s, [re, to]) => s.replace(re, to), String(t));
   /* Máscara dita no áudio (12/11/2026): "parecer de tomografia de abdome total", "doppler arterial de membro inferior".
@@ -8342,7 +8456,7 @@ window.tutuSite.appReady = true;
         updateCount(); renderAlerts();
         await mudarVinculos(vinculos => { vinculos[caso] = pedido; });
         await ui.flush();
-        setStatus("Laudo organizado pela IA. Confira os trechos [<conferir>] e copie.", "ok");
+        setStatus("Laudo organizado pela IA. Confira os trechos marcados [?] e copie.", "ok");
         return;
       }
       const n = organizar(fresh);
