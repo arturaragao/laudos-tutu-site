@@ -4023,8 +4023,34 @@ const ctxWords = (t, lado) => { const ws = foldStr(t).split(/[^a-z0-9]+/).filter
 
 const exameAtual = cfg => cfg.exameAtual || (document.getElementById("plantaoExam") || {}).value || null;
   const isMacro = c => c && /^(auto ?texto|macro) /i.test(String(c.de || ""));
+  // Mantida junto de posTexto: este trecho também é extraído para a voz compartilhada.
+  function matchVoice(text, cfg) {
+    const F = globalThis.TutuFonetica;
+    if (typeof F?.casar !== "function") return null;
+    const n = vnorm(text);
+    if (!n || n.length > 200) return null;
+    const candidatos = [], add = (fala, destino) => candidatos.push({ fala, ...destino });
+    for (const c of cfg.commands || []) add(c.fala, { id: "acao:" + c.acao, acao: c.acao });
+    for (const e of cfg.exams || []) {
+      const destino = { id: "acao:exame:" + e.id, exame: e.id };
+      for (const nome of new Set([e.nome, e.id, ...(e.voz || [])].filter(Boolean)))
+        for (const prefixo of ["máscara", "máscaras", "exame", "exames", "modelo", "modelos"])
+          add(prefixo + " " + nome, destino);
+    }
+    const replacement = (fala, texto) => add(fala, { id: "texto:" + texto, texto: String(texto) });
+    for (const c of cfg.correcoes || []) if (isMacro(c) && !c.ctx?.length) replacement(c.de, c.para ?? "");
+    for (const f of cfg.frases || []) if (f.nome && f.texto) replacement("frase " + f.nome, f.texto);
+    const exato = candidatos.find(c => vnorm(c.fala) === n);
+    if (exato) return exato;
+    // Palavra isolada de laudo só pode executar um comando exato.
+    if (!n.includes(" ")) return null;
+    return F.casar(text, candidatos, true);
+  }
   // correções do médico, substituições aprendidas, ajustes automáticos de palavras; por fim macros e frases
   function posTexto(text, cfg) {
+    const hit = matchVoice(text, cfg);
+    if (hit && hit.bloqueado) return text;
+    if (hit && hit.texto !== undefined) return hit.texto;
     const T = globalThis.TextoV2, cs = cfg.correcoes || [];
     let t = applyCorrections(text, cs.filter(c => !isMacro(c)));
     if (T) {
@@ -12336,3 +12362,52 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }, 1500);
   init();
 })();
+
+/* Casamento local de falas completas; nunca procura comandos dentro do laudo. */
+(function (root) {
+  "use strict";
+  function chave(texto) {
+    return String(texto ?? "").toLowerCase().replace(/ç/g, "s")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "")
+      .replace(/ch/g, "x").replace(/ss|sc/g, "s").replace(/c(?=[ei])/g, "s")
+      .replace(/qu|k|c(?=[aou])/g, "k").replace(/gu(?=[ei])/g, "g")
+      .replace(/lh/g, "li").replace(/nh/g, "ni").replace(/rr/g, "r")
+      .replace(/ph/g, "f").replace(/h/g, "")
+      .replace(/z$/, "s").replace(/l$/, "u").replace(/e$/, "i").replace(/o$/, "u")
+      .replace(/(.)\1+/g, "$1");
+  }
+  function distancia(a, b) {
+    let linha = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const nova = [i];
+      for (let j = 1; j <= b.length; j++) nova[j] = Math.min(
+        nova[j - 1] + 1, linha[j] + 1, linha[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      linha = nova;
+    }
+    return linha[b.length];
+  }
+  // Cada destino tem id estável; sinônimos da mesma ação não são concorrentes.
+  function casar(texto, candidatos) {
+    const k = chave(texto);
+    if (!k || k.length > 200) return null;
+    const destinos = new Map();
+    for (const candidato of candidatos) {
+      const c = chave(candidato.fala);
+      if (!c || c.length > 200) continue;
+      const d = distancia(k, c), id = candidato.id ?? candidato;
+      const anterior = destinos.get(id);
+      if (!anterior || d < anterior.distancia) destinos.set(id, { candidato, distancia: d, chave: c });
+    }
+    const ordem = [...destinos.values()].sort((a, b) => a.distancia - b.distancia);
+    const melhor = ordem[0];
+    if (!melhor) return null;
+    const tamanho = Math.min(k.length, melhor.chave.length);
+    // Palavras muito curtas exigem identidade fonética; erro relativo máximo de 20%.
+    const limite = Math.min(tamanho <= 8 ? 1 : 2, Math.floor(tamanho / 5));
+    if (melhor.distancia > limite || (ordem[1] && ordem[1].distancia - melhor.distancia < 2)) return null;
+    return melhor.candidato;
+  }
+  const api = { chave, distancia, casar };
+  root.TutuFonetica = api;
+  if (typeof module === "object" && module.exports) module.exports = api;
+})(typeof window === "object" ? window : globalThis);
