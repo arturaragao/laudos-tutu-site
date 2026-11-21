@@ -11951,3 +11951,388 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     }
   };
 })();
+
+/* Navegação e revisão dos trechos incertos, sem modificar o texto da folha. */
+(() => {
+  "use strict";
+  function findMarkers(text, fieldSource = "") {
+    const re = new RegExp("\\[\\?\\]|\\[<>\\]" + (fieldSource ? "|" + fieldSource : ""), "g");
+    return Array.from(text.matchAll(re), m => ({ start: m.index, end: m.index + m[0].length, text: m[0] }));
+  }
+  function nextIndex(markers, from, direction = 1) {
+    if (!markers.length) return -1;
+    if (direction < 0) {
+      for (let i = markers.length - 1; i >= 0; i--) if (markers[i].end <= from) return i;
+      return markers.length - 1;
+    }
+    const i = markers.findIndex(m => m.start >= from);
+    return i < 0 ? 0 : i;
+  }
+  const uncertainties = text => findMarkers(text).filter(m => m.text === "[?]");
+  const copyWarning = text => {
+    const n = uncertainties(text).length;
+    return n ? `Ainda há ${n} [?] no laudo` : "";
+  };
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { findMarkers, nextIndex, uncertainties, copyWarning };
+    return;
+  }
+  const ui = window.tutuV2;
+  if (!ui) return;
+  const text = () => sheetTextNodes(sheet).map(n => n.nodeValue).join("");
+  const selectionRange = () => {
+    const s = getSelection();
+    return s.rangeCount && sheet.contains(s.anchorNode) ? s.getRangeAt(0) : sheetRange;
+  };
+  function position(direction) {
+    const r = selectionRange(), end = direction > 0;
+    return r && sheet.contains(end ? r.endContainer : r.startContainer)
+      ? offsetOf(sheet, end ? r.endContainer : r.startContainer, end ? r.endOffset : r.startOffset)
+      : end ? 0 : text().length;
+  }
+  function select(marker) {
+    if (!marker) return false;
+    const r = rangeFromOffsets(sheet, marker.start, marker.end);
+    if (!r) return false;
+    sheet.focus({ preventScroll: true });
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    sheetRange = r.cloneRange();
+    let rect = r.getBoundingClientRect();
+    for (let node = r.startContainer.parentElement; node; node = node.parentElement) {
+      if (node.scrollHeight <= node.clientHeight || !/auto|scroll/.test(getComputedStyle(node).overflowY)) continue;
+      const box = node.getBoundingClientRect();
+      if (rect.top < box.top || rect.bottom > box.bottom) {
+        node.scrollTop += rect.top - box.top - (node.clientHeight - rect.height) / 2;
+        rect = r.getBoundingClientRect();
+      }
+    }
+    if (rect.top < 0 || rect.bottom > innerHeight) {
+      window.scrollBy(0, rect.top - (innerHeight - rect.height) / 2);
+    }
+    refresh();
+    return true;
+  }
+  function navigate(direction, fields = false) {
+    const markers = fields ? findMarkers(text(), FIELD_RE.source) : uncertainties(text());
+    return select(markers[nextIndex(markers, position(direction), direction)]);
+  }
+  ui.actions.proximo.run = () => { if (!navigate(1, true)) sectionNav(1); };
+  const pill = ui.el("span", { id: "v2Marcador", role: "group", "aria-label": "Trechos incertos" });
+  pill.style.cssText = "display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border,#8886);border-radius:999px;padding:2px 7px;font-size:12px;margin-left:6px";
+  const label = ui.el("span", { "aria-live": "polite" });
+  pill.append(ui.button("‹", () => navigate(-1), { "aria-label": "[?] anterior", title: "[?] anterior" }), label,
+    ui.button("›", () => navigate(1), { "aria-label": "Próximo [?]", title: "Próximo [?]" }));
+  pill.addEventListener("mousedown", e => e.preventDefault());
+  document.querySelector(".fmt-bar").append(pill);
+  function refresh() {
+    const markers = uncertainties(text());
+    pill.hidden = !markers.length;
+    pill.style.display = markers.length ? "inline-flex" : "none";
+    const from = position(-1);
+    let i = markers.findIndex(m => m.start >= from);
+    if (i < 0) i = 0;
+    label.textContent = `[?] ${i + 1} de ${markers.length}`;
+  }
+  new MutationObserver(refresh).observe(sheet, { childList: true, subtree: true, characterData: true });
+  document.addEventListener("selectionchange", refresh);
+  const originalCopy = doCopy;
+  const dialog = ui.el("dialog", { id: "v2MarcadorAviso", "aria-labelledby": "v2MarcadorAvisoTexto" });
+  dialog.style.cssText = "border:1px solid #8886;border-radius:12px;padding:20px;background:var(--bg,#fff);color:var(--text,#222);max-width:90vw";
+  const message = ui.el("p", { id: "v2MarcadorAvisoTexto" });
+  const first = ui.button("Ir para o primeiro", () => {
+    dialog.close(); select(uncertainties(text())[0]);
+  });
+  const anyway = ui.button("Copiar mesmo assim", () => { dialog.close(); originalCopy(); });
+  dialog.append(message, first, anyway);
+  document.body.append(dialog);
+  doCopy = () => {
+    const warning = copyWarning(text());
+    if (!warning) return originalCopy();
+    message.textContent = warning;
+    if (!dialog.open) dialog.showModal();
+  };
+  refresh();
+})();
+
+/* Dicionário privado LeoRad. Apenas destaques CSS: não modifica a folha nem a cópia. */
+(() => {
+  "use strict";
+  const fold = s => String(s || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const common = new Set(("a ao aos as até com como contra da das de desde do dos durante e em entre era eram essa essas esse esses esta estas este estes está estão estava estavam foi foram há isso isto já mais mas mesmo muito na nas não nem no nos nós o os ou para pela pelas pelo pelos por porque qual quando que quem se sem seu seus sua suas são ser será serão sendo sido sob sobre também tem temos tendo ter teve têm um uma umas uns vai vão vez vezes pode podem poderia deve devem houve havia foram apresenta apresentam apresentado observamos observa observado observada observados observadas encontra encontrado encontrada encontrados encontradas mantém mantido mantida permanece são seja sejam mm cm m ml dl l mg g kg mmhg hz khz mhz hu uh ms s x").split(/\s+/).map(fold));
+  function tokenize(text) {
+    return [...String(text).matchAll(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu)].map(m => ({ word: m[0], start: m.index, end: m.index + m[0].length }));
+  }
+  const ignored = word => /\p{N}/u.test(word) || fold(word).length <= 2 ||
+    (/^\p{Lu}{1,5}$/u.test(word)) || common.has(fold(word));
+  // Damerau-Levenshtein completo (inclui transposições não adjacentes a outra edição).
+  function distance(a, b, limit = 2) {
+    a = fold(a); b = fold(b);
+    if (Math.abs(a.length - b.length) > limit) return limit + 1;
+    const n = a.length, m = b.length, max = n + m, last = Object.create(null);
+    const d = Array.from({ length: n + 2 }, () => new Uint16Array(m + 2));
+    d[0][0] = max;
+    for (let i = 0; i <= n; i++) { d[i + 1][0] = max; d[i + 1][1] = i; }
+    for (let j = 0; j <= m; j++) { d[0][j + 1] = max; d[1][j + 1] = j; }
+    for (let i = 1; i <= n; i++) {
+      let match = 0;
+      for (let j = 1; j <= m; j++) {
+        const prev = last[b[j - 1]] || 0, col = match, cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        if (!cost) match = j;
+        d[i + 1][j + 1] = Math.min(d[i][j] + cost, d[i + 1][j] + 1, d[i][j + 1] + 1,
+          d[prev][col] + i - prev - 1 + 1 + j - col - 1);
+      }
+      last[a[i - 1]] = i;
+    }
+    return d[n + 1][m + 1];
+  }
+  function createDictionary() {
+    const words = new Map(), lengths = new Map(), cache = new Map();
+    function add(text, frequency = 1) {
+      for (const { word } of tokenize(text)) {
+        if (/\p{N}/u.test(word)) continue;
+        const key = fold(word), old = words.get(key);
+        if (!old) {
+          const entry = { key, word, frequency: Number(frequency) || 1 };
+          words.set(key, entry);
+          if (!lengths.has(key.length)) lengths.set(key.length, []);
+          lengths.get(key.length).push(entry);
+        } else if (Number(frequency) > old.frequency) { old.frequency = Number(frequency); old.word = word; }
+      }
+      cache.clear();
+    }
+    function unknown(text) { return tokenize(text).filter(t => !ignored(t.word) && !words.has(fold(t.word))); }
+    function suggest(word) {
+      const key = fold(word);
+      if (cache.has(key)) return cache.get(key).slice();
+      if (key.length > 64) return [];
+      const candidates = [];
+      for (let n = key.length - 2; n <= key.length + 2; n++) for (const e of lengths.get(n) || []) {
+        const edits = distance(key, e.key);
+        if (edits <= 2) candidates.push({ ...e, edits });
+      }
+      candidates.sort((a, b) => a.edits - b.edits || b.frequency - a.frequency || a.word.localeCompare(b.word, "pt-BR"));
+      const result = candidates.slice(0, 3).map(e => e.word);
+      if (cache.size > 100) cache.clear();
+      cache.set(key, result); return result.slice();
+    }
+    return { add, unknown, suggest, has: word => words.has(fold(word)), get size() { return words.size; } };
+  }
+  const api = { fold, tokenize, ignored, distance, createDictionary };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  if (typeof window === "undefined") return;
+  window.tutuDicionario = api;
+  const sheet = document.getElementById("laudo");
+  if (!sheet || !window.CSS?.highlights || !window.Highlight) return;
+  const dictionary = createDictionary(), highlight = new Highlight(), records = new Map(), dirty = new Set();
+  const DOC = "config/dicionario-local-v1", BLOCK = "p,div,li,h1,h2,h3,h4,blockquote";
+  let enabled = true, loaded = false, composing = false, timer, database, saved = [], loading = false;
+  CSS.highlights.set("tutu-desconhecidos", highlight);
+  const style = document.createElement("style");
+  style.textContent = `::highlight(tutu-desconhecidos){text-decoration:underline wavy #b78574;text-decoration-thickness:1px;text-underline-offset:3px}
+    #dicLocalPopup{position:fixed;z-index:1000;max-width:320px;padding:8px;background:var(--paper,#fffaf0);color:var(--ink,#29231e);border:1px solid var(--line,#ccc);border-radius:6px;font-size:13px}
+    #dicLocalPopup[hidden]{display:none}#dicLocalPopup button{font:inherit;margin:3px;cursor:pointer}`;
+  document.head.append(style);
+  const popup = document.createElement("div"); popup.id = "dicLocalPopup"; popup.hidden = true;
+  popup.setAttribute("role", "dialog"); popup.setAttribute("aria-label", "Dicionário médico"); document.body.append(popup);
+  const label = document.createElement("label"), toggle = document.createElement("input");
+  toggle.type = "checkbox"; toggle.checked = true; toggle.id = "dicLocalAtivo";
+  const status = document.createElement("span");
+  label.append(toggle, status);
+  function availability(reason = "") {
+    status.textContent = reason ? ` Dicionário indisponível (${reason})` : " Sublinhar termos desconhecidos";
+    toggle.checked = enabled && loaded;
+  }
+  availability("sem chave");
+  document.querySelector("#setModal .calc-body")?.append(label);
+  const idle = fn => window.requestIdleCallback ? window.requestIdleCallback(fn, { timeout: 1500 }) : setTimeout(() => fn({ timeRemaining: () => 8 }), 20);
+  const blockOf = node => {
+    const el = node.nodeType === 1 ? node : node.parentElement;
+    const block = el?.closest(BLOCK);
+    return block && sheet.contains(block) ? block : sheet;
+  };
+  const protectedRegion = node => (node.nodeType === 1 ? node : node.parentElement)
+    ?.closest('s,strike,del,ins,.diff-del,.diff-ins,.ai-del,.ai-ins,[contenteditable="false"]');
+  function allowedNodes() {
+    // Mesmo filtro usado pelo marcador para ignorar o texto tachado da folha.
+    return typeof sheetTextNodes === "function" ? new Set(sheetTextNodes(sheet)) : null;
+  }
+  function safeRange(range) {
+    if (!sheet.contains(range.startContainer) || !sheet.contains(range.endContainer)) return false;
+    const allowed = allowedNodes(), walker = document.createTreeWalker(sheet, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (range.intersectsNode(node) && (protectedRegion(node) || (allowed && !allowed.has(node)))) return false;
+    }
+    return true;
+  }
+  function markAll() {
+    dirty.add(sheet); for (const p of sheet.querySelectorAll(BLOCK)) dirty.add(p); schedule();
+  }
+  function clearRecord(p) {
+    for (const item of records.get(p) || []) highlight.delete(item.range);
+    records.delete(p);
+  }
+  function validate(p) {
+    clearRecord(p);
+    if (p !== sheet && !sheet.contains(p)) return;
+    const walker = document.createTreeWalker(p, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT), nodes = [];
+    const allowed = allowedNodes();
+    let text = "", node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeType === 1) {
+        if (node.tagName === "BR" || node.matches(BLOCK)) text += "\n";
+        continue;
+      }
+      if (blockOf(node) !== p || protectedRegion(node) || (allowed && !allowed.has(node))) { text += "\n"; continue; }
+      nodes.push({ node, start: text.length, end: text.length + node.length }); text += node.data;
+    }
+    const items = [];
+    let firstIndex = 0, lastIndex = 0;
+    for (const token of dictionary.unknown(text)) {
+      while (firstIndex < nodes.length && nodes[firstIndex].end <= token.start) firstIndex++;
+      lastIndex = Math.max(firstIndex, lastIndex);
+      while (lastIndex < nodes.length && nodes[lastIndex].end < token.end) lastIndex++;
+      const first = nodes[firstIndex], last = nodes[lastIndex];
+      if (!first || !last) continue;
+      const range = document.createRange(); range.setStart(first.node, token.start - first.start); range.setEnd(last.node, token.end - last.start);
+      items.push({ range, word: token.word }); highlight.add(range);
+    }
+    records.set(p, items);
+  }
+  function run(deadline) {
+    if (!enabled || !loaded || composing) return;
+    for (const p of records.keys()) if (p !== sheet && !sheet.contains(p)) clearRecord(p);
+    do {
+      const p = dirty.values().next().value; if (!p) break;
+      dirty.delete(p); validate(p);
+    } while (deadline.timeRemaining() > 3);
+    if (dirty.size) idle(run);
+  }
+  function schedule() { clearTimeout(timer); timer = setTimeout(() => idle(run), 600); }
+  const observer = new MutationObserver(changes => {
+    popup.hidden = true;
+    for (const change of changes) {
+      dirty.add(blockOf(change.target));
+      for (const node of change.addedNodes || []) if (node.nodeType === 1) {
+        dirty.add(blockOf(node)); for (const p of node.querySelectorAll(BLOCK)) dirty.add(p);
+      }
+    }
+    schedule();
+  });
+  observer.observe(sheet, { childList: true, subtree: true, characterData: true, attributes: true,
+    attributeFilter: ["class", "style", "contenteditable"] });
+  sheet.addEventListener("compositionstart", () => { composing = true; });
+  sheet.addEventListener("compositionend", () => { composing = false; schedule(); });
+  async function persist() {
+    if (!database) throw Error("Banco indisponível. Tente novamente.");
+    await database.doc(DOC).set({ enabled, words: saved });
+  }
+  toggle.addEventListener("change", async () => {
+    enabled = toggle.checked; popup.hidden = true;
+    if (!enabled) { highlight.clear(); records.clear(); } else { await loadPrivate(); markAll(); }
+    try { await persist(); toggle.title = ""; } catch (e) { toggle.title = e.message; }
+  });
+  let popupVersion = 0;
+  function show(item, x, y) {
+    if (!enabled || !loaded || item.range.toString() !== item.word || !safeRange(item.range)) return;
+    const version = ++popupVersion;
+    popup.replaceChildren(); popup.hidden = false;
+    popup.style.left = Math.max(4, Math.min(x, window.innerWidth - 325)) + "px";
+    popup.style.top = Math.max(4, Math.min(y + 12, window.innerHeight - 160)) + "px";
+    const title = document.createElement("span"); title.textContent = item.word; popup.append(title);
+    const suggestions = document.createElement("span"); popup.append(suggestions);
+    const add = document.createElement("button"); add.type = "button"; add.textContent = "Adicionar ao dicionário";
+    add.onclick = async () => {
+      add.disabled = true;
+      try {
+        const previous = saved; saved = [...new Set([...saved, item.word])];
+        try { await persist(); } catch (e) { saved = previous; throw e; }
+        dictionary.add(item.word, 100); popup.hidden = true; markAll();
+      } catch (e) { title.textContent = e.message; add.disabled = false; }
+    };
+    popup.append(add);
+    idle(() => {
+      if (version !== popupVersion || popup.hidden) return;
+      for (const word of dictionary.suggest(item.word)) {
+        const button = document.createElement("button"); button.type = "button"; button.textContent = word;
+        button.onclick = () => {
+          if (!enabled || !loaded || item.range.toString() !== item.word || !safeRange(item.range)) return;
+          sheet.focus(); const selection = getSelection(); selection.removeAllRanges(); selection.addRange(item.range);
+          document.execCommand("insertText", false, word); popup.hidden = true;
+        };
+        suggestions.append(button);
+      }
+    });
+  }
+  let hoverTimer;
+  function point(event) {
+    if (!enabled || !loaded || composing || popup.contains(event.target)) return;
+    let found;
+    // Pesquisa só o parágrafo sob o ponteiro; não percorre um laudo inteiro.
+    for (const item of records.get(blockOf(event.target)) || []) {
+      if ([...item.range.getClientRects()].some(r => event.clientX >= r.left && event.clientX <= r.right && event.clientY >= r.top && event.clientY <= r.bottom)) { found = item; break; }
+    }
+    clearTimeout(hoverTimer);
+    if (found) {
+      if (event.type === "click") show(found, event.clientX, event.clientY);
+      else hoverTimer = setTimeout(() => show(found, event.clientX, event.clientY), 350);
+    }
+  }
+  sheet.addEventListener("pointermove", point); sheet.addEventListener("click", point);
+  sheet.addEventListener("pointerleave", () => clearTimeout(hoverTimer));
+  document.addEventListener("pointerdown", e => { if (!popup.contains(e.target)) popup.hidden = true; });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") popup.hidden = true; });
+  function doctorVocabulary() {
+    try {
+      const cfg = JSON.parse(document.getElementById("voiceConfig")?.textContent || "{}");
+      for (const [word, count] of cfg.vocabFreq || []) dictionary.add(word, count);
+      for (const [phrase, count] of Object.entries(cfg.ngramas || {})) dictionary.add(phrase, count);
+      if (typeof EXAMS !== "undefined") for (const exam of EXAMS) dictionary.add(stripTags(maskOf(exam)), 20);
+      if (typeof BANK !== "undefined") for (const row of BANK) dictionary.add(String(row[1] || "") + " " + String(row[3] || ""), 10);
+    } catch (_) { /* Vocabulário ainda carregando. */ }
+    markAll();
+  }
+  async function loadPrivate() {
+    const G = window.tutuSite?.gh;
+    if (loaded || loading || !enabled) return;
+    if (!G?.token) { availability("sem chave"); return; }
+    loading = true;
+    try {
+      const response = await G.getText("leorad/vocabulario.txt");
+      const text = typeof response === "string" ? response : response?.text;
+      if (!G.token) { availability("sem chave"); return; }
+      if (typeof text !== "string" || !text.trim()) { availability("sem arquivo"); return; }
+      // Importação em lotes ociosos; o conteúdo privado nunca entra no código/build.
+      const lines = text.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i += 250) await new Promise(resolve => idle(() => { dictionary.add(lines.slice(i, i + 250).join("\n")); resolve(); }));
+      loaded = true; availability(); doctorVocabulary();
+    } catch (_) { availability(G.token ? "sem arquivo" : "sem chave"); }
+    finally { loading = false; }
+  }
+  async function init() {
+    for (let i = 0; i < 200; i++) {
+      if (typeof db !== "undefined" && db) { database = db; break; }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    try {
+      const doc = database && await database.doc(DOC).get();
+      if (doc?.exists) { const data = doc.data(); enabled = data.enabled !== false; saved = Array.isArray(data.words) ? data.words.filter(w => typeof w === "string") : []; }
+      dictionary.add(saved.join("\n"), 100);
+    } catch (_) { /* Configuração ausente. */ }
+    availability(loaded ? "" : "sem chave");
+    await window.tutuVocab?.ready;
+    doctorVocabulary(); await loadPrivate();
+    const voice = document.getElementById("voiceConfig");
+    if (voice) new MutationObserver(() => idle(doctorVocabulary)).observe(voice, { childList: true, subtree: true, characterData: true });
+  }
+  // A conexão pode ser configurada depois da inicialização da página.
+  document.getElementById("setModal")?.addEventListener("close", () => { idle(doctorVocabulary); loadPrivate(); });
+  window.addEventListener("focus", () => { loadPrivate(); });
+  let lastToken = window.tutuSite?.gh?.token;
+  const connectionTimer = setInterval(() => {
+    if (loaded) { clearInterval(connectionTimer); return; }
+    const token = window.tutuSite?.gh?.token;
+    if (token !== lastToken) { lastToken = token; loadPrivate(); }
+  }, 1500);
+  init();
+})();
