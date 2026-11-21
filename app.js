@@ -11483,7 +11483,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     return n;
   };
   // Descida recursiva: só números, identificadores, parênteses e quatro operadores.
-  function formula(source, values) {
+  function formula(source, values, optional = false) {
     if (typeof source !== "string" || source.length > 4096) throw Error("Fórmula inválida.");
     let pos = 0, depth = 0;
     const space = () => { while (/\s/.test(source[pos] || "") && pos < source.length) pos++; };
@@ -11492,13 +11492,17 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       if (++depth > 80) throw Error("Fórmula muito profunda.");
       let result;
       const c = source[pos];
-      if (c === "+" || c === "-") { pos++; result = (c === "-" ? -1 : 1) * atom(); }
+      if (c === "+" || c === "-") { pos++; const n = atom(); result = n === null ? null : (c === "-" ? -1 : 1) * n; }
       else if (c === "(") { pos++; result = sum(); space(); if (source[pos++] !== ")") throw Error("Parênteses inválidos."); }
       else {
         const literal = /^(?:\d+(?:\.\d*)?|\.\d+)/.exec(source.slice(pos));
         const id = /^[A-Za-z_][A-Za-z_0-9]*/.exec(source.slice(pos));
         if (literal) { pos += literal[0].length; result = Number(literal[0]); }
-        else if (id && own(values, id[0])) { pos += id[0].length; result = number(values[id[0]]); }
+        else if (id && own(values, id[0])) {
+          pos += id[0].length;
+          const value = values[id[0]];
+          result = optional && empty(value) ? null : typeof value === "boolean" ? Number(value) : number(value);
+        }
         else throw Error("Fórmula contém identificador ou código inválido.");
       }
       depth--; return result;
@@ -11507,19 +11511,25 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       let n = atom(); space();
       while (source[pos] === "*" || source[pos] === "/") {
         const op = source[pos++], right = atom();
-        n = op === "*" ? n * right : n / right; space();
+        if (op === "/" && right === 0) throw Error("Fórmula inválida ou divisão por zero.");
+        n = n === null || right === null ? null : op === "*" ? n * right : n / right;
+        if (n !== null && !Number.isFinite(n)) throw Error("Fórmula inválida ou divisão por zero.");
+        space();
       }
       return n;
     }
     function sum() {
       let n = product(); space();
       while (source[pos] === "+" || source[pos] === "-") {
-        const op = source[pos++], right = product(); n = op === "+" ? n + right : n - right; space();
+        const op = source[pos++], right = product();
+        n = n === null || right === null ? null : op === "+" ? n + right : n - right;
+        if (n !== null && !Number.isFinite(n)) throw Error("Fórmula inválida ou divisão por zero.");
+        space();
       }
       return n;
     }
     const n = sum(); space();
-    if (pos !== source.length || !Number.isFinite(n)) throw Error("Fórmula inválida ou divisão por zero.");
+    if (pos !== source.length || !(optional && n === null) && !Number.isFinite(n)) throw Error("Fórmula inválida ou divisão por zero.");
     return n;
   }
   function matches(rule, values) {
@@ -11533,6 +11543,15 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
   const fields = ficha => (ficha.secoes || []).flatMap(s => s.campos || []);
   const empty = v => v == null || (typeof v === "string" && !v.trim()) || (Array.isArray(v) && !v.length);
+  const escapeValue = v => String(v).replace(/\[<>\]|[&<>"'{}]/g, c => c === "[<>]" ? c : ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "{": "&#123;", "}": "&#125;"
+  })[c]);
+  function calculationResults(ficha, values) {
+    return (ficha.calculos || []).flatMap(c => {
+      if (empty(c.rotulo) || empty(values[c.id])) return [];
+      return [`${c.rotulo}: ${values[c.id]}`];
+    }).join(" · ");
+  }
   function defaults(list) {
     const out = Object.create(null);
     for (const f of list) out[f.id] = f.padrao !== undefined ? structuredClone(f.padrao) :
@@ -11555,7 +11574,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     return result;
   }
   function evaluate(ficha, raw) {
-    const list = fields(ficha), values = active(list, raw), scores = Object.create(null), errors = [];
+    const list = fields(ficha), values = active(list, { ...defaults(list), ...raw }), scores = Object.create(null), errors = [];
     const refs = Object.create(null);
     function collect(fs, data, prefix = "") {
       for (const f of fs) {
@@ -11573,10 +11592,22 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       delete values[c.id];
       try {
         let n;
-        if (c.tipo === "formula") n = formula(c.formula, values);
+        if (c.tipo === "formula") {
+          const inputs = { ...values };
+          // Ausência conhecida permanece indeterminada; nunca vira uma medida zero.
+          for (const id of c.entradas || []) {
+            if (!own(inputs, id) && (list.some(f => f.id === id) || (ficha.calculos || []).some(calc => calc.id === id))) inputs[id] = null;
+          }
+          n = formula(c.formula, inputs, Array.isArray(c.entradas));
+          if (n === null) continue;
+        }
         else if (c.tipo === "tabela" && c.faixas?.length) {
           let value = values[c.entradas?.[0]];
-          if (empty(value)) continue;
+          if (empty(value)) {
+            const fallback = c.faixas.find(f => !own(f, "de") && !own(f, "ate"));
+            if (fallback) values[c.id] = fallback.resultado;
+            continue;
+          }
           if (value != null && c.faixas.some(f => typeof f.de === "number" || typeof f.ate === "number")) value = number(value);
           const faixa = c.faixas.find(f => {
             if (!own(f, "de") && !own(f, "ate")) return value == null;
@@ -11623,13 +11654,13 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     }
     function renderModel(model, ctx) {
       // Cada frase e cada trecho separado por ponto e vírgula é opcional por inteiro.
-      return model.split(/(?<=[.!?])\s+/).map(sentence => {
+      return model.split("\n").map(line => line.split(/(?<=[.!?])\s+/).map(sentence => {
         const parts = sentence.split(";").filter(part =>
-          [...part.matchAll(/{{\s*([^{}]+?)\s*}}/g)].every(m => !empty(ctx[m[1]])));
-        let text = parts.map(part => part.trim().replace(/{{\s*([^{}]+?)\s*}}/g, (_, id) => format(ctx[id], id))).join("; ");
+          [...part.matchAll(/{{\s*([^{}]+?)\s*}}/g)].every(m => m[1] === "centro" || !empty(ctx[m[1]])));
+        let text = parts.map(part => part.trim().replace(/{{\s*([^{}]+?)\s*}}/g, (mark, id) => id === "centro" ? mark : escapeValue(format(ctx[id], id)))).join("; ");
         if (text && /[.!?]$/.test(sentence.trim()) && !/[.!?]$/.test(text)) text += sentence.trim().slice(-1);
         return text;
-      }).filter(Boolean).join(" ");
+      }).filter(Boolean).join(" ")).join("\n");
     }
     function render(templates) {
       return (templates || []).flatMap(t => {
@@ -11642,7 +11673,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     const frases = render(ficha.frases), conclusao = render(ficha.conclusao);
     return { values, scores, errors, frases, conclusao, text: [frases, conclusao].filter(Boolean).join("\n\n") };
   }
-  const api = { formula, matches, defaults, evaluate };
+  const api = { formula, matches, defaults, evaluate, calculationResults };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   if (typeof window === "undefined") return;
   window.leoradEstruturados = api;
@@ -11650,14 +11681,58 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const node = (tag, text = "") => { const el = document.createElement(tag); el.textContent = text; return el; };
   const button = (text, fn) => { const b = node("button", text); b.type = "button"; b.onclick = fn; return b; };
   const fold = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  function resultHtml(text = result.text) {
+    // O caminho das máscaras escapa o texto; retire só essa camada extra das entidades dos valores.
+    return modelSheetHtml({ mask: text, tipo: "parecer" })
+      .replace(/&amp;((?:amp|lt|gt|quot|#39|#123|#125);)/g, "&$1");
+  }
+  function insertInSections() {
+    if ((current.frases?.[0]?.modelo || "").startsWith("{{centro}}")) return false;
+    // Mesmo padrão de secaoConclusao do editor: filhos diretos, cabeçalho normalizado e maior número.
+    const norm = text => text.replace(/\u00a0/g, " ").trim().replace(/:$/, "").trim().toLowerCase();
+    const ps = [...sheet.children], achados = ps.findIndex(p => norm(p.textContent) === "achados");
+    const hi = ps.findIndex(p => norm(p.textContent) === "conclusão");
+    if (achados < 0 || hi <= achados) return false;
+    const heading = p => typeof isHeading === "function" ? isHeading(p.textContent.trim()) :
+      /^(informações clínicas|técnica(?: de exame)?|achados(?: adicionais)?|conclusão)$/.test(norm(p.textContent));
+    if (ps.slice(achados + 1, hi).some(heading)) return false;
+    let end = hi + 1;
+    while (end < ps.length && !heading(ps[end])) end++;
+    const blocks = ps.slice(hi + 1, end), onlyNumber = t => /^\s*\d+\s*[.)]?\s*$/.test(t);
+    const filled = blocks.filter(p => p.textContent.trim() && !onlyNumber(p.textContent));
+    const nums = filled.map(p => Number((p.textContent.trim().match(/^(\d+)\s*[.)]/) || [])[1]) || 0);
+    let next = Math.max(0, ...nums);
+    // Os cabeçalhos pertencem ao laudo aberto; só entram as linhas de conteúdo da ferramenta.
+    const lines = text => text.split("\n").filter(line => {
+      const p = node("div"); p.innerHTML = resultHtml(line);
+      return p.textContent.trim() && !/^(achados|conclusão)$/.test(norm(p.textContent));
+    });
+    const phrases = lines(result.frases), conclusions = lines(result.conclusao);
+    const add = (text, before) => {
+      const box = node("div"); box.innerHTML = resultHtml(text);
+      [...box.childNodes].forEach(p => sheet.insertBefore(p, before));
+    };
+    if (phrases.length) add(phrases.join("\n"), ps[hi]);
+    if (conclusions.length) {
+      const last = filled[filled.length - 1];
+      const after = last ? blocks.slice(blocks.indexOf(last) + 1) : blocks;
+      const target = after.find(p => onlyNumber(p.textContent)) || null;
+      add(conclusions.map(line => `${++next}. ${line.replace(/^\s*\d+\s*[.)]\s*/, "")}`).join("\n"), target || (last ? last.nextSibling : ps[hi].nextSibling));
+      if (target) target.remove();
+    }
+    return true;
+  }
   function refresh() {
     result = evaluate(current, state);
     form.querySelectorAll("[data-field]").forEach(w => { w.hidden = !matches(w._field.mostrarSe, { ...result.values, ...w._context() }); });
-    preview.textContent = result.text;
+    const fullReport = (current.frases || []).some(t => (t.modelo || "").includes("{{centro}}"));
+    preview.innerHTML = fullReport ? resultHtml() : resultHtml(result.frases) + (result.conclusao ?
+      resultHtml("<b><u>Conclusão</u></b>") + resultHtml(result.conclusao) : "");
     status.textContent = result.errors.join("\n");
     insert.disabled = copy.disabled = !!result.errors.length || !result.text.trim();
     const output = form.querySelector("output");
-    output.textContent = (current.calculos || []).map(c => `${c.id}: ${result.values[c.id] ?? "—"}`).join(" · ");
+    output.textContent = calculationResults(current, result.values);
+    output.hidden = !output.textContent;
   }
   function renderFields(list, data, parent, context, path = "") {
     for (const f of list) {
@@ -11705,32 +11780,37 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     const heading = node("h2", "Ferramentas LeoRad"); heading.id = "leoradTitle";
     search = node("input"); search.type = "search"; search.placeholder = "Buscar ferramenta"; search.setAttribute("aria-label", "Buscar ferramenta");
     listing = node("div"); listing.className = "leorad-list";
-    form = node("div"); preview = node("pre"); preview.id = "leoradPreview"; preview.setAttribute("aria-live", "polite");
+    form = node("div"); preview = node("div"); preview.id = "leoradPreview"; preview.setAttribute("aria-live", "polite");
     status = node("p"); status.setAttribute("role", "status");
     insert = button("Inserir no laudo", () => {
       if (!result || insert.disabled) return;
       try {
+        const inSections = insertInSections();
+        if (!inSections) {
         if (savedRange && sheet.contains(savedRange.commonAncestorContainer)) {
           sheetRange = savedRange.cloneRange();
           sheet.focus(); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(savedRange);
         }
-        // O editor do navegador descarta espaços colapsáveis junto ao cursor.
-        // Preserve-os durante a edição, sem mudar o estilo salvo da folha.
-        const whitespace = sheet.style.getPropertyValue("white-space");
-        const priority = sheet.style.getPropertyPriority("white-space");
-        sheet.style.setProperty("white-space", "pre-wrap", "important");
-        try { insertAtCaret(result.text); }
-        finally {
-          if (whitespace) sheet.style.setProperty("white-space", whitespace, priority);
-          else sheet.style.removeProperty("white-space");
+        focusSheet();
+        // As bordas recebem a fusão com o texto junto ao cursor, preservando os parágrafos da máscara.
+        const border = P('<span data-leorad-border="">&#8203;</span>');
+        document.execCommand("insertHTML", false, border + resultHtml() + border);
+        sheet.querySelectorAll("[data-leorad-border]").forEach(marker => {
+          const block = marker.closest("p,div"); marker.remove();
+          if (block && block !== sheet && !block.textContent.trim() && !block.querySelector("img")) block.remove();
+        });
         }
+        scheduleEditVersion();
         updateCount(); updVolHint();
         const sel = getSelection(); if (sel.rangeCount) savedRange = sel.getRangeAt(0).cloneRange();
-        status.textContent = "Inserido no laudo, onde está o cursor.";
+        status.textContent = inSections ? "Inserido nos Achados e na Conclusão do laudo." : "Inserido no laudo, onde está o cursor.";
       } catch (_) { status.textContent = "Não foi possível inserir no laudo."; }
     });
     copy = button("Copiar", async () => {
-      try { await navigator.clipboard.writeText(result.text); status.textContent = "Copiado."; }
+      try {
+        if (!await copyToClipboard(preview.innerText, preview.innerHTML)) throw Error("Falha ao copiar");
+        status.textContent = "Copiado.";
+      }
       catch (_) { status.textContent = "Não foi possível copiar. Selecione a prévia e copie."; }
     });
     insert.disabled = copy.disabled = true;
