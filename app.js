@@ -4473,6 +4473,21 @@ window.tutuSite.appReady = true;
   const footerActions = ui.footerActions = el("div", { class: "v2-footer-actions" });
   move("copiar", footerActions); $("copiar").textContent = "Copiar laudo";
   $("copiar").append(el("kbd", {}, "Ctrl C")); top.append(actions);
+  // Os mesmos controles e listeners nas duas apresentações.
+  ui.actionIcon = (b, label, path) => {
+    const text = el("span", { class: "v2-action-label" });
+    text.append(...b.childNodes); b.append(text);
+    const icon = el("span", { class: "v2-action-icon", "aria-hidden": "true" });
+    if (path) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 24 24");
+      const p = document.createElementNS(svg.namespaceURI, "path"); p.setAttribute("d", path);
+      svg.append(p); icon.append(svg);
+    } else icon.textContent = "Ctrl C";
+    b.append(icon); b.setAttribute("aria-label", label); b.title = b.title || label;
+    return b;
+  };
+  ui.actionIcon($("copiar"), "Copiar laudo · Ctrl C");
   const left = ui.left = el("aside", { id: "v2Left", "aria-label": "Máscaras e histórico" });
   const leftToggle = button("≡", () => ui.toggleLeft(), { id: "leftToggle", "aria-label": "Fixar ou recolher máscaras", "aria-expanded": "true", title: "Máscaras · Ctrl E" });
   const leftBody = el("div", { id: "leftBody" });
@@ -4530,7 +4545,20 @@ window.tutuSite.appReady = true;
   ui.panels.Classificar.append(el("p", { class: "meta" }, "Escolha a ferramenta para preencher os critérios e inserir o resultado na folha."));
   ui.calculator = key => { openModal("calcModal"); showCalc(key); };
   const footer = el("footer", { id: "v2Footer" });
-  $("laudoBox").after(footerActions);   // 17/11/2026 (Artur): logo abaixo do texto do laudo, maiores
+  const sideActions = matchMedia("(min-width:768px)");
+  const placeActions = () => {
+    if (sideActions.matches && !mobile.matches) right.append(footerActions);
+    else $("laudoBox").after(footerActions);
+  };
+  sideActions.addEventListener("change", placeActions);
+  mobile.addEventListener("change", placeActions);
+  placeActions();
+  // A caixa de conversa fica ao lado da coluna, sem interceptar suas ações.
+  const actionColumnSize = new ResizeObserver(() => {
+    const inset = footerActions.parentNode === right ? innerWidth - right.getBoundingClientRect().left : 0;
+    document.body.style.setProperty("--v2-actions-inset", inset + "px");
+  });
+  actionColumnSize.observe(right);
   const settings = $("setModal"); settings.classList.add("v2-settings"); settings.removeAttribute("aria-modal"); settings.setAttribute("role", "region");
   const settingsExtras = el("div", { class: "v2-settings-extras" });
   settings.querySelector(".calc-body").prepend(settingsExtras);
@@ -8534,7 +8562,7 @@ window.tutuSite.appReady = true;
       ev.preventDefault(); enviarPedido();
     }
   });
-  $("copiar").after(button("Audio", abrirDialog, { id: "usgOpen" }));
+  $("copiar").after(ui.actionIcon(button("Audio", abrirDialog, { id: "usgOpen" }), "Áudio", "M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V5ZM5 11v1a7 7 0 0 0 14 0v-1M12 19v3M8 22h8"));
   const temSelecao = () => !!window.getSelection()?.toString() || texto.selectionStart !== texto.selectionEnd;
   const fora = ev => {
     const r = dialog.getBoundingClientRect();
@@ -9149,6 +9177,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
   box.append(cab, linha, msg, acoes, lembrei);
   document.body.append(box);
   const abrirBtn = button("Conversar", () => abrir(box.hidden), { id: "conversaAbrir", title: "Conversar com a IA: pedir ajustes no laudo (voz ou texto)" });
+  ui.actionIcon(abrirBtn, "Conversar com a IA", "M12 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM3 21v-3a6 6 0 0 1 12 0v3M16 5a5 5 0 0 1 0 8M19 2a9 9 0 0 1 0 14");
   const copiar = document.getElementById("copiar");
   if (copiar && copiar.parentNode === ui.footerActions) copiar.after(abrirBtn); else ui.footerActions.append(abrirBtn);
   /* Áudio (celular): depois de abrir um laudo pronto, o botão fecha o Áudio e abre a conversa sobre a folha. */

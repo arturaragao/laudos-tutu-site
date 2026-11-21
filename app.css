@@ -491,6 +491,21 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 .v2-panel .ver-menu { width:100%; position:relative; }
 .tutu-v2 #v2Footer { box-sizing:border-box; grid-area:foot; display:flex; flex-direction:column; align-items:stretch; min-height:48px; gap:5px; padding:5px 10px; border-top:1px solid var(--line); }
 .v2-footer-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; min-width:0; gap:6px; }
+.v2-action-icon { display:none; }
+.v2-action-label { display:contents; }
+#v2Right > .v2-footer-actions { display:flex; flex-direction:column; flex-wrap:nowrap; align-items:stretch; flex-shrink:0; margin-top:auto; }
+#tutuApp.right-mini #v2Right > .v2-footer-actions { display:flex; flex-direction:column; flex-wrap:nowrap; align-items:stretch; flex-shrink:0; margin-top:auto; }
+@media(min-width:768px) {
+  #v2Right { overflow:hidden; min-height:0; }
+  #v2Right > #rightToggle { order:-3; flex-shrink:0; }
+  #v2Right > #rightTabs { order:-2; }
+  #v2Right > .v2-footer-actions { order:1; }
+  #v2Right > .v2-panel { min-height:0; overflow:auto; flex:1 1 auto; }
+}
+#v2Right > .v2-footer-actions button { display:flex; align-items:center; justify-content:center; box-sizing:border-box; width:100%; min-width:0; min-height:40px; padding:5px 2px; font-size:18px; line-height:1; }
+#v2Right > .v2-footer-actions .v2-action-label { display:none; }
+#v2Right > .v2-footer-actions .v2-action-icon { display:block; font-size:11px; font-weight:600; white-space:nowrap; }
+.v2-action-icon svg { display:block; width:22px; height:22px; margin:auto; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
 .v2-footer-actions .v2-banco-selo { min-width:0; max-width:160px; overflow-wrap:anywhere; }
 .v2-shortcuts { display:flex; flex-wrap:wrap; min-width:0; gap:5px; }
 .tutu-v2 #v2Footer button { display:flex; align-items:center; gap:5px; white-space:nowrap; font-size:11px; flex-shrink:0; }
@@ -794,6 +809,9 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 
 /* Conversar com a IA (116-v2-conversar.js): caixa pequena sobre a folha, perto de Copiar */
 #conversaBox { position:fixed; right:16px; bottom:96px; z-index:60; box-sizing:border-box; width:min(440px, calc(100vw - 24px)); display:flex; flex-direction:column; gap:6px; padding:10px 12px; border:1px solid var(--line, #aaa); border-radius:12px; background:var(--paper, #fffaf2); color:var(--text, inherit); box-shadow:0 10px 30px #0003; }
+@media(min-width:768px) {
+  #conversaBox { right:calc(var(--v2-actions-inset, 0px) + 16px); width:min(440px, calc(100vw - var(--v2-actions-inset, 0px) - 24px)); }
+}
 #conversaBox[hidden], #conversaBox [hidden] { display:none !important; }
 #conversaBox .conversa-cab { display:flex; justify-content:space-between; align-items:center; font-size:13px; }
 #conversaBox .conversa-linha { display:flex; gap:6px; align-items:stretch; }
