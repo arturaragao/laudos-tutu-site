@@ -4494,6 +4494,7 @@ window.tutuSite.appReady = true;
   left.append(leftToggle, leftBody);
   leftBody.append(el("input", { id: "maskSearch", type: "search", placeholder: "Buscar máscara…", "aria-label": "Buscar máscara" }));
   move("exams", leftBody);
+  leftBody.append(button("Máscaras LeoRad", () => ui.openMascarasLeoRad(), { id: "mascarasLeoradOpen" }));
   leftBody.append(el("h2", {}, "Hoje / Histórico")); move("histBtn", leftBody);
   leftBody.append(button("Configurações · Ctrl ,", () => ui.settings(true), { id: "settingsOpen" }));
   const leftTools = el("div", { class: "v2-tools" });
@@ -4541,6 +4542,7 @@ window.tutuSite.appReady = true;
     target.append(button(label, () => ui.calculator(key)));
   });
   move("calcBtn", calcs);
+  calcs.append(button("Ferramentas LeoRad", () => window.leoradEstruturados?.open(), { id: "leoradOpen" }));
   ui.panels.Classificar.prepend(el("h2", {}, "Classificações e critérios"));
   ui.panels.Classificar.append(el("p", { class: "meta" }, "Escolha a ferramenta para preencher os critérios e inserir o resultado na folha."));
   ui.calculator = key => { openModal("calcModal"); showCalc(key); };
@@ -11468,4 +11470,404 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   sheet.addEventListener("mouseup", agendar);
 
   ui.sugestoes = { abrir, fechar, atualizar: () => atualizar(true), estado: () => lastResult };
+})();
+
+/* Motor das fichas privadas LeoRad; nenhuma ficha é distribuída com o site. */
+(() => {
+  "use strict";
+  const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const number = v => {
+    if ((typeof v !== "number" && typeof v !== "string") || String(v).trim() === "") throw Error("Preencha os campos numéricos.");
+    const n = Number(String(v).replace(",", "."));
+    if (!Number.isFinite(n)) throw Error("Número inválido.");
+    return n;
+  };
+  // Descida recursiva: só números, identificadores, parênteses e quatro operadores.
+  function formula(source, values) {
+    if (typeof source !== "string" || source.length > 4096) throw Error("Fórmula inválida.");
+    let pos = 0, depth = 0;
+    const space = () => { while (/\s/.test(source[pos] || "") && pos < source.length) pos++; };
+    function atom() {
+      space();
+      if (++depth > 80) throw Error("Fórmula muito profunda.");
+      let result;
+      const c = source[pos];
+      if (c === "+" || c === "-") { pos++; result = (c === "-" ? -1 : 1) * atom(); }
+      else if (c === "(") { pos++; result = sum(); space(); if (source[pos++] !== ")") throw Error("Parênteses inválidos."); }
+      else {
+        const literal = /^(?:\d+(?:\.\d*)?|\.\d+)/.exec(source.slice(pos));
+        const id = /^[A-Za-z_][A-Za-z_0-9]*/.exec(source.slice(pos));
+        if (literal) { pos += literal[0].length; result = Number(literal[0]); }
+        else if (id && own(values, id[0])) { pos += id[0].length; result = number(values[id[0]]); }
+        else throw Error("Fórmula contém identificador ou código inválido.");
+      }
+      depth--; return result;
+    }
+    function product() {
+      let n = atom(); space();
+      while (source[pos] === "*" || source[pos] === "/") {
+        const op = source[pos++], right = atom();
+        n = op === "*" ? n * right : n / right; space();
+      }
+      return n;
+    }
+    function sum() {
+      let n = product(); space();
+      while (source[pos] === "+" || source[pos] === "-") {
+        const op = source[pos++], right = product(); n = op === "+" ? n + right : n - right; space();
+      }
+      return n;
+    }
+    const n = sum(); space();
+    if (pos !== source.length || !Number.isFinite(n)) throw Error("Fórmula inválida ou divisão por zero.");
+    return n;
+  }
+  function matches(rule, values) {
+    if (!rule) return true;
+    const value = values[rule.campo], list = Array.isArray(value) ? value : [value];
+    if (value === undefined) return false;
+    if (own(rule, "igual")) return list.includes(rule.igual);
+    if (own(rule, "diferente")) return !list.includes(rule.diferente);
+    if (Array.isArray(rule.em)) return list.some(v => rule.em.includes(v));
+    return false;
+  }
+  const fields = ficha => (ficha.secoes || []).flatMap(s => s.campos || []);
+  const empty = v => v == null || (typeof v === "string" && !v.trim()) || (Array.isArray(v) && !v.length);
+  function defaults(list) {
+    const out = Object.create(null);
+    for (const f of list) out[f.id] = f.padrao !== undefined ? structuredClone(f.padrao) :
+      f.tipo === "grupo-repetivel" || f.tipo === "multi" ? [] : f.tipo === "check" ? false :
+      f.tipo === "select" ? (f.opcoes?.[0]?.valor ?? "") : "";
+    return out;
+  }
+  function active(list, raw, parent = {}) {
+    const result = Object.assign(Object.create(null), raw);
+    // Ponto fixo para dependências de visibilidade, independentemente da ordem.
+    for (let i = 0; i <= list.length; i++) {
+      let changed = false;
+      for (const f of list) if (own(result, f.id) && !matches(f.mostrarSe, { ...parent, ...result })) {
+        delete result[f.id]; changed = true;
+      }
+      if (!changed) break;
+    }
+    for (const f of list) if (f.tipo === "grupo-repetivel" && own(result, f.id))
+      result[f.id] = result[f.id].map(row => active(f.campos || [], row, { ...parent, ...result }));
+    return result;
+  }
+  function evaluate(ficha, raw) {
+    const list = fields(ficha), values = active(list, raw), scores = Object.create(null), errors = [];
+    const refs = Object.create(null);
+    function collect(fs, data, prefix = "") {
+      for (const f of fs) {
+        if (!own(data, f.id)) continue;
+        if (f.tipo === "grupo-repetivel") { for (const row of data[f.id]) collect(f.campos || [], row, prefix + f.id + "."); continue; }
+        const selected = Array.isArray(data[f.id]) ? data[f.id] : [data[f.id]];
+        const points = selected.reduce((n, v) => n + Number((f.opcoes || []).find(o => o.valor === v)?.pontos || 0), 0);
+        const ref = { value: data[f.id], points };
+        (refs[prefix + f.id] ||= []).push(ref);
+        if (prefix) (refs[f.id] ||= []).push(ref);
+      }
+    }
+    collect(list, values);
+    for (const c of ficha.calculos || []) {
+      delete values[c.id];
+      try {
+        let n;
+        if (c.tipo === "formula") n = formula(c.formula, values);
+        else if (c.tipo === "tabela" && c.faixas?.length) {
+          let value = values[c.entradas?.[0]];
+          if (empty(value)) continue;
+          if (value != null && c.faixas.some(f => typeof f.de === "number" || typeof f.ate === "number")) value = number(value);
+          const faixa = c.faixas.find(f => {
+            if (!own(f, "de") && !own(f, "ate")) return value == null;
+            if (value == null) return false;
+            if (Array.isArray(value)) {
+              const same = bound => Array.isArray(bound) &&
+                value.every(v => bound.includes(v)) && bound.every(v => value.includes(v));
+              return same(f.de) && same(f.ate);
+            }
+            return (f.de == null || value >= f.de) && (f.ate == null || value <= f.ate);
+          });
+          scores[c.id] = value;
+          values[c.id] = faixa ? faixa.resultado : null;
+          continue;
+        } else if (c.tipo === "soma-pontos" || c.tipo === "tabela") {
+          n = (c.entradas || []).reduce((sum, id) => sum + (refs[id] || [{ value: values[id], points: 0 }]).reduce((a, ref) =>
+            a + (c.tipo === "soma-pontos" ? ref.points : number(ref.value)), 0), 0);
+        } else throw Error("Tipo de cálculo desconhecido.");
+        scores[c.id] = n;
+        const faixa = c.faixas?.find(f => (f.de == null || n >= f.de) && (f.ate == null || n <= f.ate));
+        if (c.faixas?.length && !faixa) throw Error("Resultado fora das faixas.");
+        values[c.id] = faixa ? faixa.resultado : n;
+      } catch (e) { errors.push(c.id + ": " + e.message); }
+    }
+    const definitions = new Map();
+    function define(fs) {
+      for (const f of fs) {
+        definitions.set(f.id, f);
+        if (f.campos) define(f.campos);
+      }
+    }
+    define(list);
+    for (const c of ficha.calculos || []) definitions.set(c.id, c);
+    function format(v, id) {
+      if (Array.isArray(v)) return v.map(item => format(item, id)).join(", ");
+      if (v == null) return "";
+      if (typeof v === "object") return Object.values(v).map(item => format(item, id)).join(", ");
+      const def = definitions.get(id);
+      if (typeof v === "number" || (def?.tipo === "numero" && !empty(v))) {
+        const digits = def?.precisao ?? def?.casasDecimais ?? (def?.formula ? 1 : 15);
+        return number(v).toLocaleString("pt-BR", { useGrouping: false, maximumFractionDigits: digits });
+      }
+      return String(v);
+    }
+    function renderModel(model, ctx) {
+      // Cada frase e cada trecho separado por ponto e vírgula é opcional por inteiro.
+      return model.split(/(?<=[.!?])\s+/).map(sentence => {
+        const parts = sentence.split(";").filter(part =>
+          [...part.matchAll(/{{\s*([^{}]+?)\s*}}/g)].every(m => !empty(ctx[m[1]])));
+        let text = parts.map(part => part.trim().replace(/{{\s*([^{}]+?)\s*}}/g, (_, id) => format(ctx[id], id))).join("; ");
+        if (text && /[.!?]$/.test(sentence.trim()) && !/[.!?]$/.test(text)) text += sentence.trim().slice(-1);
+        return text;
+      }).filter(Boolean).join(" ");
+    }
+    function render(templates) {
+      return (templates || []).flatMap(t => {
+        const tokens = [...(t.modelo || "").matchAll(/{{\s*([^{}]+?)\s*}}/g)].map(m => m[1]);
+        const group = list.find(f => f.tipo === "grupo-repetivel" && (f.campos || []).some(child => tokens.includes(child.id) || t.quando?.campo === child.id));
+        const contexts = group ? (values[group.id] || []).map(row => ({ ...values, ...row })) : [values];
+        return contexts.filter(ctx => matches(t.quando, ctx)).map(ctx => renderModel(t.modelo || "", ctx));
+      }).filter(Boolean).join("\n");
+    }
+    const frases = render(ficha.frases), conclusao = render(ficha.conclusao);
+    return { values, scores, errors, frases, conclusao, text: [frases, conclusao].filter(Boolean).join("\n\n") };
+  }
+  const api = { formula, matches, defaults, evaluate };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  if (typeof window === "undefined") return;
+  window.leoradEstruturados = api;
+  let dialog, search, listing, form, preview, status, insert, copy, current, state, result, request = 0, savedRange;
+  const node = (tag, text = "") => { const el = document.createElement(tag); el.textContent = text; return el; };
+  const button = (text, fn) => { const b = node("button", text); b.type = "button"; b.onclick = fn; return b; };
+  const fold = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  function refresh() {
+    result = evaluate(current, state);
+    form.querySelectorAll("[data-field]").forEach(w => { w.hidden = !matches(w._field.mostrarSe, { ...result.values, ...w._context() }); });
+    preview.textContent = result.text;
+    status.textContent = result.errors.join("\n");
+    insert.disabled = copy.disabled = !!result.errors.length || !result.text.trim();
+    const output = form.querySelector("output");
+    output.textContent = (current.calculos || []).map(c => `${c.id}: ${result.values[c.id] ?? "—"}`).join(" · ");
+  }
+  function renderFields(list, data, parent, context, path = "") {
+    for (const f of list) {
+      const w = node("div"); w.dataset.field = path + f.id; w._field = f; w._context = context;
+      const label = node("label", f.rotulo || f.id); w.append(label); parent.append(w);
+      if (f.tipo === "grupo-repetivel") {
+        const rows = node("div"); w.append(rows);
+        function draw() {
+          rows.replaceChildren();
+          data[f.id].forEach((row, i) => {
+            const box = node("fieldset"), legend = node("legend", `${f.rotulo || f.id} ${i + 1}`);
+            box.append(legend); rows.append(box);
+            renderFields(f.campos || [], row, box, () => active(f.campos || [], row, context()), path + f.id + "." + i + ".");
+            box.append(button("− Remover", () => { data[f.id].splice(i, 1); draw(); refresh(); }));
+          });
+        }
+        w.append(button("+ Adicionar", () => { data[f.id].push(defaults(f.campos || [])); draw(); refresh(); })); draw(); continue;
+      }
+      const input = node(f.tipo === "select" || f.tipo === "multi" ? "select" : "input");
+      input.id = "leorad-" + path + f.id; label.htmlFor = input.id;
+      if (f.tipo === "select" || f.tipo === "multi") {
+        input.multiple = f.tipo === "multi";
+        for (const [i, o] of (f.opcoes || []).entries()) {
+          const option = node("option", o.rotulo ?? String(o.valor)); option.value = String(i);
+          option.selected = input.multiple ? data[f.id].includes(o.valor) : data[f.id] === o.valor;
+          input.append(option);
+        }
+      } else {
+        input.type = f.tipo === "numero" ? "number" : f.tipo === "check" ? "checkbox" : "text";
+        if (input.type === "number") input.step = "any";
+        if (input.type === "checkbox") input.checked = !!data[f.id]; else input.value = data[f.id];
+      }
+      const change = () => {
+        data[f.id] = f.tipo === "multi" ? [...input.selectedOptions].map(o => f.opcoes[Number(o.value)].valor) :
+          f.tipo === "select" ? f.opcoes[Number(input.value)]?.valor : f.tipo === "check" ? input.checked :
+          f.tipo === "numero" && input.value !== "" ? Number(input.value) : input.value;
+        refresh();
+      };
+      input.oninput = input.onchange = change; w.append(input);
+      if (f.unidade) w.append(node("small", f.unidade));
+    }
+  }
+  function init() {
+    dialog = node("dialog"); dialog.id = "leoradDialog"; dialog.setAttribute("aria-labelledby", "leoradTitle");
+    const heading = node("h2", "Ferramentas LeoRad"); heading.id = "leoradTitle";
+    search = node("input"); search.type = "search"; search.placeholder = "Buscar ferramenta"; search.setAttribute("aria-label", "Buscar ferramenta");
+    listing = node("div"); listing.className = "leorad-list";
+    form = node("div"); preview = node("pre"); preview.id = "leoradPreview"; preview.setAttribute("aria-live", "polite");
+    status = node("p"); status.setAttribute("role", "status");
+    insert = button("Inserir no laudo", () => {
+      if (!result || insert.disabled) return;
+      try {
+        if (savedRange && sheet.contains(savedRange.commonAncestorContainer)) {
+          sheetRange = savedRange.cloneRange();
+          sheet.focus(); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(savedRange);
+        }
+        // O editor do navegador descarta espaços colapsáveis junto ao cursor.
+        // Preserve-os durante a edição, sem mudar o estilo salvo da folha.
+        const whitespace = sheet.style.getPropertyValue("white-space");
+        const priority = sheet.style.getPropertyPriority("white-space");
+        sheet.style.setProperty("white-space", "pre-wrap", "important");
+        try { insertAtCaret(result.text); }
+        finally {
+          if (whitespace) sheet.style.setProperty("white-space", whitespace, priority);
+          else sheet.style.removeProperty("white-space");
+        }
+        updateCount(); updVolHint();
+        const sel = getSelection(); if (sel.rangeCount) savedRange = sel.getRangeAt(0).cloneRange();
+        status.textContent = "Inserido no laudo, onde está o cursor.";
+      } catch (_) { status.textContent = "Não foi possível inserir no laudo."; }
+    });
+    copy = button("Copiar", async () => {
+      try { await navigator.clipboard.writeText(result.text); status.textContent = "Copiado."; }
+      catch (_) { status.textContent = "Não foi possível copiar. Selecione a prévia e copie."; }
+    });
+    insert.disabled = copy.disabled = true;
+    const actions = node("div"); actions.className = "leorad-actions"; actions.append(insert, copy);
+    dialog.append(heading, button("Fechar", () => { request++; dialog.close(); }), search, listing, form, preview, actions, status);
+    dialog.addEventListener("cancel", () => { request++; });
+    document.body.append(dialog);
+  }
+  api.open = async () => {
+    const sel = getSelection();
+    savedRange = sel.rangeCount && sheet.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.getRangeAt(0).cloneRange() : null;
+    if (!dialog) init();
+    if (!dialog.open) dialog.show();
+    const seq = ++request, G = window.tutuSite?.gh;
+    current = null; result = null; form.replaceChildren(); preview.textContent = ""; listing.replaceChildren();
+    insert.disabled = copy.disabled = true;
+    status.textContent = "Carregando ferramentas…";
+    if (!G?.token) { status.textContent = "Configure a sincronização para acessar as ferramentas LeoRad."; return; }
+    try {
+      const response = await G.getJson("leorad/estruturados/indice.json");
+      if (seq !== request) return;
+      const index = response?.json ?? response;
+      if (!Array.isArray(index)) throw Error("Índice de ferramentas ausente ou inválido.");
+      status.textContent = "";
+      function list() {
+        listing.replaceChildren();
+        for (const item of index.filter(i => fold([i.titulo, i.modalidade, i.grupo].join(" ")).includes(fold(search.value)))) {
+          listing.append(button(item.titulo, async () => {
+            const load = ++request;
+            form.replaceChildren(); preview.textContent = ""; insert.disabled = copy.disabled = true;
+            status.textContent = "Carregando ficha…";
+            try {
+              if (!/^[a-zA-Z0-9_-]+$/.test(item.id)) throw Error("Identificador de ficha inválido.");
+              const r = await G.getJson(`leorad/estruturados/${item.id}.json`);
+              if (load !== request) return;
+              const ficha = r?.json ?? r;
+              if (!ficha || !Array.isArray(ficha.secoes)) throw Error("Ficha ausente ou inválida.");
+              current = ficha; state = defaults(fields(current));
+              form.append(node("h3", current.titulo));
+              for (const section of current.secoes) {
+                const box = node("fieldset"); box.append(node("legend", section.titulo || "")); form.append(box);
+                renderFields(section.campos || [], state, box, () => active(fields(current), state));
+              }
+              form.append(node("output")); refresh();
+            } catch (e) { if (load === request) status.textContent = e.message; }
+          }));
+        }
+        if (!listing.childElementCount) listing.append(node("p", "Nenhuma ferramenta encontrada."));
+      }
+      search.oninput = list; list(); search.focus();
+    } catch (e) { if (seq === request) status.textContent = e.message; }
+  };
+})();
+
+/* Catálogo privado LeoRad: carregamento sob demanda, somente em memória. */
+(() => {
+  "use strict";
+  const ui = window.tutuV2;
+  if (!ui) return;
+  let cache = null, pending = null, generation = 0;
+  const dialog = ui.el("dialog", { id: "mascarasLeoradDialog", "aria-labelledby": "mascarasLeoradTitle" });
+  const search = ui.el("input", { id: "mascarasLeoradSearch", type: "search", placeholder: "Buscar nome ou gatilho…", "aria-label": "Buscar no LeoRad" });
+  const status = ui.el("p", { role: "status" });
+  const list = ui.el("div", { id: "mascarasLeoradList" });
+  dialog.append(ui.el("h2", { id: "mascarasLeoradTitle" }, "Máscaras LeoRad"),
+    ui.button("Fechar", () => dialog.close()), search, status, list);
+  dialog.addEventListener("keydown", event => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    dialog.close();
+  });
+  document.body.append(dialog);
+  const G = () => window.tutuSite?.gh;
+  const plain = text => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const idOf = item => "leorad-" + encodeURIComponent(JSON.stringify([item.conjunto, item.id]));
+  function render() {
+    list.replaceChildren();
+    const q = fold(search.value.trim());
+    const groups = new Map();
+    for (const item of cache || []) {
+      if (q && !fold(item.nome + " " + (item.gatilho || "")).includes(q)) continue;
+      const key = JSON.stringify([item.grupo, item.conjunto]);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    status.textContent = groups.size ? "" : "Nenhuma máscara encontrada.";
+    for (const items of groups.values()) {
+      const group = ui.el("section", { class: "leorad-group" });
+      group.append(ui.el("h3", {}, (items[0].grupo || "Sem grupo") + " · " + items[0].conjunto));
+      for (const item of items) {
+        const card = ui.el("article", { class: "leorad-card" });
+        const preview = ui.el("details");
+        preview.append(ui.el("summary", {}, "Prévia do texto"), ui.el("pre", {}, item.texto));
+        card.append(ui.el("h4", {}, item.nome), ui.el("p", {}, [item.gatilho, item.atalho].filter(Boolean).join(" · ")), preview);
+        card.append(ui.button("Usar no laudo", () => {
+          const id = idOf(item);
+          if (!EXAMS.some(ex => ex.id === id)) EXAMS.push({ id, name: item.nome, code: autoCode(item.nome), proto: "LeoRad", mask: plain(item.texto), voz: [], groups: [], mine: true, custom: true, tipo: "laudo" });
+          renderExams(); selectTab("laudo"); selectExam(id, true); dialog.close();
+        }));
+        card.append(ui.button("Copiar texto", async () => {
+          try { await navigator.clipboard.writeText(item.texto); status.textContent = "Texto copiado."; }
+          catch (_) { status.textContent = "Não foi possível copiar. Selecione o texto na prévia."; }
+        }));
+        if (typeof loadMask === "function") card.append(ui.button("Salvar nas minhas máscaras", () => {
+          dialog.close(); openModal("mascModal"); loadMask(null);
+          $("mNome").value = item.nome; $("mVoz").value = item.gatilho || "";
+          $("mTexto").innerHTML = textToEditable(plain(item.texto));
+          $("mNome").focus();
+        }));
+        group.append(card);
+      }
+      list.append(group);
+    }
+  }
+  search.oninput = () => { if (G()?.token && cache) render(); };
+  // A troca de chave invalida inclusive respostas que ainda estiverem em trânsito.
+  window.tutuSite?.onChave?.(() => { cache = pending = null; generation++; list.replaceChildren(); });
+  ui.openMascarasLeoRad = async () => {
+    if (!dialog.open) dialog.showModal();
+    search.focus();
+    const g = G();
+    if (!g?.token) { list.replaceChildren(); status.textContent = "Configure sua chave nas configurações para acessar as máscaras LeoRad."; return; }
+    if (cache) { render(); return; }
+    status.textContent = "Carregando máscaras…";
+    const version = generation, token = g.token;
+    try {
+      if (!pending) pending = g.getJson("leorad/mascaras.json").then(result => {
+        const data = result?.json;
+        if (data?.versao !== 1 || !Array.isArray(data.itens) || data.itens.some(item => !item || typeof item.id !== "string" || typeof item.nome !== "string" || typeof item.texto !== "string")) throw new Error("formato");
+        return data.itens;
+      });
+      const items = await pending;
+      if (version !== generation || token !== G()?.token) return;
+      cache = items; render();
+    } catch (_) {
+      if (version === generation) { pending = null; status.textContent = "Não foi possível carregar as máscaras LeoRad. Feche e tente novamente."; }
+    }
+  };
 })();

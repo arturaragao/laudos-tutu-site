@@ -912,7 +912,27 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 #sugArvore .sug-cnt, #sugArvore .sug-freq { flex:0 0 auto; font-style:normal; font-size:11px; color:var(--muted); white-space:nowrap; }
 #sugArvore .sug-vazio { margin:8px 2px; font-size:12px; color:var(--muted); }
 .sug-dica { margin:2px 0 0; font-size:11px; color:var(--muted); }
+#mascarasLeoradDialog { width:min(760px, calc(100vw - 32px)); max-height:85vh; overflow:auto; color:var(--text); background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px; }
+#mascarasLeoradDialog::backdrop { background:rgb(0 0 0 / .35); }
+#mascarasLeoradSearch { width:100%; margin-top:12px; }
+.leorad-card { border-top:1px solid var(--line); padding:12px 0; }
+.leorad-card h4, .leorad-card p { margin:4px 0; }
+.leorad-card pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+.leorad-card button { margin:8px 6px 0 0; }
 /* Direct no PC: estado visível sem bloquear a edição da folha. */
 .audio-montando { padding: .65rem 1rem; color: var(--accent, #2563eb); animation: audio-montando 1.6s ease-in-out infinite; }
 @keyframes audio-montando { 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { .audio-montando { animation: none; } }
+/* Fichas privadas LeoRad. */
+#leoradDialog { position:fixed; inset:5vh 0 auto; z-index:10000; width:min(820px, calc(100vw - 24px)); max-height:85dvh; overflow:auto; padding:20px; border:1px solid var(--border, #d0d7de); border-radius:10px; background:var(--bg, #fff); color:var(--text, #1f2328); box-shadow:0 10px 40px #0004; }
+#leoradDialog::backdrop { background:#0005; }
+#leoradDialog h2 { margin-top:0; }
+#leoradDialog fieldset { min-width:0; border:1px solid var(--border, #d0d7de); border-radius:8px; margin:12px 0; padding:14px; }
+#leoradDialog [data-field] { margin:10px 0; }
+#leoradDialog label { display:block; margin-bottom:4px; }
+#leoradDialog input:not([type=checkbox]), #leoradDialog select { width:100%; padding:8px; font:inherit; }
+#leoradDialog button { padding:8px 12px; cursor:pointer; }
+#leoradDialog button:disabled { cursor:default; opacity:.5; }
+#leoradDialog .leorad-list, #leoradDialog .leorad-actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+#leoradPreview { white-space:pre-wrap; overflow-wrap:anywhere; border:1px dashed var(--border, #d0d7de); border-radius:8px; padding:14px; font:inherit; }
+#leoradDialog output { display:block; font-weight:600; }
