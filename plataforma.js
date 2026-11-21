@@ -136,7 +136,8 @@
       // /ia2: Antigravity (Gemini) com o Claude de reserva; ponte antiga (sem /ia2, 404) cai na /ia (só Claude).
       const pedir = rota => fetch("http://127.0.0.1:47831/" + rota, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ texto, modelTier: options.modelTier || "balanced" }), signal: controller.signal
+        body: JSON.stringify({ texto, modelTier: options.modelTier || "balanced",
+          ...(rota === "ia2" && options.modo === "delta" ? { modo: "delta", laudo: options.laudo } : {}) }), signal: controller.signal
       });
       let response = await pedir("ia2");
       if (response.status === 404) response = await pedir("ia");
@@ -162,7 +163,7 @@
       options.onText?.({ text });
       const motor = result.motor || "claude";
       sample.ultimo = { motor, modelo: result.modelo || "", aviso: result.aviso || "" };
-      return { text, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "" };
+      return { text, modo: result.modo, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "" };
     }catch(e){
       if (options.signal?.aborted){
         const err = new Error("Pedido cancelado.");

@@ -9309,9 +9309,15 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     } finally { await apagarFila(caminho); }
   }
   /* Com a ponte: nada muda (local, sem GitHub). Sem ponte (ou sem sample): fila. */
-  async function pedirIA(prompt, signal, montarAnonimo) {
+  async function pedirIA(prompt, signal, montarAnonimo, delta) {
     if (typeof sample === "function" && sample) {
-      try { return await sample(prompt, { signal, cache: false, modelTier: "balanced" }); }
+      try {
+        if (delta) {
+          try { return await sample(prompt, { signal, cache: false, modelTier: "balanced", modo: "delta", laudo: delta }); }
+          catch (e) { if (signal.aborted || e?.name === "AbortError") throw e; }
+        }
+        return await sample(prompt, { signal, cache: false, modelTier: "balanced" });
+      }
       catch (e) { if (e?.code !== "ponte_indisponivel") throw e; }
     }
     return viaFila(montarAnonimo, signal);
@@ -9329,21 +9335,27 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     const num = C.numerar(draft);
     genLines = num.linhas;   // applyDiff (30-claude-gerar.js) lê estas linhas
     const prompt = C.montarPrompt({ exame: nameAll(), regras: rulesBlock(), numerado: num.texto, pedido });
+    const D = window.TutuDelta;
+    const baseDelta = D?.habilitar(draft, pedido) ? D.capturar(sheet, draft, serEditable) : null;
     busy = true; enviar.disabled = true; acoes.hidden = true; lockSheet(true); ctlConversa = new AbortController();
     dizer("Enviando à IA…");
     const t0 = performance.now();
     try {
-      const r = await pedirIA(prompt, ctlConversa.signal, () => C.montarPrompt({ exame: nameAll(), regras: rulesBlock(), numerado: C.numerar(draft, anon).texto, pedido: anon(pedido) }));
+      const anonimo = () => C.montarPrompt({ exame: nameAll(), regras: rulesBlock(), numerado: C.numerar(draft, anon).texto, pedido: anon(pedido) });
+      let r = await pedirIA(prompt, ctlConversa.signal, anonimo, baseDelta ? draft : null);
+      let patch = r?.modo === "delta" && baseDelta ? D.aplicar(draft, r.text) : null;
+      if (r?.modo === "delta" && !patch) r = await pedirIA(prompt, ctlConversa.signal, anonimo);
       const motor = r?.motor === "antigravity" ? "Antigravity" : "Claude", secs = ((performance.now() - t0) / 1000).toFixed(0);
       const { regra, resto } = C.extrairRegra(r?.text || "");
       lockSheet(false);
       if (laudoTagged() !== draft) { dizer("A folha mudou enquanto a IA respondia: nada foi aplicado. Envie de novo."); return; }
       genLines = num.linhas;
-      const novo = /^\s*ok\.?\s*$/i.test(resto.trim()) ? draft : applyDiff(resto);
+      const novo = patch ? patch.texto : /^\s*ok\.?\s*$/i.test(resto.trim()) ? draft : applyDiff(resto);
       if (novo === null) { dizer(`A resposta (${motor}) veio fora do formato; o laudo ficou como estava. Tente de novo.`); return; }
       if (novo !== draft) {
         pushVersion("Antes da correção");   // "Desfazer IA" (undoAllClaude) volta até aqui
-        sheet.innerHTML = diffLaudoHtml(draft, novo);
+        if (patch) { if (!D.aplicarDOM(baseDelta, patch)) return; }
+        else sheet.innerHTML = diffLaudoHtml(draft, novo);
         pushVersion("Ajustado na conversa (" + motor + ")");
         ui.registrarIA?.(laudoTagged(), draft);   // última versão da IA: ao copiar vira ia/correcoes e regra automática de voz (114)
         renderAlerts(); updateCount(); scheduleCaseSave();
@@ -12411,3 +12423,100 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   root.TutuFonetica = api;
   if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof window === "object" ? window : globalThis);
+
+/* Delta: índices de 1 a N referem-se sempre ao laudo original, inclusive linhas vazias.
+   I 0 insere no início; M N>K move N para depois da linha original K (0 = início).
+   Operações incompatíveis sobre a mesma origem rejeitam a resposta inteira. */
+(function (root) {
+  "use strict";
+  function aplicar(original, patch) {
+    if (typeof original !== "string" || typeof patch !== "string") return null;
+    const linhas = original.split("\n"), ops = [], usados = new Set();
+    const entradas = linhas.map((texto, i) => ({ texto, origem: i + 1 }));
+    const inserir = new Map(), mudar = new Map();
+    const add = (n, item) => { if (!inserir.has(n)) inserir.set(n, []); inserir.get(n).push(item); };
+    for (const linha of patch.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n")) {
+      const m = linha.match(/^([RI]) (0|[1-9][0-9]*)\| ?(.*)$/) ||
+        linha.match(/^(D) ([1-9][0-9]*)$/) || linha.match(/^(M) ([1-9][0-9]*)>(0|[1-9][0-9]*)$/);
+      if (!m) return null;
+      const tipo = m[1], n = Number(m[2]), destino = tipo === "M" ? Number(m[3]) : null;
+      if (!Number.isSafeInteger(n) || n > linhas.length || (tipo !== "I" && n < 1) ||
+          (tipo === "M" && (!Number.isSafeInteger(destino) || destino > linhas.length || destino === n))) return null;
+      if (tipo !== "I") { if (usados.has(n)) return null; usados.add(n); }
+      const op = { tipo, n, texto: /[RI]/.test(tipo) ? m[3] : undefined, destino };
+      ops.push(op);
+      if (tipo === "I") add(n, { texto: op.texto, origem: null });
+      else if (tipo === "M") { mudar.set(n, null); add(destino, entradas[n - 1]); }
+      else mudar.set(n, tipo === "D" ? null : { texto: op.texto, origem: n });
+    }
+    // Inserções na fronteira N precedem a edição de N; assim os índices nunca se deslocam.
+    const out = entradas.slice();
+    for (let n = linhas.length; n >= 0; n--) {
+      if (inserir.has(n)) out.splice(n, 0, ...inserir.get(n));
+      if (mudar.has(n)) out.splice(n - 1, 1, ...(mudar.get(n) ? [mudar.get(n)] : []));
+    }
+    return { texto: out.map(e => e.texto).join("\n"), entradas: out, ops };
+  }
+  function habilitar(laudo, pedido) {
+    return laudo.split("\n").length > 40 &&
+      !/\b(?:sempre|nunca|pr[oó]xim\w*|prefiro|gostei)\b/i.test(pedido) &&
+      !/\b(?:(?:novo|outro)\s+laudo|laudo\s+novo|do\s+zero|reescrev\w*\s+(?:todo|tudo)|refa[çc]\w*\s+(?:todo|tudo))\b/i.test(pedido);
+  }
+  /* Mapeamento conservador: um bloco por linha. Estruturas compostas seguem o fluxo usual.
+     Nenhum bloco é normalizado: os nós intactos permanecem os mesmos, com todos os atributos. */
+  function capturar(folha, laudo, serializar) {
+    const nos = [], linhas = [];
+    for (const node of folha.childNodes) {
+      if (node.nodeType === 3 && !node.textContent.trim()) continue;
+      if (node.nodeType !== 1 || !/^(P|DIV)$/.test(node.nodeName) ||
+          node.matches(".rmline") || node.querySelector("p,div,ul,ol,li,del.rm")) return null;
+      const box = folha.ownerDocument.createElement("div"); box.append(node.cloneNode(true));
+      const raw = serializar(box);
+      if (raw.includes("\n")) return null;
+      nos.push(node); linhas.push(raw);
+    }
+    while (linhas.length && !linhas[0]) { linhas.shift(); nos.shift(); }
+    while (linhas.length && !linhas[linhas.length - 1]) { linhas.pop(); nos.pop(); }
+    return linhas.join("\n") === laudo ? { folha, nos, linhas, html: folha.innerHTML } : null;
+  }
+  function aplicarDOM(base, resultado) {
+    if (!base || base.folha.innerHTML !== base.html) return false;
+    const inserir = new Map(), mudar = new Map();
+    const add = (n, node) => { if (!inserir.has(n)) inserir.set(n, []); inserir.get(n).push(node); };
+    const novo = texto => {
+      const box = base.folha.ownerDocument.createElement("div"); box.innerHTML = textToEditable(texto);
+      return box.firstElementChild;
+    };
+    // Prepara todos os nós antes de tocar na folha.
+    for (const op of resultado.ops) {
+      const velho = base.nos[op.n - 1], raw = base.linhas[op.n - 1];
+      if (op.tipo === "R") {
+        if (raw === op.texto) continue;
+        const node = velho.cloneNode(false);
+        node.innerHTML = wordDiffHtml(splitAlign(raw).t, splitAlign(op.texto).t) || "<br>";
+        mudar.set(op.n, node);
+      } else if (op.tipo === "I") {
+        const node = novo(op.texto); node.innerHTML = insEl(splitAlign(op.texto).t, ++editSeq) || "<br>";
+        add(op.n, node);
+      } else {
+        const id = ++editSeq, removido = base.folha.ownerDocument.createElement("p");
+        removido.className = "rmline"; removido.innerHTML = delEl(splitAlign(raw).t, id);
+        mudar.set(op.n, removido);
+        if (op.tipo === "M") {
+          const node = velho.cloneNode(true), mark = base.folha.ownerDocument.createElement("span");
+          mark.className = "chg"; mark.dataset.e = id;
+          mark.append(...node.childNodes); node.append(mark); add(op.destino, node);
+        }
+      }
+    }
+    for (let n = base.nos.length; n >= 0; n--) {
+      const anchor = n ? base.nos[n - 1].nextSibling : (mudar.get(1) || base.nos[0]);
+      for (const node of inserir.get(n) || []) base.folha.insertBefore(node, anchor);
+      if (mudar.has(n)) base.nos[n - 1].replaceWith(mudar.get(n));
+    }
+    return true;
+  }
+  const api = { aplicar, habilitar, capturar, aplicarDOM };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TutuDelta = api;
+})(globalThis);
