@@ -4531,8 +4531,6 @@ window.tutuSite.appReady = true;
   ui.calculator = key => { openModal("calcModal"); showCalc(key); };
   const footer = el("footer", { id: "v2Footer" });
   $("laudoBox").after(footerActions);   // 17/11/2026 (Artur): logo abaixo do texto do laudo, maiores
-  const voice = el("div", { id: "voicePill", role: "status", "aria-live": "polite" });
-  voice.append(el("span", { id: "voiceDot", "aria-hidden": "true" }, "●"), el("span", { id: "voiceLabel" }, "Voz · Alt S"), button("F1 · Ditar", () => ui.dictate(), { id: "voiceToggle" }));
   const settings = $("setModal"); settings.classList.add("v2-settings"); settings.removeAttribute("aria-modal"); settings.setAttribute("role", "region");
   const settingsExtras = el("div", { class: "v2-settings-extras" });
   settings.querySelector(".calc-body").prepend(settingsExtras);
@@ -4550,11 +4548,8 @@ window.tutuSite.appReady = true;
   hosts.append($("grid"), $("sideRail")); other.append(hosts);
   settings.querySelector(".calc-body").append(other);
   app.replaceChildren(top, left, center, right, footer, settings);
-  document.body.append(voice);
-  // O rodapé cresce quando os atalhos quebram; a pílula fica sempre acima dele.
   const footerSize = new ResizeObserver(() => {
     const height = Math.ceil(footer.getBoundingClientRect().height) + "px";
-    voice.style.setProperty("--v2-footer-height", height);
     app.style.setProperty("--v2-footer-height", height);
   });
   footerSize.observe(footer);
@@ -4672,7 +4667,7 @@ window.tutuSite.appReady = true;
     const z = +$("setZoom").value; store.set("zoom", String(z));
     store.set("v2SheetSize", String(11 * z / 100)); ui.setScreenSize(0); $("zoomVal").textContent = z + "%";
   };
-  $("setDict").oninput = () => { store.set("dictSize", $("setDict").value); $("dictVal").textContent = $("setDict").value + " px"; $("voicePill").style.fontSize = $("setDict").value + "px"; };
+  $("setDict").oninput = () => { store.set("dictSize", $("setDict").value); $("dictVal").textContent = $("setDict").value + " px"; const vp = $("voicePill"); if (vp) vp.style.fontSize = $("setDict").value + "px"; };
   const dictLabel = $("setDict").closest("label");
   if (dictLabel.firstChild?.nodeType === 3) dictLabel.firstChild.textContent = "Letra da pílula de voz ";
   const originalBox = applyBox;
@@ -4723,7 +4718,7 @@ window.tutuSite.appReady = true;
     return { id: active || caseId || newId(), examId: current.id, exam: clone(current), extraExams: clone(extras),
       html: cleanHTML(), modelSig, versions: clone(versions), verPtr, lastGenerated, lastGenTagged, checkedHash,
       confItems: clone(confItems), sexo, copied: caseCopied, started: caseStart || stamp(), updated: stamp(),
-      edited: !modelIntact() || caseCopied,   // máscara intacta e não copiada = não entra no histórico
+      edited: (typeof sheetHasContent === "function" ? sheetHasContent() && !modelIntact() : !modelIntact()) || caseCopied,   // máscara intacta ou folha vazia e não copiada = não entra no histórico
       caret: caret(), scroll: ui.center.scrollTop, chatTurns: clone(chatTurns), chatHTML: $("chat").innerHTML,
       question: $("pergunta").value, compData: $("compData").value, compTexto: $("compTexto").value,
       review: $("reviewBody").innerHTML, localReview: !!$("confClaude"), status: $("status").textContent };
@@ -4809,7 +4804,7 @@ window.tutuSite.appReady = true;
       $("reviewBody").innerHTML = t.review;
       if ($("confClaude")) { $("confClaude").disabled = !sample; $("confClaude").onclick = () => conferir(); }
     } else if (confItems.length) renderConf(); else if (t.review) $("reviewBody").innerHTML = t.review;
-    setStatus(t.status || "Caso recuperado.");
+    setStatus(t.status || (t.examId ? "Caso recuperado." : "Novo caso em branco."));
     if (t.caret) sheetRange = rangeFromOffsets(sheet, t.caret[0], t.caret[1]);
     ui.settings(false); if (focus) focusSheet();
     ui.center.scrollTop = t.scroll || 0;
@@ -4822,12 +4817,27 @@ window.tutuSite.appReady = true;
     ui.closePalette?.(); persist(); load(target); persist();
   };
   ui.cycleTabs = delta => { const index = tabs.findIndex(t => t.id === active); if (tabs.length) ui.switchTab(tabs[(index + delta + tabs.length) % tabs.length].id); };
-  ui.newTab = (examId = current.id) => {
+  ui.newTab = (examId = null) => {
     if (restoring || !canSwitch()) return;
+    if (!examId) {
+      persist();
+      const t = { id: newId(), examId: "", exam: { id: "", name: "Em branco" }, html: "", started: stamp(), versions: [], extraExams: [] };
+      tabs.push(t); load(t); modelSig = ""; persist();
+      return;
+    }
     const ex = EXAMS.find(e => e.id === examId); if (!ex) return;
     persist();
     const t = { id: newId(), examId: ex.id, exam: clone(ex), html: modelSheetHtml(ex), started: stamp(), versions: [], extraExams: [] };
     tabs.push(t); load(t); modelSig = laudoTagged(); pushVersion("Modelo"); persist();
+  };
+  ui.audioTarget = ex => {
+    if (restoring || !canSwitch()) return false;
+    if (sheetHasContent() && !modelIntact()) { ui.newTab(ex.id); return true; }
+    if (current.id === ex.id && modelIntact()) return true;
+    persist();
+    const t = { id: active, examId: ex.id, exam: clone(ex), html: modelSheetHtml(ex), started: stamp(), versions: [], extraExams: [] };
+    load(t); modelSig = laudoTagged(); pushVersion("Modelo"); persist();
+    return true;
   };
   ui.closeCurrent = () => {
     if (!canSwitch()) return;
@@ -4848,7 +4858,7 @@ window.tutuSite.appReady = true;
     ui.newTab(id);
   };
   openMaskAsNew = ex => ui.newTab(ex.id);
-  $("limpar").onclick = () => ui.newTab();
+  $("limpar").onclick = () => ui.newTab(current.id || null);
   ui.openCase = item => {
     if (!canSwitch()) return;
     const id = item.legado ? newId() : item.id;
@@ -5034,17 +5044,19 @@ window.tutuSite.appReady = true;
     close(); focusSheet();
     // A extensão atual já escuta Alt+S na página (toggleKey); não requer alteração nela.
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", code: "KeyS", altKey: true, bubbles: true, cancelable: true }));
-    $("voiceLabel").textContent = "Comando enviado · Alt S";
+    const vl = $("voiceLabel"); if (vl) vl.textContent = "Comando enviado · Alt S";
   };
   let voiceTimer;
   function voiceActivity(label, recording = true) {
     ui.voiceCase = recording ? ui.activeId() : null;
-    $("voicePill").classList.toggle("recording", recording);
-    $("voiceLabel").textContent = label; ui.renderTabs();
+    const vp = $("voicePill"), vl = $("voiceLabel");
+    if (vp) vp.classList.toggle("recording", recording);
+    if (vl) vl.textContent = label;
+    ui.renderTabs();
     clearTimeout(voiceTimer);
     // A extensão antiga não publica o estado do microfone para a página.
     // A bolinha indica atividade recebida, nunca um estado permanente presumido.
-    if (recording) voiceTimer = setTimeout(() => { ui.voiceCase = null; $("voicePill").classList.remove("recording"); $("voiceLabel").textContent = "Voz · aguardando atividade"; ui.renderTabs(); }, 2200);
+    if (recording) voiceTimer = setTimeout(() => { ui.voiceCase = null; const p = $("voicePill"), l = $("voiceLabel"); if (p) p.classList.remove("recording"); if (l) l.textContent = "Voz · aguardando atividade"; ui.renderTabs(); }, 2200);
   }
   document.addEventListener("laudos-voz", e => {
     let d; try { d = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return; }
@@ -5069,7 +5081,8 @@ window.tutuSite.appReady = true;
     if (capturing) return;
     const k = e.key.toLowerCase();
     let action = null;
-    if (e.ctrlKey && !e.altKey && k === "k") action = () => ui.openPalette();
+    if (e.altKey && !e.ctrlKey && !e.shiftKey && k === "a" && !ui.isMobile()) action = () => ui.openAudio?.();
+    else if (e.ctrlKey && !e.altKey && k === "k") action = () => ui.openPalette();
     else if (e.ctrlKey && e.shiftKey && !e.altKey && k === "j") action = () => ui.openHUD();
     else if (!pal.hidden && ["escape", "enter", "tab", "arrowdown", "arrowup"].includes(k) && !(k === "tab" && (e.ctrlKey || e.altKey))) action = () => {
       if (k === "escape") close(); else if (k === "enter" || k === "tab") execute(selected);
@@ -5782,15 +5795,19 @@ window.tutuSite.appReady = true;
 
   /* ---------- estado do microfone ---------- */
   const nivelBox = el("span", { id: "v3Nivel", "aria-hidden": "true" }); nivelBox.append(el("i"));
-  $("voiceLabel").after(nivelBox);
+  const voiceLabel = $("voiceLabel");
+  if (voiceLabel) voiceLabel.after(nivelBox);
   document.addEventListener("laudos-mic", e => {
     const d = parse(e); if (!d) return;
     const rec = !!d.on && !d.paused;
-    pill.classList.toggle("recording", rec);
-    pill.dataset.mic = !d.on ? "off" : d.paused ? "pausado" : "ligado";
+    if (pill) {
+      pill.classList.toggle("recording", rec);
+      pill.dataset.mic = !d.on ? "off" : d.paused ? "pausado" : "ligado";
+      pill.title = d.aviso || "";
+    }
     let txt = !d.on ? "Voz · Alt S" : d.paused ? "Ditado pausado" : "Ditando na folha";
     if (d.aviso) txt += " · " + d.aviso;
-    $("voiceLabel").textContent = txt; pill.title = d.aviso || "";
+    if (voiceLabel) voiceLabel.textContent = txt;
     let n = Number(d.nivel); if (!isFinite(n)) n = 0; if (n > 1) n /= 100;
     nivelBox.firstChild.style.width = Math.round(Math.max(0, Math.min(1, n)) * 100) + "%";
     nivelBox.dataset.nivel = String(Math.round(Math.max(0, Math.min(1, n)) * 100));
@@ -5943,7 +5960,7 @@ window.tutuSite.appReady = true;
     if (e.key === "Tab" && e.shiftKey && !e.ctrlKey && !e.altKey && prevField()) e.preventDefault();
   });
   ui.actions.anterior = { label: "Campo anterior", run: () => prevField() };
-  const chip = el("span", { id: "v3CamposChip" }); chip.hidden = true; pill.append(chip);
+  const chip = el("span", { id: "v3CamposChip" }); chip.hidden = true; if (pill) pill.append(chip);
   let pintando = false;
   function pintarCampos() {
     if (pintando) return; pintando = true;
@@ -8282,7 +8299,7 @@ window.tutuSite.appReady = true;
   /* Estado visual único: ouvindo / pausado (com texto) / vazio / enviado. Só estilo e rótulos; a lógica de áudio não passa por aqui. */
   function atualizarUI() {
     const t = texto.value.trim(), n = t ? t.split(/\s+/).length : 0;
-    const k = ouvindo ? "ouvindo" : enviado && !t ? "enviado" : t ? "pausado" : "vazio";
+    const k = ouvindo ? "ouvindo" : enviado ? "enviado" : t ? "pausado" : "vazio";
     dialog.dataset.estado = k;
     estado.textContent = { ouvindo: "Ouvindo…", pausado: "Pausado · pronto para enviar", enviado: "Enviado ✓", vazio: "Pronto para ditar" }[k];
     legenda.textContent = ouvindo ? "Toque para parar" : "Toque para ditar";
@@ -8294,7 +8311,7 @@ window.tutuSite.appReady = true;
   texto.addEventListener("input", () => { enviado = false; atualizarUI(); });
   let escolhaManual = false;
   exame.addEventListener("change", () => { escolhaManual = !!exame.value; exame.classList.toggle("sem-selecao", !exame.value); });
-  const exameEscolhido = () => EXAMS.find(e => e.id === exame.value) || TutuV2Core.exameDoTexto(texto.value, EXAMS);
+  const exameEscolhido = () => EXAMS.find(e => e.id === exame.value) || TutuV2Core.exameDoTexto(texto.value, EXAMS) || (!ui.isMobile() && EXAMS.find(e => e.id === current.id));
   function preencher() {
     const selected = exame.value; exame.replaceChildren();
     const usg = U.examesUSG(EXAMS); /* USG primeiro, mas todas as máscaras: Áudio não é só ultrassom */
@@ -8384,8 +8401,13 @@ window.tutuSite.appReady = true;
     setTimeout(() => { dispararFilaIA(); }, FILA_IA_ATRASO_MS);
   }
   async function enviarPedido() {
-    if (busy) return;
-    if (ouvindo) { dizer("Pare o ditado antes de enviar."); return; }
+    if (busy || (enviado && !ouvindo)) return;
+    if (ouvindo) {
+      if (ui.isMobile()) { dizer("Pare o ditado antes de enviar."); return; }
+      const pendente = parcial.textContent;
+      stop();
+      if (pendente) texto.value += (texto.value ? " " : "") + pendente;
+    }
     busy = true; enviar.disabled = true;
     try {
       // Nenhuma consulta remota antes de filtrar o texto editado.
@@ -8394,9 +8416,36 @@ window.tutuSite.appReady = true;
       if (!exame.value) dizer("Exame reconhecido no áudio: " + ex.name);
       const fresh = filtrar(texto.value, ex); if (!fresh) throw Error("Dite ou digite os achados.");
       const nPalavras = (fresh.trim().match(/\S+/g) || []).length;
-      const usarDirect = modoIA === "direct" || (modoIA === "auto" && nPalavras <= 80);
+      const desktop = !ui.isMobile();
+      const usarDirect = desktop || modoIA === "direct" || (modoIA === "auto" && nPalavras <= 80);
       let avisoPonte = "";
-      if (usarDirect && typeof T.directStream === "function" && ui.initialized && !genBusy && !corrBusy) {
+      if (desktop) {
+        const indicador = el("p", { id: "audioMontando", class: "audio-montando", role: "status" }, "IA montando o laudo…");
+        sheet.before(indicador);
+        if (dialog.open) dialog.close();
+        try {
+          if (!ui.initialized || genBusy || corrBusy || typeof T.directStream !== "function") throw Error("Ponte ocupada ou indisponível.");
+          const mascara = current.id === ex.id && modelIntact() ? maskOf(current) : maskOf(ex);
+          let acumulado = "";
+          const res = await T.directStream({ exame: ex.id, mascara, texto: fresh, modo: "completo" }, (_delta, acum) => { acumulado = acum; });
+          const final = (res?.laudo || acumulado || "").trim();
+          if (!final) throw Error("Resposta vazia do Direct.");
+          if (!ui.audioTarget(ex)) throw Error("A folha está ocupada.");
+          sheet.innerHTML = modelSheetHtml({ ...ex, mask: final });
+          updateCount(); renderAlerts();
+          ui.registrarIA?.(laudoTagged(), fresh, { direct: true });
+          await ui.flush();
+          texto.value = ""; enviado = true; atualizarUI();
+          setStatus("Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
+          dizer("Laudo pronto ✓");
+          return;
+        } catch (err) {
+          avisoPonte = err?.code === "ponte_nao_autorizada" ? "Token da ponte inválido — parear de novo." : "Direct indisponível ou tempo esgotado.";
+          dizer(avisoPonte + " Enviando para a fila; texto preservado.");
+          if (!dialog.open) dialog.showModal();
+        } finally { indicador.remove(); }
+      }
+      if (!desktop && usarDirect && typeof T.directStream === "function" && ui.initialized && !genBusy && !corrBusy) {
         dizer("Gerando laudo na ponte…");
         let casoCriado = false, abaCriadaId = null, ultimoTexto = "", renderTimer = 0;
         const aplicarFolha = txt => {
@@ -8457,7 +8506,8 @@ window.tutuSite.appReady = true;
       if (!r.ok || !(await r.json()).private) throw Error("A fila exige o repositório privado de dados.");
       await G.putJson("fila-usg/" + crypto.randomUUID() + ".json", { exame: ex.id, nome: ex.name, mascara: maskOf(ex), modo: "audio", texto: fresh, ia: "pendente", criado: new Date().toISOString() }, null, "USG: texto anônimo");
       agendarDisparoFilaIA();
-      texto.value = ""; enviado = true; atualizarUI();
+      texto.value = "";
+      enviado = true; atualizarUI();
       dizer(avisoPonte
         ? `Enviado ✓ — a IA organiza em ~1 min; ${avisoPonte}`
         : "Enviado ✓ — a IA organiza em ~1 min; o laudo aparece em Laudos Áudio aqui e nos PCs.");
@@ -8474,6 +8524,16 @@ window.tutuSite.appReady = true;
   atualizarUI();
   document.body.append(dialog);
   const abrirDialog = () => { preencher(); if (!dialog.open) dialog.showModal(); };
+  ui.openAudio = () => {
+    ui.siteDictation?.stop?.();
+    abrirDialog();
+    if (!ouvindo && !busy) { try { captar(); } catch (e) { stop(); dizer(e.message); } }
+  };
+  texto.addEventListener("keydown", ev => {
+    if (!ui.isMobile() && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault(); enviarPedido();
+    }
+  });
   $("copiar").after(button("Audio", abrirDialog, { id: "usgOpen" }));
   const temSelecao = () => !!window.getSelection()?.toString() || texto.selectionStart !== texto.selectionEnd;
   const fora = ev => {
@@ -8695,18 +8755,41 @@ window.tutuSite.appReady = true;
 (() => {
   "use strict";
   const ui = window.tutuV2, pill = document.getElementById("voicePill");
-  if (!ui || !pill) return;
+  if (!ui) return;
   const label = document.getElementById("voiceLabel"), originalDictate = ui.dictate;
   const source = "ditado-site", pingTimeout = 180;
-  let extension = pill.hasAttribute("data-mic"), checked = extension, engaged = false;
+  let extension = !!pill?.hasAttribute("data-mic"), checked = extension, engaged = false;
   let on = false, paused = false, speech = null, restart = null, anchor = null, pendingToggle = false;
   const ANDROID = /Android/i.test(navigator.userAgent);
+  const PONTE_STATE = "http://127.0.0.1:47831/state", BRIDGE_THROTTLE = 250;
+  const isMobile = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "") || !!ui.isMobile?.();
+  let bridgeTimer = null, lastBridge = -Infinity, bridgeLevel = 0, bridgeWarn = "";
+  function stopBridgeTimer() { if (bridgeTimer !== null) { clearInterval(bridgeTimer); bridgeTimer = null; } }
+  function pushBridge(v = bridgeLevel, warn = bridgeWarn, force = false) {
+    if (isMobile() || typeof fetch !== "function") return;
+    bridgeLevel = v; bridgeWarn = warn;
+    const now = Date.now();
+    if (!force && now - lastBridge < BRIDGE_THROTTLE) return;
+    lastBridge = now;
+    const body = JSON.stringify({ on: !!on, paused: !!paused, v: on && !paused ? v : 0, warn: on && !paused ? warn : "" });
+    bridgeLevel = 0; bridgeWarn = "";
+    try { const p = fetch(PONTE_STATE, { method: "POST", body, keepalive: !on }); if (p && typeof p.catch === "function") p.catch(() => {}); } catch (_) {}
+  }
+  function syncBridge() {
+    if (on) {
+      pushBridge(0, "", true);
+      if (bridgeTimer === null && !isMobile()) bridgeTimer = setInterval(() => { if (on) pushBridge(); else stopBridgeTimer(); }, BRIDGE_THROTTLE);
+    } else {
+      stopBridgeTimer();
+      pushBridge(0, "", true);
+    }
+  }
   let tela = null;   // tela acesa enquanto dita (Wake Lock)
   const manterTela = async () => { try { if (on && !tela && navigator.wakeLock && document.visibilityState === "visible") { tela = await navigator.wakeLock.request("screen"); tela.addEventListener("release", () => { tela = null; }); } } catch (_) { tela = null; } };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") manterTela(); });
   let fails = 0, ignoreUntil = 0, lastInsert = null, lastReached = null;
   const note = ui.el("small", { id: "siteDictationNote", title: "Extensão não detectada: o reconhecimento roda nesta página." }, "ditado do site (sem extensão)");
-  note.style.cssText = "color:var(--muted);font-size:11px;margin-left:6px"; note.hidden = true; label.after(note);
+  note.style.cssText = "color:var(--muted);font-size:11px;margin-left:6px"; note.hidden = true; if (label) label.after(note);
   const parse = e => { try { return typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return null; } };
   const emit = (name, data) => document.dispatchEvent(new CustomEvent(name, { detail: JSON.stringify({ ...data, source }) }));
   const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[.,;:!?"]/g, " ").replace(/\s+/g, " ").trim();
@@ -8720,14 +8803,14 @@ window.tutuSite.appReady = true;
     // Antes do primeiro uso do ditado do site a pílula fica inteiramente com 102/106 (fluxo da extensão).
     if (extension || !engaged) return;
     const text = !on ? "Voz · Alt S" : paused ? "Ditado pausado · Alt S" : "Ditando · Alt S", rec = on && !paused;
-    if (label.textContent !== text) label.textContent = text;
-    if (pill.classList.contains("recording") !== rec) pill.classList.toggle("recording", rec);
+    if (label && label.textContent !== text) label.textContent = text;
+    if (pill && pill.classList.contains("recording") !== rec) pill.classList.toggle("recording", rec);
     const vc = rec ? ui.activeId() : null;
     if (ui.voiceCase !== vc) { ui.voiceCase = vc; ui.renderTabs?.(); }
   }
   // 102 escreve atividade na pílula ("Texto recebido na folha"...); enquanto o site detém o motor, vale o estado real.
-  new MutationObserver(render).observe(label, { childList: true, characterData: true, subtree: true });
-  function state() { emit("laudos-mic", { on, paused }); render(); ui.updateHUD?.(); }
+  if (label) new MutationObserver(render).observe(label, { childList: true, characterData: true, subtree: true });
+  function state() { emit("laudos-mic", { on, paused }); render(); ui.updateHUD?.(); syncBridge(); }
   function clearInterim() { emit("laudos-provisorio", { texto: "", destino: destination() }); anchor = null; }
   function stop(publish = true) {
     const was = on || !!speech;
@@ -8736,7 +8819,7 @@ window.tutuSite.appReady = true;
     // Desliga os callbacks antes de abortar: finais atrasados não entram na folha.
     if (s) { s.onresult = s.onend = s.onerror = null; try { s.abort(); } catch (_) {} }
     if (was) clearInterim(); anchor = null;
-    if (publish && was) state(); else render();
+    if (publish && was) state(); else { if (was) syncBridge(); render(); }
   }
   function foundExtension() {
     if (extension) return;
@@ -8907,6 +8990,7 @@ window.tutuSite.appReady = true;
         if (text) insert(text, best, alts, typeof r[0]?.confidence === "number" ? r[0].confidence : null); else clearInterim();
       }
       if (on && speech === s && interim) emit("laudos-provisorio", { texto: interim, destino: destination() });
+      if (on && !paused && speech === s) pushBridge(0.5, "", false);
       render();
     };
     s.onerror = ev => {
@@ -8947,12 +9031,13 @@ window.tutuSite.appReady = true;
     // Mesmo caminho do 102: com a extensão (content.js) a tecla sintética liga o microfone dela.
     const ev = new KeyboardEvent("keydown", { key: "s", code: "KeyS", altKey: true, bubbles: true, cancelable: true });
     document.dispatchEvent(ev);
-    if (!extension && lastReached !== ev) { foundExtension(); label.textContent = "Comando enviado · Alt S"; }
+    if (!extension && lastReached !== ev) { foundExtension(); if (label) label.textContent = "Comando enviado · Alt S"; }
   };
   // O modo Áudio usa outro reconhecedor: os dois não podem disputar o microfone.
   document.addEventListener("click", e => { if (on && e.target.closest?.("#usgOpen")) stop(); }, true);
   window.addEventListener("pagehide", () => { if (!extension) stop(false); });
-  ui.siteDictation = { get on() { return on; }, get extension() { return extension; }, toggle: () => ui.dictate() };
+  ui.siteDictation = { get on() { return on; }, get extension() { return extension; }, toggle: () => ui.dictate(),
+    stop: () => { if (extension) { if (pill?.classList.contains("recording")) originalDictate(); } else stop(); } };
 })();
 
 /* Conversar com a IA (12/11/2026): na folha do laudo, o Artur fala ou escreve um ajuste ("o lado é direito", "conclusão um item por achado").

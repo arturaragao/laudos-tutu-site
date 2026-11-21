@@ -495,10 +495,6 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 .v2-shortcuts { display:flex; flex-wrap:wrap; min-width:0; gap:5px; }
 .tutu-v2 #v2Footer button { display:flex; align-items:center; gap:5px; white-space:nowrap; font-size:11px; flex-shrink:0; }
 #v2Footer kbd { color:var(--accent); padding:0; border:0; background:transparent; font-size:10px; }
-#voicePill { position:fixed; bottom:calc(var(--v2-footer-height,48px) + 14px); left:50%; transform:translateX(-50%); max-width:calc(100vw - 24px); border:1px solid var(--line); border-radius:99px; background:var(--panel); color:var(--text); box-shadow:0 8px 24px #0002; padding:7px 12px; display:flex; align-items:center; gap:10px; z-index:8; font-size:12px; white-space:nowrap; }
-#voiceLabel { max-width:250px; overflow:hidden; text-overflow:ellipsis; }
-#voiceDot { color:var(--muted); }
-#voicePill.recording #voiceDot { color:#d0605b; animation:v2-pulse 1s infinite; }
 @keyframes v2-pulse { 50% { opacity:.4; } }
 .tutu-v2 #tutuApp.left-mini { grid-template-columns:56px minmax(0,1fr) var(--v2-right-width,330px); }
 .tutu-v2 #tutuApp.right-mini { grid-template-columns:var(--v2-left-width,240px) minmax(0,1fr) 64px; }
@@ -549,12 +545,11 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 #tutuApp.compact #v2Center { padding:0 12px 100px; }
 #tutuApp.compact #laudo { padding:24px 22px; }
 #tutuApp.compact #v2Center > .fmt-bar { position:static; }
-body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; max-width:410px; }
 .tutu-v2 #tutuApp.focus-mode { grid-template-columns:0 minmax(0,1fr) 0; }
 #tutuApp.focus-mode #v2Left, #tutuApp.focus-mode #v2Right { visibility:hidden; }
 @media(max-width:1100px) { .tutu-v2 #tutuApp:not(.compact) { grid-template-columns:190px minmax(0,1fr) 280px; } .tutu-v2 #tutuApp.left-mini:not(.compact) { grid-template-columns:56px minmax(0,1fr) 280px; } .tutu-v2 #tutuApp.right-mini:not(.compact) { grid-template-columns:190px minmax(0,1fr) 64px; } .tutu-v2 #tutuApp.left-mini.right-mini:not(.compact) { grid-template-columns:56px minmax(0,1fr) 64px; } #v2Center { padding-inline:12px; } .tutu-v2 #laudo { padding-inline:28px; } }
 @media(prefers-reduced-motion:reduce) { .tutu-v2 *, .tutu-v2 *::before, .tutu-v2 *::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
-@media print { body.tutu-v2 { overflow:visible; } .tutu-v2 #laudo { font:11pt Arial!important; color:#000; background:#fff; box-shadow:none; } #v2Top,#v2Left,#v2Right,#v2Footer,#voicePill,#commandPalette { display:none!important; } }
+@media print { body.tutu-v2 { overflow:visible; } .tutu-v2 #laudo { font:11pt Arial!important; color:#000; background:#fff; box-shadow:none; } #v2Top,#v2Left,#v2Right,#v2Footer,#commandPalette { display:none!important; } }
 
 /* Ctrl+K: continuações da frase no topo da paleta */
 .tutu-v2 #commandResults button.cmd-cont { align-items:flex-start; }
@@ -899,3 +894,7 @@ body:has(#tutuApp.compact) #voicePill { left:auto; right:14px; transform:none; m
 #sugArvore .sug-cnt, #sugArvore .sug-freq { flex:0 0 auto; font-style:normal; font-size:11px; color:var(--muted); white-space:nowrap; }
 #sugArvore .sug-vazio { margin:8px 2px; font-size:12px; color:var(--muted); }
 .sug-dica { margin:2px 0 0; font-size:11px; color:var(--muted); }
+/* Direct no PC: estado visível sem bloquear a edição da folha. */
+.audio-montando { padding: .65rem 1rem; color: var(--accent, #2563eb); animation: audio-montando 1.6s ease-in-out infinite; }
+@keyframes audio-montando { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .audio-montando { animation: none; } }
