@@ -1,3 +1,4 @@
+window.__SITE_VERSION__ = "d8cf04f · 22/11 11:51";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -363,6 +364,62 @@ function renderExams(){
 }
 function shortName(ex){ return String(ex.name).replace(/^parecer\s*[·:-]\s*/i, ""); }
 function fullName(ex){ return (ex.tipo === "parecer" ? "Parecer · " : "") + shortName(ex); }
+/* Busca de modelo: título e apelidos, com modalidade explícita e ordem livre. */
+function maskVoiceWords(text){
+  return String(text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/\b(?:ultrassonografia|ultrasonografia|ultrassom|ultrasom|usg|us)\b/g, "usg")
+    .replace(/\btomografia(?:\s+computadorizada)?\b/g, "tc")
+    .replace(/\bressonancia(?:\s+magnetica)?\b/g, "rm")
+    .replace(/\b(?:abdomen|abdominal)\b/g, "abdome")
+    .split(/[^a-z0-9]+/).filter(w => w && !/^(?:de|do|da|dos|das|e|em|a|o|os|as|exame|modelo)$/.test(w));
+}
+function maskVoiceDistance(a, b){
+  let row = Array.from({ length:b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++){
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) next[j] = Math.min(next[j-1] + 1, row[j] + 1, row[j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+    row = next;
+  }
+  return row[b.length];
+}
+function findSpokenMask(text){
+  const words = maskVoiceWords(text);
+  if (!words.length || String(text).length > 200) return null;
+  const modality = words.find(w => /^(?:usg|tc|rm)$/.test(w));
+  const provisional = words.includes("parecer");
+  const key = ws => [...new Set(ws)].sort().join(" ");
+  const spoken = key(words), scores = [];
+  for (const ex of EXAMS){
+    if ((ex.tipo === "parecer") !== provisional) continue;
+    const title = maskVoiceWords(ex.name);
+    const examModality = title.find(w => /^(?:usg|tc|rm)$/.test(w));
+    if (modality && examModality && modality !== examModality) continue;
+    let best = Infinity;
+    for (const name of [ex.name, ...(ex.voz || [])]){
+      let candidate = maskVoiceWords(name);
+      if (provisional && !candidate.includes("parecer")) candidate.push("parecer");
+      if (modality && examModality && !candidate.includes(examModality)) candidate.push(examModality);
+      if (!modality) candidate = candidate.filter(w => !/^(?:usg|tc|rm)$/.test(w));
+      if (!candidate.length) continue;
+      // "Total" pode estar implícito no título; qualificadores como "superior" permanecem.
+      const variants = [candidate];
+      if (candidate.includes("abdome")){
+        if (!words.includes("total")) variants.push(candidate.filter(w => w !== "total"));
+        if (words.includes("total") && !candidate.includes("total")) variants.push([...candidate, "total"]);
+      }
+      for (const variant of variants){
+        const target = key(variant);
+        const d = maskVoiceDistance(spoken, target);
+        const limit = Math.min(2, Math.floor(Math.min(spoken.length, target.length) / 5));
+        if (d <= limit) best = Math.min(best, d);
+      }
+    }
+    if (Number.isFinite(best)) scores.push({ ex, distance:best });
+  }
+  scores.sort((a, b) => a.distance - b.distance);
+  if (!scores.length || (scores[1] && scores[1].distance - scores[0].distance < 2)) return null;
+  return scores[0].ex;
+}
 function maskAll(){ return [current, ...extras].map(maskOf).join("\n\n"); }
 function nameAll(){ return [current, ...extras].map(e => e.name).join(" + "); }
 function selectExam(id, focus, add){
@@ -981,6 +1038,35 @@ function openMaskAsNew(ex){
   $("compData").value = ""; $("compTexto").value = ""; $("compBox").open = false; updComp();
   sexo = ""; loadModel(ex); cursorAfterModel();
 }
+function spokenModel(text){
+  const command = String(text || "").trim().match(/^modelo\s+(.+?)[.!?]*$/i);
+  if (!command) return false;
+  const ex = findSpokenMask(command[1]);
+  if (ex) openMaskAsNew(ex);
+  else setStatus("não achei o modelo");
+  return true;
+}
+// A extensão pode deixar um modelo não reconhecido passar como texto. Resolve na
+// página, onde estão todos os títulos, inclusive as máscaras criadas pelo médico.
+sheet.addEventListener("beforeinput", e => {
+  if (!e.isComposing && e.cancelable && /^modelo\s+\S/i.test(String(e.data || "").trim())){
+    e.preventDefault(); spokenModel(e.data);
+  }
+});
+sheet.addEventListener("input", e => {
+  if (e.isComposing) return;
+  const selection = getSelection();
+  if (!selection.rangeCount || !selection.isCollapsed || !sheet.contains(selection.anchorNode)) return;
+  const node = selection.anchorNode, end = selection.anchorOffset;
+  if (node.nodeType !== 3) return;
+  const text = typeof e.data === "string" ? e.data : node.textContent.slice(0, end);
+  if (!/^modelo\s+\S/i.test(text.trim()) || node.textContent.slice(end - text.length, end) !== text) return;
+  const range = selection.getRangeAt(0).cloneRange();
+  range.setStart(node, end - text.length); range.deleteContents();
+  selection.removeAllRanges(); selection.addRange(range);
+  spokenModel(text);
+  updateCount();
+}, true);
 
 /* ---------- status ---------- */
 const emitExt = (name, d) => document.dispatchEvent(new CustomEvent(name, { detail: JSON.stringify(d) }));
@@ -1189,10 +1275,12 @@ function applyGenerated(draft, text){
   return { red: sheet.querySelectorAll("del.rm").length, green: sheet.querySelectorAll(".chg").length };
 }
 let lastGenTagged = "";   // folha logo depois do último Gerar: se nada mudou, não reenviar ao Claude
-async function gerar(){
+async function gerar(repetir){
+  repetir = repetir?.prompt ? repetir : null;
   if (!sample || genBusy) return;
   const draft = laudoTagged();
-  if (draft && draft === lastGenTagged){ setStatus("Nada mudou desde o último Gerar: nada foi enviado ao Claude.", "ok"); return; }
+  if (repetir && (draft !== repetir.draft || repetir.caso !== window.tutuV2?.activeId())) { setStatus("Volte ao laudo do pedido que falhou para reprocessar.", "err"); return; }
+  if (!repetir && draft && draft === lastGenTagged){ setStatus("Nada mudou desde o último Gerar: nada foi enviado ao Claude.", "ok"); return; }
   if (!draft.trim()){ setStatus("A folha está vazia. Diga \"modelo parecer tc crânio\" (ou escolha o exame na lista) e escreva ou dite os achados.", "err"); focusSheet(); return; }
   genBusy = true; syncSexo();
   const fresh = userFindings(draft);
@@ -1200,27 +1288,37 @@ async function gerar(){
     genBusy = false; laudoNormal(); setStatus("Sem achados novos: conclusão normal preenchida direto do modelo, sem usar o Claude.", "ok"); emitExt("laudos-aviso", { tipo: "pronto" }); return;
   }
   const frases = pickPhrases(fresh);
-  const prompt = buildPrompt(frases, draft);
+  const prompt = repetir?.prompt ?? buildPrompt(frases, draft);
   const bankNote = (frases.length ? `${frases.length} frases do banco usadas como referência.` : "Nenhuma frase do banco corresponde ao texto.") +
     (exParecidos ? ` ${exUsados} ${exUsados === 1 ? "laudo seu parecido usado" : "laudos seus parecidos usados"} como modelo.` : "");
+  const pedidoIA = repetir || { prompt, draft, linhas: genLines.map(l => ({ ...l })), tier: effectiveTier(fresh), bankNote, caso: window.tutuV2?.activeId() };
   ctl = new AbortController(); busy(true); lockSheet(true);
   setStatus("Corrigindo o laudo… " + bankNote);
   try{
     const t0 = performance.now();
     const { text, truncated } = await sample(prompt, {
-      signal: ctl.signal, cache: false, modelTier: effectiveTier(fresh),
+      signal: ctl.signal, cache: false, modelTier: pedidoIA.tier,
       onText: ({ text }) => setStatus(`Corrigindo… ${text.length} caracteres. ` + bankNote)
     });
     lockSheet(false);
+    if (laudoTagged() !== draft || pedidoIA.caso !== window.tutuV2?.activeId()) { setStatus("A folha mudou enquanto a IA respondia: nada foi aplicado.", "err"); return; }
+    genLines = pedidoIA.linhas;
     const out = genResult(draft, text);
-    if (out === null){ setStatus("A resposta do Claude veio fora do formato; o laudo ficou como estava. Tente Gerar de novo.", "err"); emitExt("laudos-aviso", { tipo: "erro" }); return; }
+    if (out === null || truncated) throw Object.assign(Error("A resposta do Claude veio incompleta ou fora do formato; o laudo ficou como estava."), { code: "ia_erro" });
     const r = applyGenerated(draft, out);
+    window.TutuReprocessar?.sucesso("gerar", pedidoIA);
     emitExt("laudos-aviso", { tipo: "pronto" });
     const secs = ((performance.now() - t0) / 1000).toFixed(0);
     setStatus(truncated ? "A resposta foi cortada no limite de tamanho. Confira o laudo." : (r.red || r.green ? `Laudo corrigido em ${secs} s: verde = editado, vermelho = apagado (clique no vermelho para desfazer). ` : `Laudo conferido em ${secs} s: nenhuma edição necessária. `) + bankNote, truncated ? "err" : "ok");
   }catch(e){
     if (e && e.code === "cancelled") setStatus("Correção interrompida. O texto continua como estava.");
-    else { setStatus(errMsg(e), "err"); emitExt("laudos-aviso", { tipo: "erro" }); if (e && (e.code==="not_granted"||e.code==="sampling_disabled")) disableClaude(); }
+    else {
+      window.TutuReprocessar?.falhou("gerar", pedidoIA);
+      // Abrir Revisar para mostrar Reprocessar pode atualizar o status; o motivo vem por último.
+      setStatus(errMsg(e), "err");
+      emitExt("laudos-aviso", { tipo: "erro" });
+      if (e && (e.code==="not_granted"||e.code==="sampling_disabled")) disableClaude();
+    }
   }finally{ genBusy = false; busy(false); lockSheet(false); if (document.hasFocus()) focusSheet(); }
 }
 function revisar(){ return conferirLocal(); }
@@ -4488,7 +4586,9 @@ window.tutuSite.appReady = true;
   const top = el("header", { id: "v2Top" });
   // 17/11/2026 (Artur): fileira de cima com o ícone e "Laudos" à esquerda; sincronizado, Ctrl K, ⚙ e ☾ à direita
   const brand = el("div", { class: "v2-brand", id: "v2Brand" });
-  brand.append(el("img", { src: "icones/laudos-192.png", alt: "", width: "26", height: "26" }), "Laudos");
+  brand.append(el("img", { src: "icones/laudos-192.png", alt: "", width: "26", height: "26" }), "Laudos",
+    el("span", { class: "v2-version", title: "Versão do site: commit curto e horário da compilação" },
+      `v ${window.__SITE_VERSION__ || "dev"}`));
   top.append(brand, el("span", { class: "v2-top-break", "aria-hidden": "true" }));
   const tabs = el("nav", { id: "caseTabs", role: "tablist", "aria-label": "Casos abertos" });
   top.append(tabs, button("+", () => ui.newTab(), { id: "newCaseTab", title: "Novo caso", "aria-label": "Novo caso" }),
@@ -7373,26 +7473,39 @@ window.tutuSite.appReady = true;
 
   /* ---------- veredito ---------- */
   /* Registro de aprendizado (Tutu-IA\correcoes.jsonl): só o que mudou; a ponte lê o "antes" do próprio achado. */
-  const registrar = (c, achado, acao, depois) => ponte("/imagem/correcao", { caso_id: c.caso_id, achado, acao, depois });
+  async function pedidoPonte(pedido) {
+    const r = await ponte(pedido.rota, pedido.corpo);
+    if (!r) {
+      setStatus("Não consegui registrar na ponte da IA de imagem.", "err");
+      window.TutuReprocessar?.falhou("imagem", pedido);
+      return false;
+    }
+    if (pedido.seguinte && !await pedidoPonte(pedido.seguinte)) return false;
+    window.TutuReprocessar?.sucesso("imagem", pedido);
+    return true;
+  }
+  async function reprocessar(pedido) {
+    if (await pedidoPonte(pedido)) {
+      setStatus("Registrado na ponte da IA de imagem.", "ok");
+      dadosAssin = ""; await poll();
+    }
+  }
   async function enviar(a, veredito, frase, depois) {
     const c = atual(); if (!c) return;
     if (veredito !== "rejeitado") {
       const r = inserirNaFolha(frase, a.conclusao);
       setStatus(r.achados || r.conclusao ? "Frase da IA inserida na folha." : "Essa frase já estava na folha.", "ok");
     }
-    const r = await ponte("/imagem/revisao", { caso_id: c.caso_id, achado_id: a.id, veredito, frase_final: veredito === "rejeitado" ? "" : frase });
-    if (!r) setStatus("Não consegui registrar o veredito na ponte.", "err");
-    else {
-      const mudou = depois && Object.keys(depois).length ? depois : undefined;
-      await registrar(c, a.id, veredito === "rejeitado" ? "rejeitar" : (mudou ? "editar" : "aceitar"), mudou);
-    }
+    const mudou = depois && Object.keys(depois).length ? depois : undefined;
+    await pedidoPonte({ rota: "/imagem/revisao", corpo: { caso_id: c.caso_id, achado_id: a.id, veredito, frase_final: veredito === "rejeitado" ? "" : frase },
+      seguinte: { rota: "/imagem/correcao", corpo: { caso_id: c.caso_id, achado: a.id, acao: veredito === "rejeitado" ? "rejeitar" : (mudou ? "editar" : "aceitar"), depois: mudou } } });
     dadosAssin = ""; await poll();
   }
   async function enviarPerdido(form) {
     const c = atual(); if (!c) return;
     const lado = form.lado.value, nota = form.nota.value.trim();
-    const r = await ponte("/imagem/perdido", { caso_id: c.caso_id, tipo: form.tipo.value, corte: form.corte.value.trim(), nota });
-    if (r) await registrar(c, form.tipo.value, "nao_viu", { ...(lado ? { lado } : {}), ...(nota ? { texto: nota } : {}) });
+    const r = await pedidoPonte({ rota: "/imagem/perdido", corpo: { caso_id: c.caso_id, tipo: form.tipo.value, corte: form.corte.value.trim(), nota },
+      seguinte: { rota: "/imagem/correcao", corpo: { caso_id: c.caso_id, achado: form.tipo.value, acao: "nao_viu", depois: { ...(lado ? { lado } : {}), ...(nota ? { texto: nota } : {}) } } } });
     setStatus(r ? "Anotado: a IA perdeu algo." : "Não consegui anotar na ponte.", r ? "ok" : "err");
     if (r) { form.reset(); form.closest("details").open = false; dadosAssin = ""; await poll(); }
   }
@@ -7514,7 +7627,7 @@ window.tutuSite.appReady = true;
     setTimeout(poll, PRIMEIRA_MS);
     setInterval(poll, POLL_MS);
   }
-  ui.iaViu = { poll, render, inserirNaFolha, painel: panel, tab };
+  ui.iaViu = { poll, render, inserirNaFolha, painel: panel, tab, reprocessar };
 })();
 
 /* Rascunho do laudo a partir da IA de imagem (docs/IA-IMAGEM.md): com um clique, a máscara de TC de abdome total é preenchida
@@ -9318,49 +9431,59 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     } finally { await apagarFila(caminho); }
   }
   /* Com a ponte: nada muda (local, sem GitHub). Sem ponte (ou sem sample): fila. */
-  async function pedirIA(prompt, signal, montarAnonimo, delta) {
-    if (typeof sample === "function" && sample) {
+  async function pedirIA(prompt, signal, montarAnonimo, delta, pedidoSalvo, reprocessando = false) {
+    if (reprocessando && pedidoSalvo?.rota !== "fila") {
+      if (typeof sample !== "function") throw Error("Ponte indisponível para reprocessar.");
+      return sample(prompt, { signal, cache: false, modelTier: "balanced", ...(delta ? { modo: "delta", laudo: delta } : {}) });
+    }
+    if (pedidoSalvo?.rota !== "fila" && typeof sample === "function" && sample) {
       try {
         if (delta) {
           try { return await sample(prompt, { signal, cache: false, modelTier: "balanced", modo: "delta", laudo: delta }); }
-          catch (e) { if (signal.aborted || e?.name === "AbortError") throw e; }
+          catch (e) { if (signal.aborted || e?.name === "AbortError") throw e; if (pedidoSalvo) pedidoSalvo.delta = false; }
         }
         return await sample(prompt, { signal, cache: false, modelTier: "balanced" });
       }
       catch (e) { if (e?.code !== "ponte_indisponivel") throw e; }
     }
+    if (pedidoSalvo) pedidoSalvo.rota = "fila";
     return viaFila(montarAnonimo, signal);
   }
 
   /* ---------- envio: laudo numerado + pedido -> DIFF (+ REGRA opcional) ---------- */
-  async function mandar() {
+  async function mandar(repetir) {
+    repetir = repetir?.prompt ? repetir : null;
     if (busy) return;
     if (ouvindo) parar();
-    const pedido = C.limparPedido(texto.value);
+    const pedido = repetir?.pedido ?? C.limparPedido(texto.value);
     if (!pedido) { dizer("Fale ou escreva o que ajustar."); texto.focus(); return; }
     if (typeof genBusy !== "undefined" && genBusy) { dizer("Aguarde o Gerar terminar."); return; }
     const draft = laudoTagged();
+    if (repetir && (draft !== repetir.draft || repetir.caso !== ui.activeId())) { dizer("Volte ao laudo do pedido que falhou para reprocessar."); return; }
     if (!draft.trim()) { dizer("A folha está vazia: abra ou escreva um laudo primeiro."); return; }
     const num = C.numerar(draft);
     genLines = num.linhas;   // applyDiff (30-claude-gerar.js) lê estas linhas
-    const prompt = C.montarPrompt({ exame: nameAll(), regras: rulesBlock(), numerado: num.texto, pedido });
+    const exame = nameAll(), regras = rulesBlock();
+    const prompt = repetir?.prompt ?? C.montarPrompt({ exame, regras, numerado: num.texto, pedido });
     const D = window.TutuDelta;
     const baseDelta = D?.habilitar(draft, pedido) ? D.capturar(sheet, draft, serEditable) : null;
+    const pedidoIA = repetir || { prompt, pedido, draft, exame, regras, delta: !!baseDelta, caso: ui.activeId() };
     busy = true; enviar.disabled = true; acoes.hidden = true; lockSheet(true); ctlConversa = new AbortController();
     dizer("Enviando à IA…");
     const t0 = performance.now();
     try {
-      const anonimo = () => C.montarPrompt({ exame: nameAll(), regras: rulesBlock(), numerado: C.numerar(draft, anon).texto, pedido: anon(pedido) });
-      let r = await pedirIA(prompt, ctlConversa.signal, anonimo, baseDelta ? draft : null);
+      const anonimo = () => pedidoIA.anonimo ?? (pedidoIA.anonimo = C.montarPrompt({ exame: pedidoIA.exame, regras: pedidoIA.regras, numerado: C.numerar(draft, anon).texto, pedido: anon(pedido) }));
+      let r = await pedirIA(prompt, ctlConversa.signal, anonimo, pedidoIA.delta ? draft : null, pedidoIA, !!repetir);
       let patch = r?.modo === "delta" && baseDelta ? D.aplicar(draft, r.text) : null;
-      if (r?.modo === "delta" && !patch) r = await pedirIA(prompt, ctlConversa.signal, anonimo);
+      if (repetir && r?.modo === "delta" && !patch) throw Error("A resposta delta veio fora do formato; o laudo ficou como estava.");
+      if (r?.modo === "delta" && !patch) { pedidoIA.delta = false; r = await pedirIA(prompt, ctlConversa.signal, anonimo, null, pedidoIA); }
       const motor = r?.motor === "antigravity" ? "Antigravity" : "Claude", secs = ((performance.now() - t0) / 1000).toFixed(0);
       const { regra, resto } = C.extrairRegra(r?.text || "");
       lockSheet(false);
       if (laudoTagged() !== draft) { dizer("A folha mudou enquanto a IA respondia: nada foi aplicado. Envie de novo."); return; }
       genLines = num.linhas;
       const novo = patch ? patch.texto : /^\s*ok\.?\s*$/i.test(resto.trim()) ? draft : applyDiff(resto);
-      if (novo === null) { dizer(`A resposta (${motor}) veio fora do formato; o laudo ficou como estava. Tente de novo.`); return; }
+      if (novo === null || r?.truncated) throw Error(`A resposta (${motor}) veio incompleta ou fora do formato; o laudo ficou como estava.`);
       if (novo !== draft) {
         pushVersion("Antes da correção");   // "Desfazer IA" (undoAllClaude) volta até aqui
         if (patch) { if (!D.aplicarDOM(baseDelta, patch)) return; }
@@ -9371,11 +9494,13 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
         acoes.hidden = false;
       }
       texto.value = "";
+      window.TutuReprocessar?.sucesso("conversa", pedidoIA);
       dizer((novo === draft ? "Nada a mudar no laudo" : "Ajustado: verde = novo, vermelho = apagado") + ` · ${motor}, ${secs} s` + (r?.aviso ? " · " + r.aviso : "") + ".");
       if (regra) await lembrar(regra);
     } catch (e) {
       lockSheet(false);
       dizer(e?.name === "AbortError" ? "Pedido cancelado." : /^bloqueado/i.test(e?.message || "") ? "Bloqueado pelo filtro de privacidade: nada foi enviado ao GitHub. " + e.message : (e?.message || "Falha ao falar com a IA."));
+      if (e?.name !== "AbortError" && !/^bloqueado/i.test(e?.message || "")) window.TutuReprocessar?.falhou("conversa", pedidoIA, "#conversaMsg");
     } finally { busy = false; enviar.disabled = false; lockSheet(false); }
   }
 
@@ -10014,14 +10139,33 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     const t = fold(text);
     return ORG_NAMES.map((re, i) => re.test(t) ? i : -1).filter(i => i >= 0);
   };
+  // Offsets no texto da folha: títulos e frases vizinhas ficam fora da troca.
+  function frasesParagrafo(text) {
+    text = String(text || "");
+    const title = text.match(/^\s*[^.!?:]{1,60}:\s*/);
+    let start = title && orgaos(title[0]).length === 1 ? title[0].length : 0;
+    const out = [], re = /[.!?]+(?=\s|$)|$/g;
+    re.lastIndex = start;
+    let m;
+    while ((m = re.exec(text))) {
+      const end = m.index + m[0].length;
+      while (start < end && /\s/.test(text[start])) start++;
+      if (end > start) out.push({ start, end, text: text.slice(start, end) });
+      start = end;
+      if (!m[0]) break;
+    }
+    return out;
+  }
   function encontrarParagrafoNormal(paragrafos, achados, query, maskNormals) {
     if (!Array.isArray(paragrafos) || !paragrafos.length) return -1;
     const alvoTxt = [...(achados || []), query || ""].join(" ");
     const alvoToks = orgExpand(tokens(alvoTxt)), alvoLado = ladoOrgao(alvoTxt);
+    const alvoOrgaos = orgaos(alvoTxt);
     if (!alvoToks.size) return -1;
     const bases = paragrafos.map((p, idx) => {
       const txt = String(p && p.text != null ? p.text : p || "").trim();
       if (!txt) return null;
+      if (alvoOrgaos.length === 1 && !orgaos(txt).includes(alvoOrgaos[0])) return null;
       if (maskNormals && maskNormals.size && !maskNormals.has(fold(txt))) return null;
       const pref = fold(txt).split(/[:;]|\b(?:com|sem|apresenta\w*|de calibre|de dimens\w*|de aspecto|de configuracao|de contornos|de dimensoes|pervi\w*|calibres?|fluxo\w*|topic[ao]s?|normodistendid\w*|habitua\w*|preservad\w*|norma(?:l|is))\b/)[0];
       const ts = [...tokens(pref)].filter(t => !/^(arter|segme|estru|paren|orgao)$/.test(t));
@@ -10032,9 +10176,10 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       if (alvoLado && b.lado && alvoLado !== b.lado) return { idx: b.idx, sc: 0 };
       let sc = 0;
       for (const t of b.ts) {
-        if (!alvoToks.has(t) && ![...alvoToks].some(a => b.exp.has(a))) continue;
+        const exact = alvoToks.has(t);
+        if (!exact && ![...orgExpand(new Set([t]))].some(a => alvoToks.has(a))) continue;
         const n = bases.filter(x => x.ts.includes(t)).length || 1;
-        sc += 1 / n;
+        sc += (exact ? 1 : 0.5) / n;
       }
       if (!sc && [...b.exp].some(t => alvoToks.has(t))) sc = 0.5;
       if (sc && alvoLado && b.lado && alvoLado === b.lado) sc += 0.5;
@@ -10044,7 +10189,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
 
   const api = { fold, tokens, classe, paresDe, buildIndex, parseQuery, buscar, precisaIA, modalidadeDe, semContrasteDe, montarPromptIA, lerRespostaIA, validarIA, fluxoAjusteIA, montar, fraseParecer, trocarLado, ajustarMedidas, negativos, detectar, comandoFinal,
-    vazio, aprender, mesclar, aplicarNoTexto, ehNeg, limparNumeros, encontrarParagrafoNormal, orgaos };
+    vazio, aprender, mesclar, aplicarNoTexto, ehNeg, limparNumeros, encontrarParagrafoNormal, orgaos, frasesParagrafo };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuFrase = api;
 })(globalThis);
@@ -11785,6 +11930,9 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   function refresh() {
     result = evaluate(current, state);
     form.querySelectorAll("[data-field]").forEach(w => { w.hidden = !matches(w._field.mostrarSe, { ...result.values, ...w._context() }); });
+    form.querySelectorAll("[data-section]").forEach(box => {
+      box.hidden = ![...box.children].some(w => w.hasAttribute("data-field") && !w.hidden);
+    });
     const fullReport = (current.frases || []).some(t => (t.modelo || "").includes("{{centro}}"));
     preview.innerHTML = fullReport ? resultHtml() : resultHtml(result.frases) + (result.conclusao ?
       resultHtml("<b><u>Conclusão</u></b>") + resultHtml(result.conclusao) : "");
@@ -11911,7 +12059,8 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
               current = ficha; state = defaults(fields(current));
               form.append(node("h3", current.titulo));
               for (const section of current.secoes) {
-                const box = node("fieldset"); box.append(node("legend", section.titulo || "")); form.append(box);
+                const box = node("fieldset"); box.dataset.section = section.id || "";
+                box.append(node("legend", section.titulo || "")); form.append(box);
                 renderFields(section.campos || [], state, box, () => active(fields(current), state));
               }
               form.append(node("output")); refresh();
@@ -12579,7 +12728,8 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     let index = -1;
     if (ids.length === 1) {
       const candidates = lines.slice(hi + 1, end).map(t => {
-        const organs = F.orgaos(t), a = side(text), b = side(t);
+        const identity = t.slice(0, F.frasesParagrafo(t)[0]?.end || t.length);
+        const organs = F.orgaos(identity), a = side(text), b = side(identity);
         return organs.length === 1 && organs[0] === ids[0] && a === b ? t : "";
       });
       const i = F.encontrarParagrafoNormal(candidates, [text], "", null);
@@ -12594,7 +12744,15 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         return { index, start, end: start + blank[1].length, text: volume[1] };
       }
     }
-    if (normals.has(F.fold(prior.trim())) && ids.length) return { index, start: 0, end: prior.length, text };
+    if (ids.length) {
+      const intact = new Set([...normals].flatMap(n => F.frasesParagrafo(n).map(s => F.fold(s.text))));
+      const first = F.frasesParagrafo(prior)[0];
+      if (first && intact.has(F.fold(first.text))) {
+        // Sem pontuação ditada, mantenha o limite antes da próxima frase.
+        const boundary = prior.slice(first.end).trim() && /[.!?]$/.test(first.text) && !/[.!?]$/.test(text) ? first.text.slice(-1) : "";
+        return { index, start: first.start, end: first.end, text: text + boundary };
+      }
+    }
     return { index, start: prior.length, end: prior.length, text: (prior.trim() ? " " : "") + text };
   }
   const api = { planejar, command };
@@ -12725,17 +12883,20 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     clearTimeout(timer);
     if (pausesEnabled() && dirty.size) timer = setTimeout(reviewPause, 1800);
   }
-  async function reviewPause() {
+  async function reviewPause(repetir) {
+    repetir = repetir?.text ? repetir : null;
     timer = null;
-    if (!pausesEnabled() || pending || !dirty.size || !root.TutuDelta || typeof sample !== "function") return;
+    if (!pausesEnabled() || pending || (!repetir && !dirty.size) || !root.TutuDelta || typeof sample !== "function") return;
     const D = root.TutuDelta, html = sheet.innerHTML, id = ui.activeId();
-    const nodes = [...sheet.children].filter(node => dirty.get(node) === node.innerHTML && reviewed.get(node) !== node.innerHTML);
+    if (repetir && (repetir.html !== html || repetir.id !== id)) { setStatus("Volte ao laudo do pedido que falhou para reprocessar.", "err"); return; }
+    const nodes = repetir ? repetir.indices.map(i => sheet.children[i]) : [...sheet.children].filter(node => dirty.get(node) === node.innerHTML && reviewed.get(node) !== node.innerHTML);
     if (!nodes.length) return;
     const box = document.createElement("div");
     nodes.forEach(node => box.append(node.cloneNode(true)));
     const text = serEditable(box), base = D.capturar(box, text, serEditable);
     if (!base || base.nos.length !== nodes.length) return;
     base.folha = sheet; base.nos = nodes; base.html = html;
+    const pedidoIA = repetir || { text, html, id, indices: nodes.map(node => [...sheet.children].indexOf(node)) };
     const job = pending = { controller: new AbortController(), revision };
     const timeout = setTimeout(() => job.controller.abort(), 12000);
     let applying = false;
@@ -12744,11 +12905,12 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       const response = await sample("Corrija e organize estas linhas ditadas, preservando os achados e as medidas. " +
         "Não acrescente informações nem frases de normalidade.\n" + text,
         { signal: job.controller.signal, cache: false, modelTier: "balanced", modo: "delta", laudo: text, timeoutMs: 12000 });
-      if (job.controller.signal.aborted || !pausesEnabled() || id !== ui.activeId() || sheet.innerHTML !== html) return;
+      if (!pausesEnabled() || id !== ui.activeId() || sheet.innerHTML !== html || job.revision !== revision) return;
+      if (job.controller.signal.aborted) throw Error("A IA excedeu o tempo de resposta.");
       const result = response?.modo === "delta" && !response.truncated ? D.aplicar(text, response.text) : null;
-      if (!result) return;
+      if (!result) throw Error("A resposta da IA veio fora do formato.");
       nodes.forEach(node => { dirty.delete(node); reviewed.set(node, node.innerHTML); });
-      if (result.texto === text) return;
+      if (result.texto === text) { root.TutuReprocessar?.sucesso("pausas", pedidoIA); return; }
       pushVersion("Antes da IA nas pausas");
       applying = true;
       if (!D.aplicarDOM(base, result)) return;
@@ -12756,15 +12918,20 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       undoPatch = { id, before: html, after: sheet.innerHTML };
       context = null; sheetRange = null; beforeSpeech = readNodes();
       scheduleCaseSave();
+      root.TutuReprocessar?.sucesso("pausas", pedidoIA);
     } catch (_) {
       if (applying) sheet.innerHTML = html;
-      // Ponte indisponível, timeout e patch inválido são silenciosos.
+      if (job.revision === revision && id === ui.activeId() && sheet.innerHTML === html) {
+        setStatus("A IA nas pausas falhou. O texto foi preservado.", "err");
+        root.TutuReprocessar?.falhou("pausas", pedidoIA);
+      }
     }
     finally {
       clearTimeout(timeout);
       if (pending === job) pending = null;
     }
   }
+  ui.tempoReal.reprocessar = reviewPause;
   sheet.addEventListener("beforeinput", e => {
     if (e.inputType === "historyUndo" && ui.tempoReal.desfazer()) { e.preventDefault(); return; }
     activity();
@@ -12794,3 +12961,62 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   document.addEventListener("laudos-mic", cancelPause, true);
   window.addEventListener("pagehide", cancelPause);
 })(globalThis);
+
+/* Só o último pedido que falhou. Dados da aba, sem sincronização ou envio automático. */
+(() => {
+  "use strict";
+  const KEY = "tutuIAUltimaFalha";
+  let ultimo = null, executando = false, box = null;
+  const copiar = value => JSON.parse(JSON.stringify(value));
+  const guardar = () => {
+    try {
+      if (ultimo) sessionStorage.setItem(KEY, JSON.stringify(ultimo));
+      else sessionStorage.removeItem(KEY);
+    } catch (_) {}
+  };
+  const caminhos = {
+    gerar: p => gerar(p),
+    conversa: p => window.tutuV2.conversa.mandar(p),
+    pausas: p => window.tutuV2.tempoReal.reprocessar(p),
+    imagem: p => window.tutuV2.iaViu.reprocessar(p)
+  };
+  function mostrar() {
+    box?.remove(); box = null;
+    if (!ultimo) return;
+    const alvo = document.querySelector(ultimo.alvo) || document.getElementById("status");
+    if (!alvo) return;
+    // Na v2 o status fica na aba Revisar, que o Gerar normalmente deixa oculta.
+    if (ultimo.alvo === "#status" && !alvo.getClientRects().length) window.tutuV2?.panel("Revisar");
+    box = document.createElement("span"); box.id = "iaReprocessarAviso";
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.id = "iaReprocessar"; btn.textContent = "Reprocessar";
+    btn.style.cssText = "font-size:inherit;margin:4px 0;opacity:.85";
+    btn.disabled = executando;
+    btn.onclick = async () => {
+      if (executando || !ultimo) return;
+      const job = ultimo;
+      executando = true; btn.disabled = true;
+      try { await caminhos[job.modo](copiar(job.pedido)); }
+      catch (_) { /* Uma falha ao iniciar também mantém o pedido. */ }
+      finally { executando = false; mostrar(); }
+    };
+    box.append(btn); alvo.after(box);
+  }
+  window.TutuReprocessar = {
+    falhou(modo, pedido, alvo = "#status") {
+      pedido.reprocessarId ||= crypto.randomUUID();
+      ultimo = { modo, pedido: copiar(pedido), alvo }; guardar(); mostrar();
+    },
+    sucesso(modo) {
+      if (ultimo?.modo === modo) {
+        ultimo = null; guardar(); mostrar();
+      }
+    }
+  };
+  try {
+    const salvo = JSON.parse(sessionStorage.getItem(KEY));
+    if (salvo && Object.hasOwn(caminhos, salvo.modo) && salvo.pedido &&
+        ["#status", "#conversaMsg"].includes(salvo.alvo)) ultimo = salvo;
+  } catch (_) {}
+  mostrar();
+})();
