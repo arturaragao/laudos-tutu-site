@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "d8cf04f · 22/11 11:51";
+window.__SITE_VERSION__ = "4bda461 · 22/11 13:10";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -1668,8 +1668,30 @@ $("compData").addEventListener("input", updComp);
 /* ================= Modais: abrir / fechar ================= */
 function openModal(id){ $(id).hidden = false; }
 function closeModal(id){ $(id).hidden = true; }
+function bindBackdropClose(el, onClose){
+  if (!el || el._backdropCloseBound) return;
+  el._backdropCloseBound = true;
+  const isDialog = el.tagName === "DIALOG";
+  const onBackdrop = e => {
+    if (e.target !== el) return false;
+    if (!isDialog) return true;
+    const r = el.getBoundingClientRect();
+    return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+  };
+  let down = false, up = false;
+  el.addEventListener("mousedown", e => { down = e.button === 0 && onBackdrop(e); up = false; });
+  el.addEventListener("mouseup", e => { up = down && e.button === 0 && onBackdrop(e); down = false; });
+  el.addEventListener("click", e => { const ok = up && onBackdrop(e); up = false; if (ok) onClose(e); });
+  if (isDialog) {
+    let downOut = false, upOut = false;
+    const isNonModalOut = e => el.open && !el.matches(":modal") && !el.contains(e.target);
+    document.addEventListener("mousedown", e => { downOut = e.button === 0 && isNonModalOut(e); upOut = false; });
+    document.addEventListener("mouseup", e => { upOut = downOut && e.button === 0 && isNonModalOut(e); downOut = false; });
+    document.addEventListener("click", e => { const ok = upOut && isNonModalOut(e); upOut = false; if (ok) onClose(e); });
+  }
+}
 document.querySelectorAll("[data-close]").forEach(b => b.onclick = () => closeModal(b.dataset.close));
-for (const id of ["mascModal","calcModal","histModal"]) $(id).addEventListener("click", e => { if (e.target === $(id)) closeModal(id); });
+for (const id of ["mascModal","calcModal","histModal","trainModal"]) bindBackdropClose($(id), () => closeModal(id));
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   for (const id of ["mascModal","calcModal","histModal","setModal","trainModal"]) if (!$(id).hidden){ closeModal(id); e.stopPropagation(); }
@@ -4565,6 +4587,7 @@ window.tutuSite.appReady = true;
 (() => {
   "use strict";
   const ui = window.tutuV2 = {};
+  if (typeof bindBackdropClose === "function") ui.bindBackdropClose = bindBackdropClose;
   const el = ui.el = (tag, attrs = {}, text = "") => {
     const n = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
@@ -4630,7 +4653,7 @@ window.tutuSite.appReady = true;
   ["tasyBar", "compBox", "laudoBox", "volHint", "corrNote"].forEach(id => move(id, center));
   const right = ui.right = el("aside", { id: "v2Right", "aria-label": "Ferramentas do laudo" });
   const rnav = el("nav", { id: "rightTabs", role: "tablist", "aria-label": "Ferramentas" });
-  const names = ["Revisar", "Classificar", "IA", "Calc", "Aprendido", "Sugestões"], icons = ["✓", "◇", "✦", "∑", "↺", "◈"];
+  const names = ["Revisar", "Calc", "Sugestões"], icons = ["✓", "∑", "◈"];
   ui.panels = {};
   names.forEach((name, i) => {
     const b = button("", () => ui.panel(name), { role: "tab", id: "rightTab" + i, "aria-controls": "rightPanel" + i, "aria-selected": String(i === 0), title: name });
@@ -4638,8 +4661,8 @@ window.tutuSite.appReady = true;
     ui.panels[name] = el("section", { id: "rightPanel" + i, role: "tabpanel", "aria-labelledby": b.id, class: "v2-panel" });
     ui.panels[name].hidden = i !== 0;
   });
-  // Abas opcionais (como Corretor) ganham ícone e nome no trilho recolhido.
-  const extraIcons = { Corretor: "✎" };
+  // Abas opcionais ganham ícone e nome no trilho recolhido.
+  const extraIcons = {};
   new MutationObserver(() => {
     rnav.querySelectorAll("button").forEach(b => {
       if (!b.querySelector("span")) {
@@ -4650,27 +4673,32 @@ window.tutuSite.appReady = true;
     });
   }).observe(rnav, { childList:true });
   right.append(button("≡", () => ui.toggleRight(), { id: "rightToggle", "aria-label": "Fixar ou recolher ferramentas", title: "Ferramentas · Ctrl ]", "aria-expanded": "true" }), rnav, ...Object.values(ui.panels));
-  const rev = ui.panels.Revisar, ia = ui.panels.IA, learned = ui.panels.Aprendido;
+  const rev = ui.panels.Revisar;
   ["revisar", "alertBox", "status"].forEach(id => move(id, rev)); rev.append(document.querySelector(".review"));
   rev.append($("verBtn").closest(".ver-wrap")); move("undoBtn", rev);
-  ["gerar", "parar", "tierQuick", "sugConc"].forEach(id => move(id, ia));
-  ia.append(button("Aceitar tudo", () => { acceptAllEdits(); scheduleCaseSave(); }, { id: "acceptAI" }));
-  move("undoAllBtn", ia); $("undoAllBtn").textContent = "Desfazer IA";
-  ia.append(document.querySelector(".legend")); move("claudeBox", ia);
-  learned.append(document.querySelector(".stylebox"));
-  for (const [label, tab] of [["Autotextos", "frases"], ["Correções", "correcoes"], ["Macros", "macros"], ["Comandos", "comandos"]]) {
-    learned.append(button(label, () => { $("vozBtn").click(); vozTab(tab); }));
-  }
-  learned.append(button("Treinar minha voz", () => $("trainOpen").click()));
+  // Bloco IA: mantido com os mesmos IDs e listeners, montado dentro do painel Conversar (116-v2-conversar.js).
+  const iaSection = ui.iaSection = el("div", { id: "v2IaSection", class: "conversa-ia", hidden: "" });
+  iaSection.append(el("div", { class: "conversa-sec-head" }, "Gerar e revisar laudo · F6"));
+  const iaMain = el("div", { class: "conversa-ia-main" });
+  ["gerar", "parar", "tierQuick"].forEach(id => move(id, iaMain));
+  const iaActs = el("div", { class: "conversa-ia-acts" });
+  move("sugConc", iaActs);
+  iaActs.append(button("Aceitar tudo", () => { acceptAllEdits(); scheduleCaseSave(); }, { id: "acceptAI" }));
+  move("undoAllBtn", iaActs); $("undoAllBtn").textContent = "Desfazer IA";
+  iaSection.append(iaMain, iaActs, document.querySelector(".legend"));
+  move("claudeBox", iaSection);
+  document.body.append(iaSection);
   const calcs = ui.panels.Calc;
+  const classifKeys = ["fle", "renal", "aorta", "tep"];
   Object.entries(CALCS).forEach(([key, label]) => {
-    const target = ["fle", "renal", "aorta", "tep"].includes(key) ? ui.panels.Classificar : calcs;
-    target.append(button(label, () => ui.calculator(key)));
+    if (!classifKeys.includes(key)) calcs.append(button(label, () => ui.calculator(key)));
+  });
+  calcs.append(el("h2", { class: "v2-calc-sub" }, "Classificações e critérios"));
+  classifKeys.forEach(key => {
+    if (CALCS[key]) calcs.append(button(CALCS[key], () => ui.calculator(key)));
   });
   move("calcBtn", calcs);
   calcs.append(button("Ferramentas LeoRad", () => window.leoradEstruturados?.open(), { id: "leoradOpen" }));
-  ui.panels.Classificar.prepend(el("h2", {}, "Classificações e critérios"));
-  ui.panels.Classificar.append(el("p", { class: "meta" }, "Escolha a ferramenta para preencher os critérios e inserir o resultado na folha."));
   ui.calculator = key => { openModal("calcModal"); showCalc(key); };
   const footer = el("footer", { id: "v2Footer" });
   const sideActions = matchMedia("(min-width:768px)");
@@ -4687,12 +4715,147 @@ window.tutuSite.appReady = true;
     document.body.style.setProperty("--v2-actions-inset", inset + "px");
   });
   actionColumnSize.observe(right);
-  const settings = $("setModal"); settings.classList.add("v2-settings"); settings.removeAttribute("aria-modal"); settings.setAttribute("role", "region");
-  const settingsExtras = el("div", { class: "v2-settings-extras" });
-  settings.querySelector(".calc-body").prepend(settingsExtras);
-  settingsExtras.append(el("h2", {}, "Laudos · Configurações"));
-  settingsExtras.append(button("Sépia noite", () => ui.night(), { id: "nightToggle", "aria-pressed": "false" }));
-  settingsExtras.append(button("Compacto · Ctrl ⇧ L", () => ui.compact()), button("Buscar tudo · Ctrl K", () => ui.openPalette()));
+  const settings = $("setModal");
+  settings.classList.add("v2-settings");
+  settings.setAttribute("role", "dialog");
+  settings.setAttribute("aria-modal", "true");
+  const calcBody = settings.querySelector(".calc-body");
+  const origNodes = [...calcBody.children];
+  // Agrupa os blocos fixos de src/index.html sem alterar IDs nem listeners.
+  const origBlocks = [];
+  for (const node of origNodes) {
+    if (node.matches("span.label") || node.querySelector?.("#keyList") || !origBlocks.length) origBlocks.push([node]);
+    else origBlocks[origBlocks.length - 1].push(node);
+  }
+  const blockBy = sel => origBlocks.find(b => b.some(n => n.matches?.(sel) || n.querySelector?.(sel))) || [];
+  const makeIcon = path => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "v2-set-ico");
+    const p = document.createElementNS(svg.namespaceURI, "path");
+    p.setAttribute("d", path);
+    svg.append(p);
+    return svg;
+  };
+  const setTabsDef = [
+    ["aparencia", "Aparência e tela", "Tema, tamanho da folha, layout dos painéis e formatação padrão.", "M12 3a9 9 0 1 0 0 18V3zm0 0a9 9 0 0 1 0 18"],
+    ["voz", "Voz e ditado", "Reconhecimento de voz, substituições aprendidas, volume automático, dicionário e teclas do rodapé.", "M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zm-6 9a6 6 0 0 0 12 0M12 18v3m-4 0h8"],
+    ["ia", "IA", "Modelo do Claude, correção automática do ditado e sugestão de conclusão.", "M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z"],
+    ["dados", "Dados", "Sincronização entre computadores, cópia de segurança e importação de laudos.", "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v5c0 1.7 3.6 3 8 3s8-1.3 8-3V7m-16 5v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5"],
+    ["atalhos", "Atalhos", "Atalhos de teclado e botões do SpeechMike.", "M3 7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7zm4 3h2m3 0h2m3 0h1M7 14h10"],
+    ["ferramentas", "Ferramentas", "Estilo aprendido, janelinha sobre o PACS e Corretor preliminar × definitivo.", "M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.3 2.3-3-3z"],
+    ["mais", "Mais", "Ferramentas legadas e informações do sistema.", "M5 12h.01M12 12h.01M19 12h.01"]
+  ];
+  const setShell = el("div", { class: "v2-set-shell" });
+  const setNav = el("nav", { class: "v2-set-nav", role: "tablist", "aria-label": "Seções de configurações" });
+  const setContent = el("div", { class: "v2-set-content" });
+  const setTabs = {}, setPanes = {};
+  for (const [id, title, subtitle, iconPath] of setTabsDef) {
+    const tabBtn = el("button", { type: "button", class: "v2-set-tab", role: "tab", id: "setTab-" + id, "aria-controls": "setPane-" + id, "aria-selected": "false", "data-aba": id });
+    tabBtn.append(makeIcon(iconPath), el("span", {}, title));
+    tabBtn.onclick = () => ui.settingsTab(id);
+    setNav.append(tabBtn);
+    setTabs[id] = tabBtn;
+    const pane = el("section", { class: "v2-set-pane", role: "tabpanel", id: "setPane-" + id, "aria-labelledby": tabBtn.id, "data-aba": id, hidden: "" });
+    const head = el("div", { class: "v2-set-pane-head" });
+    head.append(el("h3", {}, title), el("p", { class: "v2-set-pane-sub" }, subtitle));
+    pane.append(head);
+    setContent.append(pane);
+    setPanes[id] = pane;
+  }
+  setNav.addEventListener("keydown", e => {
+    const keys = setTabsDef.map(t => t[0]);
+    const idx = keys.indexOf(e.target?.dataset?.aba);
+    if (idx < 0) return;
+    if (["ArrowDown", "ArrowRight"].includes(e.key)) { e.preventDefault(); const next = keys[(idx + 1) % keys.length]; ui.settingsTab(next); setTabs[next].focus(); }
+    else if (["ArrowUp", "ArrowLeft"].includes(e.key)) { e.preventDefault(); const prev = keys[(idx - 1 + keys.length) % keys.length]; ui.settingsTab(prev); setTabs[prev].focus(); }
+  });
+  setShell.append(setNav, setContent);
+  const settingsExtras = el("div", { class: "v2-settings-extras", hidden: "" });
+  calcBody.replaceChildren(setShell, settingsExtras);
+
+  const makeCard = (nodes = [], extraClass = "") => {
+    const card = el("section", { class: extraClass ? "v2-set-card " + extraClass : "v2-set-card" });
+    card.append(...nodes);
+    return card;
+  };
+  const makeToggle = (label, titleText, descText) => {
+    if (!label || label.classList.contains("v2-toggle")) return label;
+    const input = label.querySelector('input[type="checkbox"]');
+    if (!input) return label;
+    input.classList.add("v2-switch");
+    const existingSpan = label.querySelector("span");
+    const copy = el("span", { class: "v2-toggle-copy" });
+    if (titleText === null && existingSpan) {
+      existingSpan.classList.add("v2-toggle-title");
+      copy.append(existingSpan);
+    } else {
+      copy.append(el("span", { class: "v2-toggle-title" }, titleText || label.textContent.trim()));
+    }
+    if (descText) copy.append(el("span", { class: "v2-toggle-desc" }, descText));
+    label.classList.remove("chk-line");
+    label.classList.add("v2-toggle");
+    label.replaceChildren(copy, input);
+    return label;
+  };
+
+  // Aba Aparência e tela
+  const apBlock = blockBy("#setZoom");
+  const apCard = makeCard(apBlock);
+  const apQuick = el("div", { class: "v2-set-actions" });
+  apQuick.append(
+    button("Sépia noite", () => ui.night(), { id: "nightToggle", "aria-pressed": "false" }),
+    button("Compacto · Ctrl ⇧ L", () => ui.compact())
+  );
+  const apTitle = apCard.querySelector(".label");
+  if (apTitle) apTitle.after(apQuick); else apCard.prepend(apQuick);
+  makeToggle(apCard.querySelector("#setFoco")?.closest("label"), "Modo foco", "Só a folha do laudo, em tela cheia (volte aqui ou use o atalho para sair).");
+  const layoutCard = makeCard(blockBy("#setLayout"));
+  const fmtCard = makeCard(blockBy("#setFont"));
+  setPanes.aparencia.append(apCard, layoutCard, fmtCard);
+
+  // Aba Voz e ditado
+  const vozCard = makeCard(blockBy("#trainOpen2"));
+  const vozOptsCard = makeCard([el("span", { class: "label" }, "Opções de ditado e vocabulário")]);
+  vozOptsCard.id = "v2SetVozOpts";
+  setPanes.voz.append(vozCard, vozOptsCard);
+
+  // Aba IA
+  const iaCard = makeCard(blockBy("#setTier"));
+  makeToggle(iaCard.querySelector("#setCorr")?.closest("label"), "Corrigir o ditado com o Claude ao fazer uma pausa", "Só atua quando há palavra fora do vocabulário médico.");
+  setPanes.ia.append(iaCard);
+
+  // Aba Dados
+  const dadosTopSlot = el("div", { class: "v2-set-slot", id: "v2SetDadosTop" });
+  const bkCard = makeCard(blockBy("#bkDown"));
+  setPanes.dados.append(dadosTopSlot, bkCard);
+
+  // Aba Atalhos
+  const keyCard = makeCard(blockBy("#keyList"));
+  const keyQuick = el("div", { class: "v2-set-actions" });
+  keyQuick.append(button("Buscar tudo · Ctrl K", () => { ui.settings(false); ui.openPalette(); }));
+  keyCard.append(keyQuick);
+  setPanes.atalhos.append(keyCard);
+
+  // Aba Ferramentas: Aprendido (estilo + voz) e espaço para PiP (103) e Corretor (113)
+  const learnedBtns = el("div", { class: "v2-set-actions" });
+  for (const [label, tab] of [["Autotextos", "frases"], ["Correções", "correcoes"], ["Macros", "macros"], ["Comandos", "comandos"]]) {
+    learnedBtns.append(button(label, () => { ui.settings(false); $("vozBtn").click(); vozTab(tab); }, { "data-voz-tab": tab }));
+  }
+  learnedBtns.append(button("Treinar minha voz", () => { ui.settings(false); $("trainOpen").click(); }, { id: "v2SetTrainBtn" }));
+  const aprendidoCard = makeCard([
+    el("span", { class: "label" }, "Aprendido"),
+    el("p", { class: "voz-help" }, "Estilo salvo, autotextos, correções, macros, comandos e treino de voz."),
+    document.querySelector(".stylebox"),
+    learnedBtns
+  ]);
+  aprendidoCard.id = "v2SetAprendido";
+  setPanes.ferramentas.append(aprendidoCard);
+  ui.ferramentas = { pane: setPanes.ferramentas, aprendido: aprendidoCard };
+  ui.openTools = () => { ui.settingsTab("ferramentas"); ui.settings(true); };
+
+  // Aba Mais (ferramentas legadas)
   const oldFooter = document.querySelector(".sb");
   const other = el("details", { id: "legacyTools" }); other.append(el("summary", {}, "Mais ferramentas e informações"));
   other.append(oldFooter, $("examCol").querySelector(".side-foot"));
@@ -4702,22 +4865,102 @@ window.tutuSite.appReady = true;
   // Hosts usados por callbacks antigos precisam continuar conectados ao documento.
   const hosts = el("div", { id: "legacyHosts", hidden: "" });
   hosts.append($("grid"), $("sideRail")); other.append(hosts);
-  settings.querySelector(".calc-body").append(other);
-  app.replaceChildren(top, left, center, right, footer, settings);
+  setPanes.mais.append(makeCard([other]));
+
+  const inferTab = node => {
+    const attr = node.getAttribute?.("data-aba");
+    if (attr && setPanes[attr]) return attr;
+    if (node.id === "syncSec" || node.id === "importLaudos") return "dados";
+    if (node.id === "v3Subst" || node.classList?.contains("v2-key-editor") || node.querySelector?.("#autoVolume, #dicLocalAtivo")) return "voz";
+    if (node.querySelector?.("#setSugConc")) return "ia";
+    return "mais";
+  };
+  const routeSetting = (node, forcedTab) => {
+    if (!node || node.nodeType !== 1 || node === setShell || node === settingsExtras) return;
+    const aba = (forcedTab && setPanes[forcedTab]) ? forcedTab : inferTab(node);
+    const pane = setPanes[aba] || setPanes.mais;
+    if (node.querySelector?.("#autoVolume")) {
+      makeToggle(node, "Volume automático (3 dimensões)", "Calcula e insere o volume em cm³ automaticamente ao ditar três medidas.");
+      vozOptsCard.append(node);
+    } else if (node.querySelector?.("#dicLocalAtivo")) {
+      makeToggle(node, null, "Destaca na folha termos fora do vocabulário médico.");
+      vozOptsCard.append(node);
+    } else if (node.querySelector?.("#setSugConc")) {
+      makeToggle(node, "Sugerir conclusão enquanto escrevo os achados", "Mostra sugestões de conclusão com base nos achados e no seu estilo.");
+      let sugCard = $("v2SetSugConcCard");
+      if (!sugCard) {
+        sugCard = makeCard([el("span", { class: "label" }, "Sugerir conclusão")]);
+        sugCard.id = "v2SetSugConcCard";
+        setPanes.ia.append(sugCard);
+      }
+      sugCard.append(node);
+    } else if (node.id === "syncSec") {
+      node.classList.add("v2-set-card");
+      dadosTopSlot.append(node);
+    } else if (node.id === "importLaudos" || node.id === "v3Subst") {
+      node.classList.add("v2-set-card");
+      pane.append(node);
+    } else if (node.classList?.contains("v2-key-editor")) {
+      node.classList.add("v2-set-card");
+      pane.append(node);
+    } else {
+      pane.append(node);
+    }
+  };
+  ui.addSetting = (node, aba) => routeSetting(node, aba);
+  const flushSettings = () => {
+    [...settingsExtras.children].forEach(n => routeSetting(n));
+    [...calcBody.children].forEach(n => { if (n !== setShell && n !== settingsExtras) routeSetting(n); });
+  };
+  const setObserver = new MutationObserver(flushSettings);
+  setObserver.observe(settingsExtras, { childList: true });
+  setObserver.observe(calcBody, { childList: true });
+
+  let activeSetTab = "aparencia";
+  ui.settingsTab = id => {
+    const next = setPanes[id] ? id : "aparencia";
+    activeSetTab = next;
+    for (const [k, btn] of Object.entries(setTabs)) btn.setAttribute("aria-selected", String(k === next));
+    for (const [k, pane] of Object.entries(setPanes)) pane.hidden = k !== next;
+    setContent.scrollTop = 0;
+    try { store.set("v2SettingsTab", next); } catch (_) {}
+  };
+  let savedTab = "aparencia";
+  try { const t = store.get("v2SettingsTab"); if (t && setPanes[t]) savedTab = t; } catch (_) {}
+  ui.settingsTab(savedTab);
+
+  app.replaceChildren(top, left, center, right, footer);
   const footerSize = new ResizeObserver(() => {
     const height = Math.ceil(footer.getBoundingClientRect().height) + "px";
     app.style.setProperty("--v2-footer-height", height);
   });
   footerSize.observe(footer);
-  ui.settings = on => { settings.hidden = !on; app.classList.toggle("settings-open", on); if (on) { renderKeys(); $("setTitle").focus(); } else focusSheet(); ui.updateOutline?.(); };
+  ui.settings = on => {
+    if (on) flushSettings();
+    settings.hidden = !on;
+    app.classList.toggle("settings-open", on);
+    if (on) { ui.settingsTab(activeSetTab); renderKeys(); $("setTitle").focus(); }
+    else focusSheet();
+    ui.updateOutline?.();
+  };
+  // Impede que o listener legado de 50-interface.js feche ao arrastar de dentro para o fundo.
+  let setBackdropDown = false;
+  settings.addEventListener("mousedown", e => { setBackdropDown = e.button === 0 && e.target === settings; }, true);
+  settings.addEventListener("click", e => { if (e.target === settings && !setBackdropDown) e.stopImmediatePropagation(); setBackdropDown = false; }, true);
+  (ui.bindBackdropClose || window.bindBackdropClose)?.(settings, () => ui.settings(false));
   $("setTitle").tabIndex = -1; $("setBtn").onclick = () => ui.settings(true);
   const oldOpen = openModal, oldClose = closeModal;
   openModal = id => id === "setModal" ? ui.settings(true) : oldOpen(id);
   closeModal = id => id === "setModal" ? ui.settings(false) : oldClose(id);
   ui.panel = name => {
+    if (name === "Classificar") name = "Calc";
+    if (name === "Aprendido") { ui.openTools(); return; }
+    if (name === "IA") { ui.conversa?.abrir?.(true); return; }
+    if (name === "Corretor") { ui.openCorretor?.(true); return; }
+    if (!ui.panels[name]) return;
     if (app.classList.contains("focus-mode")) setFoco(false);
     setRightPinned(true);
-    Object.entries(ui.panels).forEach(([n, p]) => { p.hidden = n !== name; $(p.getAttribute("aria-labelledby")).setAttribute("aria-selected", String(n === name)); });
+    Object.entries(ui.panels).forEach(([n, p]) => { p.hidden = n !== name; $(p.getAttribute("aria-labelledby"))?.setAttribute("aria-selected", String(n === name)); });
     $("rightToggle").setAttribute("aria-expanded", "true");
     ui.onPanel?.(name);
   };
@@ -4800,7 +5043,7 @@ window.tutuSite.appReady = true;
   $("setTheme").closest("label").hidden = true; // Somente o botão muda o sépia.
   const keySection = $("keyList").parentElement;
   keySection.querySelector(".label").textContent = "Atalhos de teclado";
-  keySection.querySelector(".voz-help").textContent = "Defina atalhos adicionais. As teclas F do rodapé podem ser editadas abaixo. Alt+S controla o microfone.";
+  keySection.querySelector(".voz-help").textContent = "Defina atalhos adicionais. As teclas F do rodapé podem ser editadas na aba Voz e ditado. Alt+S controla o microfone.";
   ui.setScreenSize = delta => { const size = Math.max(8, Math.min(24, +(store.get("v2SheetSize") || 11) + delta)); store.set("v2SheetSize", String(size)); sheet.style.setProperty("--screen-size", size + "pt"); };
   ui.setScreenSize(0);
   // Ajustes antigos continuam operantes, agora sobre as regiões da casca.
@@ -4830,9 +5073,9 @@ window.tutuSite.appReady = true;
   applyBox = id => { originalBox(id); if (id === "laudoBox") sheet.style.minHeight = boxH[id] ? boxH[id] + "px" : "740px"; };
   $("layoutReset").onclick = () => { layout = { ...LAYOUT_DEF, side:240 }; saveLayout(); setCollapsed(false); if (app.classList.contains("right-mini")) ui.toggleRight(); };
   const originalTab = selectTab;
-  selectTab = which => { originalTab(which); if (which === "chat") ui.panel("IA"); else if (which === "laudo") ui.settings(false); };
+  selectTab = which => { originalTab(which); if (which === "chat") ui.conversa?.abrir?.(true); else if (which === "laudo") ui.settings(false); };
   const originalGenerate = gerar, originalLocalReview = conferirLocal;
-  gerar = async (...args) => { ui.panel("IA"); return originalGenerate(...args); };
+  gerar = async (...args) => { ui.conversa?.abrir?.(true); return originalGenerate(...args); };
   $("gerar").onclick = () => gerar();
   conferirLocal = (...args) => { ui.panel("Revisar"); return originalLocalReview(...args); };
   ui.updateOutline = () => {
@@ -5070,10 +5313,10 @@ window.tutuSite.appReady = true;
     proximo: { label: "Próximo campo", run: () => { if (!nextField()) sectionNav(1); } },
     normal: { label: "Normal", run: () => { laudoNormal(); ui.panel("Revisar"); } },
     copiar: { label: "Copiar", run: () => $("copiar").click() },
-    gerar: { label: "IA", run: () => { ui.panel("IA"); $("gerar").click(); } },
+    gerar: { label: "IA", run: () => { ui.conversa?.abrir?.(true); $("gerar").click(); } },
     conferir: { label: "Conferir", run: () => { ui.panel("Revisar"); conferirLocal(); } },
     sugestoes: { label: "Sugestões", run: () => ui.toggleSugestoes ? ui.toggleSugestoes() : ui.panel("Sugestões") },
-    classificar: { label: "Classificar", run: () => ui.panel("Classificar") },
+    classificar: { label: "Calc", run: () => ui.panel("Calc") },
     desfazer: { label: "Desfazer", run: () => { ui.volume?.cancel(); undoVersion(); } },
     compacto: { label: "Compacto", run: () => ui.compact() },
     hud: { label: "Janelinha sobre o PACS", run: () => ui.openHUD() }
@@ -5091,7 +5334,7 @@ window.tutuSite.appReady = true;
     foot.replaceChildren(shortcuts);   // 17/11/2026: os botões (Copiar, Conversar, Áudio) ficam logo abaixo do laudo
   };
   ui.renderShortcuts();
-  const keyEditor = ui.el("div", { class: "v2-key-editor" });
+  const keyEditor = ui.el("div", { class: "v2-key-editor", "data-aba": "voz" });
   keyEditor.append(ui.el("h2", {}, "Teclas do rodapé"));
   for (const key of Object.keys(ui.shortcuts)) {
     const label = ui.el("label", {}, key), select = ui.el("select", { "aria-label": "Ação de " + key });
@@ -5099,7 +5342,7 @@ window.tutuSite.appReady = true;
     select.value = ui.shortcuts[key]; select.onchange = () => { ui.shortcuts[key] = select.value; store.set("v2Shortcuts", JSON.stringify(ui.shortcuts)); ui.renderShortcuts(); };
     label.append(select); keyEditor.append(label);
   }
-  $("keyList").after(keyEditor);
+  if (ui.addSetting) ui.addSetting(keyEditor, "voz"); else $("keyList").after(keyEditor);
   let paletteRange = null, previousFocus = null, results = [], selected = 0, history = [], paletteEpoch = 0, conts = [];
   const pal = ui.el("section", { id: "commandPalette", role: "dialog", "aria-label": "Buscar máscaras e ações" }); pal.hidden = true;
   const input = ui.el("input", { id: "commandSearch", type: "search", role: "combobox", "aria-controls": "commandResults", "aria-expanded": "false", "aria-autocomplete": "list", "aria-label": "Buscar máscaras, autotextos, comandos, calculadoras e histórico", placeholder: "Máscara, autotexto, comando, cálculo…", autocomplete: "off" });
@@ -5156,7 +5399,9 @@ window.tutuSite.appReady = true;
     add("Ação", "Painel direito: minimizar/restaurar", () => ui.toggleRight());
     add("Ação", "Sépia dia / noite", () => ui.night());
     add("Ação", "Aceitar tudo da IA", () => { acceptAllEdits(); scheduleCaseSave(); });
-    add("Ação", "Desfazer IA", () => { undoAllClaude(); ui.panel("IA"); });
+    add("Ação", "Desfazer IA", () => { undoAllClaude(); ui.conversa?.abrir?.(true); });
+    add("Ação", "Aprendido (estilo e voz)", () => ui.openTools?.(), "aprendido estilo regras voz ferramentas");
+    add("Ação", "Corretor · preliminar × definitivo", () => ui.openCorretor?.(true), "corretor preliminar definitivo chefe ferramentas");
     add("Ação", "Versões do laudo", () => { ui.panel("Revisar"); $("verBtn").click(); });
     for (const [label, id] of [["Editar máscaras", "mascBtn"], ["Ver máscara padrão", "verMask"], ["Autotextos, macros e voz", "vozBtn"], ["Treinar voz", "trainOpen"], ["Exportar backup", "bkDown"]]) add("Ação", label, () => $(id).click());
     add("Ação", "Importar backup", () => { ui.settings(true); $("bkFile").click(); });
@@ -5264,11 +5509,23 @@ window.tutuSite.appReady = true;
   "use strict";
   const ui = window.tutuV2;
   let pip = null, opening = false, observer = null;
-  const open = ui.button("◱", () => ui.openHUD(), {
+  const open = ui.button("◱ Abrir janelinha sobre o PACS", () => { ui.openHUD(); if (!$("setModal")?.hidden) ui.settings?.(false); }, {
     id: "hudOpen", title: "Janelinha sobre o PACS · Ctrl+Shift+J",
     "aria-label": "Janelinha sobre o PACS", "aria-pressed": "false"
   });
-  $("copiar").after(open);
+  if (ui.addSetting) {
+    const hudCard = ui.el("section", { id: "v2SetHud", class: "v2-set-card", "data-aba": "ferramentas" });
+    const hudBtns = ui.el("div", { class: "v2-set-actions" });
+    hudBtns.append(open);
+    hudCard.append(
+      ui.el("span", { class: "label" }, "Janelinha sobre o PACS (PiP)"),
+      ui.el("p", { class: "voz-help" }, "Espelho compacto do laudo ativo em janela separada para posicionar sobre o PACS (Ctrl+Shift+J)."),
+      hudBtns
+    );
+    ui.addSetting(hudCard, "ferramentas");
+  } else {
+    $("copiar").after(open);
+  }
 
   function section() {
     const r = sheetRange;
@@ -5308,7 +5565,7 @@ window.tutuSite.appReady = true;
     setStatus(message);
     $("hudNotice")?.remove();
     const notice = ui.el("span", { id: "hudNotice", role: "status" }, message);
-    open.after(notice);
+    document.body.append(notice);
   }
   ui.openHUD = async () => {
     if (pip && !pip.closed) { pip.focus(); return; }
@@ -5416,7 +5673,7 @@ window.tutuSite.appReady = true;
   ui.volume = { detect, cancel: () => clearTimeout(timer) };
   let timer = null, applying = false, composing = false;
   const enabled = () => store.get("v2AutoVolume") !== "0";
-  const label = ui.el("label");
+  const label = ui.el("label", { "data-aba": "voz" });
   const checkbox = ui.el("input", { type: "checkbox", id: "autoVolume" });
   checkbox.checked = enabled();
   label.append(checkbox, document.createTextNode(" Volume automático (3 dimensões)"));
@@ -5773,7 +6030,7 @@ window.tutuSite.appReady = true;
     b("Agora não", () => {});
     sug.hidden = false; clearTimeout(sugT); sugT = setTimeout(fechaSug, 15000);
   }
-  const caixa = document.createElement("div"); caixa.id = "v3Subst";
+  const caixa = document.createElement("div"); caixa.id = "v3Subst"; caixa.setAttribute("data-aba", "voz");
   caixa.innerHTML = `<span class="label">Substituições aprendidas</span>
 <p class="voz-help" style="margin:2px 0">Trocas que o ditado aplica sozinho. Nascem de correções suas: sugestão na 1ª vez, automática na 3ª igual.</p>
 <ul id="v3SubstList"></ul><div class="bar"><button class="btn small" id="v3Desfaz" type="button">Desfazer a última</button><span class="voz-msg" id="v3SubstMsg" role="status"></span></div>`;
@@ -6185,7 +6442,7 @@ window.tutuSite.appReady = true;
   const painel = el("details", { id: "v3Painel" });
   painel.append(el("summary", {}, "Minha voz melhorou?"));
   const corpo = el("div", { id: "v3PainelCorpo" }); painel.append(corpo);
-  ui.panels.Aprendido.append(painel);
+  (ui.ferramentas?.aprendido || ui.panels?.Aprendido)?.append(painel);
   const SVGNS = "http://www.w3.org/2000/svg";
   function grafico(pts) {
     const W = 300, H = 110, L = 28, B = 22, T = 10, R = 8, svg = document.createElementNS(SVGNS, "svg");
@@ -6230,7 +6487,7 @@ window.tutuSite.appReady = true;
   }
   painel.addEventListener("toggle", () => { if (painel.open) desenharPainel(); });
   ui.voz3.painel = desenharPainel;
-  ui.actions.minhavoz = { label: "Minha voz melhorou?", run: () => { ui.panel("Aprendido"); painel.open = true; desenharPainel(); } };
+  ui.actions.minhavoz = { label: "Minha voz melhorou?", run: () => { ui.openTools ? ui.openTools() : ui.panel("Aprendido"); painel.open = true; desenharPainel(); } };
 
   // Por último: depende de todas as variáveis acima já inicializadas.
   new MutationObserver(syncCaso).observe($("caseTabs"), { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-selected"] });
@@ -6293,7 +6550,7 @@ window.tutuSite.appReady = true;
   const ui = window.tutuV2, host = document.querySelector(".v2-settings-extras");
   if (!host) return;
   const el = ui.el;
-  const wrap = el("section", { id: "importLaudos" });
+  const wrap = el("section", { id: "importLaudos", "data-aba": "dados" });
   const text = el("textarea", { id: "importText", class: "field", rows: "4", placeholder: "Cole aqui o texto dos laudos…", "aria-label": "Texto dos laudos para importar" });
   const file = el("input", { id: "importFile", type: "file", accept: ".md,.txt,.html,.htm,text/*", "aria-label": "Arquivo de laudos (.md, .txt, .html)" });
   const msg = el("span", { id: "importMsg", class: "voz-msg", role: "status" });
@@ -6607,7 +6864,7 @@ window.tutuSite.appReady = true;
     };
     atualizarPonte();
     document.addEventListener("tutu-ponte-mudou", atualizarPonte);
-    const sec = el("section", { id: "syncSec" });
+    const sec = el("section", { id: "syncSec", "data-aba": "dados" });
     sec.append(el("h2", {}, "Sincronização entre PCs"), selo, ajuda, campo, salvar, agora, notion, msg, infoEl, ponteEl, desparear, ponteAjuda);
     host.append(sec);
   }
@@ -7354,7 +7611,7 @@ window.tutuSite.appReady = true;
   /* ---------- interruptor nas Configurações ---------- */
   const alvoCfg = document.querySelector(".v2-settings-extras");
   if (alvoCfg) {
-    const rot = ui.el("label", { class: "chk-line" }), cx = ui.el("input", { type: "checkbox", id: "setSugConc" });
+    const rot = ui.el("label", { class: "chk-line", "data-aba": "ia" }), cx = ui.el("input", { type: "checkbox", id: "setSugConc" });
     cx.checked = ligado;
     cx.onchange = () => { ligado = cx.checked; store.set(CHAVE, ligado ? "1" : "0"); if (ligado) agendar(0); else esconder(); };
     rot.append(cx, document.createTextNode(" Sugerir conclusão enquanto escrevo os achados"));
@@ -8067,20 +8324,39 @@ window.tutuSite.appReady = true;
     finally { clearTimeout(timeout); busy = false; atualizar.disabled = false; }
   }
 
-  const tab = button("Corretor", () => ui.panel("Corretor"), { id: "rightTabCorretor", role: "tab", "aria-controls": "rightPanelCorretor", "aria-selected": "false" });
-  const panel = ui.panels.Corretor = el("section", { id: "rightPanelCorretor", role: "tabpanel", "aria-labelledby": tab.id, class: "v2-panel" });
+  const panel = el("section", { id: "rightPanelCorretor", role: "region", "aria-labelledby": "corretorTitulo", class: "v2-panel" });
   panel.hidden = true;
-  /* Painel flutuante grande (<dialog> modal): a aba continua existindo, mas o conteúdo abre sobre a tela. Esc/× fecham e voltam à 1ª aba. */
+  /* Painel flutuante grande (<dialog> modal) aberto por Configurações › Ferramentas ou Ctrl+K. Esc/× fecham. */
   const flutuante = el("dialog", { id: "corretorFlutuante", class: "corretor-flutuante", "aria-labelledby": "corretorTitulo" });
-  $("rightTabs").append(tab); flutuante.append(panel); document.body.append(flutuante);
-  const outraAba = () => Object.keys(ui.panels).find(n => ui.panels[n] !== panel);
-  const fecharFlutuante = () => { if (!panel.hidden && outraAba()) ui.panel(outraAba()); else if (flutuante.open) flutuante.close(); };
+  flutuante.append(panel); document.body.append(flutuante);
+  const abrirCorretor = (on = true) => {
+    if (on) {
+      if (!$("setModal")?.hidden) ui.settings?.(false);
+      panel.hidden = false;
+    } else {
+      panel.hidden = true;
+      if (flutuante.open) flutuante.close();
+    }
+  };
+  ui.openCorretor = abrirCorretor;
+  const fecharFlutuante = () => abrirCorretor(false);
   const cabecalho = el("header", { class: "corretor-cab" });
   cabecalho.append(el("h2", { id: "corretorTitulo" }, "Corretor · preliminar × definitivo"), button("×", fecharFlutuante, { id: "corretorFechar", class: "corretor-fechar", "aria-label": "Fechar Corretor", title: "Fechar (Esc)" }));
   flutuante.addEventListener("close", () => { if (!panel.hidden) fecharFlutuante(); });
   flutuante.addEventListener("click", ev => { if (ev.target === flutuante) fecharFlutuante(); });
   const sincronizar = () => { if (!panel.hidden && !flutuante.open) flutuante.showModal(); else if (panel.hidden && flutuante.open) flutuante.close(); };
   new MutationObserver(sincronizar).observe(panel, { attributes: true, attributeFilter: ["hidden"] });
+  if (ui.addSetting) {
+    const corretorCard = el("section", { id: "v2SetCorretor", class: "v2-set-card", "data-aba": "ferramentas" });
+    const corretorBtns = el("div", { class: "v2-set-actions" });
+    corretorBtns.append(button("✎ Abrir Corretor", () => abrirCorretor(true), { id: "corretorOpen", "aria-label": "Abrir Corretor preliminar × definitivo" }));
+    corretorCard.append(
+      el("span", { class: "label" }, "Corretor · preliminar × definitivo"),
+      el("p", { class: "voz-help" }, "Compara seus laudos preliminares com os definitivos revisados pelos chefes (local, sem IA)."),
+      corretorBtns
+    );
+    ui.addSetting(corretorCard, "ferramentas");
+  }
   const actions = el("div", { class: "corretor-actions" });
   const ghBtn = button("Atualizar do GitHub", () => carregarGh(), { id: "corretorGh" });
   const atualizar = button("Carregar da ponte", carregar, { id: "corretorCarregar" });
@@ -8362,7 +8638,7 @@ window.tutuSite.appReady = true;
   });
   observer.observe(panel, { attributes: true, attributeFilter: ["hidden"] });
   T?.onChave?.(() => { if (iniciado && !demo) carregarGh(); });
-  if (demo) ui.panel("Corretor");
+  if (demo) ui.openCorretor(true);
 })();
 
 /* USG do celular: texto filtrado na fila; organização local, sem IA. */
@@ -8956,14 +9232,14 @@ window.tutuSite.appReady = true;
   let tela = null;   // tela acesa enquanto dita (Wake Lock)
   const manterTela = async () => { try { if (on && !tela && navigator.wakeLock && document.visibilityState === "visible") { tela = await navigator.wakeLock.request("screen"); tela.addEventListener("release", () => { tela = null; }); } } catch (_) { tela = null; } };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") manterTela(); });
-  let fails = 0, ignoreUntil = 0, lastInsert = null, lastReached = null;
+  let fails = 0, ignoreUntil = 0, lastInsert = null, lastReached = null, panelShortcut = null;
   const note = ui.el("small", { id: "siteDictationNote", title: "Extensão não detectada: o reconhecimento roda nesta página." }, "ditado do site (sem extensão)");
   note.style.cssText = "color:var(--muted);font-size:11px;margin-left:6px"; note.hidden = true; if (label) label.after(note);
   const parse = e => { try { return typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return null; } };
   const emit = (name, data) => document.dispatchEvent(new CustomEvent(name, { detail: JSON.stringify({ ...data, source }) }));
   const norm = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[.,;:!?"]/g, " ").replace(/\s+/g, " ").trim();
   const config = () => { try { return JSON.parse(document.getElementById("voiceConfig").textContent) || {}; } catch (_) { return {}; } };
-  const destination = () => ({ id: "laudo", caso: anchor?.caseId || ui.activeId() });
+  const destination = () => ({ id: ui.tempoReal?.noPainel() ? "tempoRealTexto" : "laudo", caso: anchor?.caseId || ui.activeId() });
   const isAltS = e => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.code === "KeyS" || String(e.key || "").toLowerCase() === "s");
 
   /* ---------- pílula ---------- */
@@ -8994,10 +9270,14 @@ window.tutuSite.appReady = true;
     if (extension) return;
     if (on || speech) stop(true);   // publica "desligado" enquanto ainda é dono da pílula
     extension = true; checked = true; pendingToggle = false; note.hidden = true;
-    ui.dictate = originalDictate;
+    ui.dictate = () => {
+      const panel = ui.tempoReal?.noPainel();
+      originalDictate();
+      if (panel) ui.tempoReal.focar();
+    };
   }
   for (const name of ["laudos-mic", "laudos-provisorio", "laudos-final", "laudos-voz", "laudos-correcao", "laudos-ditado", "laudos-chave", "laudos-tasy", "laudos-treino-status", "laudos-extensao-pong"]) {
-    document.addEventListener(name, e => { const d = parse(e); if (d && d.source !== source) foundExtension(); }, true);
+    window.addEventListener(name, e => { const d = parse(e); if (d && d.source !== source) foundExtension(); }, true);
   }
   const ping = () => { if (!extension) emit("laudos-extensao-ping", {}); };
   ping();
@@ -9029,6 +9309,7 @@ window.tutuSite.appReady = true;
       (words.length ? exams.find(e => aliases(e).some(a => words.every(w => a.split(" ").includes(w)))) : null);
   }
   function runLocal(acao) {
+    if (ui.tempoReal?.noPainel() && ui.tempoReal.comando(acao)) return true;
     if (acao === "pausar" || acao === "retomar") { paused = acao === "pausar"; clearInterim(); state(); return true; }
     if (acao === "cancelar") { clearInterim(); ignoreUntil = Date.now() + 4000; return true; }
     if (acao === "apagar_isso") { undoLast(); return true; }
@@ -9068,6 +9349,7 @@ window.tutuSite.appReady = true;
     return sheet.lastElementChild ? rangeAtEnd(sheet.lastElementChild) : null;
   }
   function remember() {   // âncora no início da frase: o final entra onde o provisório começou
+    if (ui.tempoReal?.noPainel()) { anchor = null; return; }
     if (anchor) return;
     const r = caretRange();
     if (r) anchor = { range: r, caseId: ui.activeId() };
@@ -9083,6 +9365,10 @@ window.tutuSite.appReady = true;
     return opts.find(o => norm(o) === said) || opts.find(o => said.includes(norm(o))) || null;
   }
   function insert(text, original, alts, confidence) {
+    if (ui.tempoReal?.noPainel()) {
+      emit("laudos-final", { texto: text, original, conf: confidence, destino: destination() });
+      clearInterim(); render(); return;
+    }
     remember();
     if (!anchor || anchor.caseId !== ui.activeId() || !sheet.contains(anchor.range.commonAncestorContainer)) {
       clearInterim(); setStatus("A folha mudou durante a frase. Posicione o cursor e continue ditando."); return;
@@ -9142,7 +9428,7 @@ window.tutuSite.appReady = true;
     if (!Speech || !voice) { setStatus(!Speech ? "Ditado indisponível neste navegador. Use o Chrome (Web Speech) ou a extensão." : "Motor de voz não carregado. Reconstrua o site com tools/build_site.py."); return; }
     if (audioOpen()) { setStatus("Feche o Áudio antes de ditar na folha."); return; }
     engaged = true; fails = 0; paused = false;
-    ui.closePalette?.(); focusSheet();
+    ui.closePalette?.(); if (!ui.tempoReal?.noPainel()) focusSheet();
     const s = speech = new Speech();
     s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
     phrases(s, config()); on = true;
@@ -9193,10 +9479,12 @@ window.tutuSite.appReady = true;
   // Captura: só observa. Se a tecla foi cancelada e não chegou à bolha, outro dono (content.js) a consumiu.
   window.addEventListener("keydown", e => {
     if (extension || !isAltS(e)) return;
+    panelShortcut = ui.tempoReal?.noPainel() ? e : null;
     setTimeout(() => { if (!extension && lastReached !== e && e.defaultPrevented) foundExtension(); }, 0);
   }, true);
   window.addEventListener("keydown", e => {
     if (extension || !isAltS(e)) return;
+    if (panelShortcut === e) ui.tempoReal.focar();
     lastReached = e; checked = true;
     // Sem checar defaultPrevented: o handler antigo da página (document, bolha) já cancela Alt+S só para
     // manter o foco na folha. Quem consome a tecla de verdade (content.js) para a propagação e ela não chega aqui.
@@ -9205,7 +9493,7 @@ window.tutuSite.appReady = true;
   });
   ui.dictate = () => {
     if (extension) return originalDictate();
-    ui.closePalette?.(); focusSheet();
+    ui.closePalette?.(); if (!ui.tempoReal?.noPainel()) focusSheet();
     // Mesmo caminho do 102: com a extensão (content.js) a tecla sintética liga o microfone dela.
     const ev = new KeyboardEvent("keydown", { key: "s", code: "KeyS", altKey: true, bubbles: true, cancelable: true });
     document.dispatchEvent(ev);
@@ -9325,6 +9613,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
   const linha = el("div", { class: "conversa-linha" }); linha.append(texto, el("div", { class: "conversa-botoes" }));
   linha.lastChild.append(mic, enviar);
   box.append(cab, linha, msg, acoes, lembrei);
+  if (ui.iaSection) { ui.iaSection.hidden = false; box.append(ui.iaSection); }
   document.body.append(box);
   const abrirBtn = button("Conversar", () => abrir(box.hidden), { id: "conversaAbrir", title: "Conversar com a IA: pedir ajustes no laudo (voz ou texto)" });
   ui.actionIcon(abrirBtn, "Conversar com a IA", "M12 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM3 21v-3a6 6 0 0 1 12 0v3M16 5a5 5 0 0 1 0 8M19 2a9 9 0 0 1 0 14");
@@ -12023,8 +12312,14 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     });
     insert.disabled = copy.disabled = true;
     const actions = node("div"); actions.className = "leorad-actions"; actions.append(insert, copy);
-    dialog.append(heading, button("Fechar", () => { request++; dialog.close(); }), search, listing, form, preview, actions, status);
+    const closeDialog = () => { request++; dialog.close(); };
+    dialog.append(heading, button("Fechar", closeDialog), search, listing, form, preview, actions, status);
     dialog.addEventListener("cancel", () => { request++; });
+    document.addEventListener("keydown", e => {
+      if (e.key !== "Escape" || !dialog.open) return;
+      e.preventDefault(); e.stopPropagation(); closeDialog();
+    }, true);
+    (window.tutuV2?.bindBackdropClose || window.bindBackdropClose)?.(dialog, closeDialog);
     document.body.append(dialog);
   }
   api.open = async () => {
@@ -12092,6 +12387,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     event.stopPropagation();
     dialog.close();
   });
+  (ui.bindBackdropClose || window.bindBackdropClose)?.(dialog, () => dialog.close());
   document.body.append(dialog);
   const G = () => window.tutuSite?.gh;
   const plain = text => String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -12344,6 +12640,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const popup = document.createElement("div"); popup.id = "dicLocalPopup"; popup.hidden = true;
   popup.setAttribute("role", "dialog"); popup.setAttribute("aria-label", "Dicionário médico"); document.body.append(popup);
   const label = document.createElement("label"), toggle = document.createElement("input");
+  label.setAttribute("data-aba", "voz");
   toggle.type = "checkbox"; toggle.checked = true; toggle.id = "dicLocalAtivo";
   const status = document.createElement("span");
   label.append(toggle, status);
@@ -12694,7 +12991,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
 
 /* Encaixe local de finais do ditado. Sem busca no banco, rede ou IA.
    O matcher anatômico é o do modo @; só a máscara intacta pode ser substituída.
-   A revisão delta nas pausas é uma opção independente, desligada por padrão. */
+   Conversar em tempo real usa o delta nas pausas apenas no painel. */
 (function (root) {
   "use strict";
   const F = root.TutuFrase || (typeof require === "function" ? require("./117-v2-frase.js") : null);
@@ -12760,206 +13057,191 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   root.TutuTempoReal = api;
   if (!root.tutuV2 || typeof sheet === "undefined") return;
   const ui = root.tutuV2;
-  let context = null;
-  const enabled = () => store.get("v2TempoReal") !== "0";
-  const label = ui.el("label"), checkbox = ui.el("input", { type: "checkbox", id: "tempoReal" });
-  checkbox.checked = enabled();
-  label.append(checkbox, document.createTextNode(" Encaixar ditado por órgão (sem IA)"));
-  document.querySelector(".v2-settings-extras")?.append(label);
-  function toggle(on) { context = null; store.set("v2TempoReal", on ? "1" : "0"); checkbox.checked = on; }
-  checkbox.onchange = () => toggle(checkbox.checked);
-  ui.actions.tempoReal = { label: "Encaixar ditado por órgão: ligar/desligar", run: () => toggle(!enabled()) };
+  const KEY = "v2ConversarTempoReal";
+  if (!["0", "1"].includes(store.get(KEY))) store.set(KEY, store.get("v2IAPausas") === "1" ? "1" : "0");
+  const enabled = () => store.get(KEY) === "1";
+  const box = ui.el("section", { id: "tempoRealPainel", "aria-label": "Conversar em tempo real" });
+  const texto = ui.el("div", { id: "tempoRealTexto", contenteditable: "true", role: "textbox",
+    "aria-label": "Instrução para o laudo em tempo real", "aria-multiline": "true",
+    "data-placeholder": "Dite aqui para ajustar os Achados e a Conclusão." });
+  const parcial = ui.el("div", { id: "tempoRealParcial", "aria-live": "off" });
+  const msg = ui.el("p", { id: "tempoRealMsg", role: "status", "aria-live": "polite" });
+  const cab = ui.el("div", { class: "tempo-real-cab" });
+  const mic = ui.button("Ditar · Alt S", () => { texto.focus(); ui.dictate(); }, { id: "tempoRealMic" });
+  cab.append(ui.el("b", {}, "Conversar em tempo real"), mic);
+  box.append(cab, texto, parcial, msg);
+  document.body.append(box);
+  const botao = ui.button("Conversar em tempo real", () => toggle(!enabled()),
+    { id: "conversarTempoReal", "aria-pressed": "false" });
+  const conversar = document.getElementById("conversaAbrir");
+  if (conversar) conversar.after(botao); else ui.footerActions.append(botao);
+  ui.actionIcon(botao, "Conversar em tempo real: ligar/desligar",
+    "M4 4h16v12H9l-5 4V4m4 4h8m-8 4h5");
+  let timer = null, pending = null, undoPatch = null, revision = 0, panelActive = false;
+  let settled = "", inputSinceFinal = false, panelCase = ui.activeId();
   const config = () => { try { return JSON.parse(document.getElementById("voiceConfig").textContent); } catch (_) { return {}; } };
-  function normals() {
-    const out = new Set();
-    if (typeof current === "undefined" || !current) return out;
-    for (const ln of String(maskOf(current) || "").split(/\r?\n/)) {
-      const m = ln.trim().replace(/^\{\{[^}]*\}\}/, "").match(/^\[<(.*)>\]$/);
-      if (m) out.add(F.fold(m[1].replace(/<\/?[bui]>/gi, "").trim()));
-    }
-    return out;
-  }
-  function plan(text, ps, lines, cursor) {
-    // Contexto só vale na mesma folha e sem edição posterior do parágrafo.
-    let idx = context && context.id === ui.activeId() && context.signature === signature(lines) ? ps.indexOf(context.block) : -1;
-    if (cursor) {
-      const node = cursor.startContainer.nodeType === 1 ? cursor.startContainer : cursor.startContainer.parentElement;
-      const block = node.closest("p,div,li"), caretIndex = ps.indexOf(block);
-      if (caretIndex >= 0) {
-        const before = document.createRange(); before.selectNodeContents(block); before.setEnd(cursor.startContainer, cursor.startOffset);
-        if (F.detectar(before.toString())) { context = null; return null; }
-      }
-      // Um órgão escolhido pelo médico no cursor prevalece sobre a frase anterior.
-      if (idx < 0 || caretIndex >= 0 && F.orgaos(lines[caretIndex]).length === 1) idx = caretIndex;
-    }
-    const p = planejar(lines, text, normals(), idx, config() || {});
-    if (!p) context = null;
-    return p;
-  }
-  const signature = lines => lines.map(t => t.trim()).join("\n");
-  function range(p, ps) {
-    const block = ps[p.index];
-    if (block.querySelector('del,ins,[contenteditable="false"]')) return null;
-    if (!blockText(block)) { const r = document.createRange(); r.selectNodeContents(block); return r; }
-    return rangeFromOffsets(block, p.start, p.end);
-  }
-  function remember(block) {
-    context = { id: ui.activeId(), block, signature: signature([...sheet.children].map(blockText)) };
-  }
-  ui.tempoReal = {
-    preparar(text, cursor) {
-      if (!enabled() || !cursor.collapsed) return null;
-      const ps = [...sheet.children], p = plan(text, ps, ps.map(blockText), cursor);
-      if (!p) return null;
-      const r = range(p, ps); if (!r) return null;
-      // O final é síncrono; o contexto é atualizado pelo laudos-final após inserir.
-      context = { id: ui.activeId(), block: ps[p.index], signature: "" };
-      return { range: r, text: p.text.trimStart() };
-    }
-  };
-  document.addEventListener("laudos-final", e => {
-    let d; try { d = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return; }
-    if (!enabled() || !d) return;
-    if (d.source === "ditado-site") { if (context?.block?.isConnected) remember(context.block); return; }
-    if (d.destino && (d.destino.id !== "laudo" || d.destino.caso && d.destino.caso !== ui.activeId())) return;
-    const text = String(d.texto || "").trim(), sel = getSelection();
-    if (!text || !sel.rangeCount || !sel.isCollapsed || !sheet.contains(sel.anchorNode)) return;
-    const cursor = sel.getRangeAt(0).cloneRange();
-    const node = cursor.startContainer.nodeType === 1 ? cursor.startContainer : cursor.startContainer.parentElement;
-    const block = node.closest("p,div,li"), ps = [...sheet.children], bi = ps.indexOf(block);
-    if (bi < 0) return;
-    const at = offsetOf(block, cursor.startContainer, cursor.startOffset), prior = blockText(block);
-    // A extensão já inseriu: só mova o trecho final comprovadamente idêntico ao evento.
-    let end = at; while (end > 0 && /\s/.test(prior[end - 1])) end--;
-    const start = end - text.length;
-    if (start < 0 || prior.slice(start, end) !== text) return;
-    const lines = ps.map(blockText); lines[bi] = prior.slice(0, start) + prior.slice(end);
-    const p = plan(text, ps, lines, cursor);
-    if (!p || p.index === bi) return;
-    const target = range(p, ps), inserted = rangeFromOffsets(block, start, end);
-    if (!target || !inserted) return;
-    pushVersion("Antes do encaixe do ditado");
-    sheet.focus({ preventScroll: true });
-    sel.removeAllRanges(); sel.addRange(inserted); document.execCommand("delete");
-    sel.removeAllRanges(); sel.addRange(target); sheetRange = target.cloneRange(); insertAtCaret(p.text);
-    if (sel.rangeCount) sheetRange = sel.getRangeAt(0).cloneRange();
-    remember(ps[p.index]); scheduleCaseSave();
-  }, true);
-
-  // Só finais de ditado tornam linhas elegíveis; edições comuns apenas cancelam.
-  const pauseLabel = ui.el("label"), pauseCheck = ui.el("input", { type: "checkbox", id: "iaPausas" });
-  const pausesEnabled = () => store.get("v2IAPausas") === "1";
-  pauseCheck.checked = pausesEnabled();
-  pauseLabel.append(pauseCheck, document.createTextNode(" IA nas pausas"));
-  label.after(pauseLabel);
-  let timer = null, pending = null, beforeSpeech = null, undoPatch = null, revision = 0;
-  const dirty = new Map(), reviewed = new WeakMap();
-  const readNodes = () => new Map([...sheet.children].map(node => [node, node.innerHTML]));
+  const parse = e => { try { return typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return null; } };
+  const read = () => texto.innerText.replace(/\u00a0/g, " ").trim();
+  const say = s => { msg.textContent = s; };
   function cancelPause() {
     clearTimeout(timer); timer = null; revision++;
-    pending?.controller.abort();
+    pending?.controller.abort(); pending = null;
+  }
+  function syncCase() {
+    if (panelCase === ui.activeId()) return;
+    cancelPause(); panelCase = ui.activeId();
+    texto.textContent = ""; parcial.textContent = ""; settled = ""; say("");
   }
   function activity() {
-    cancelPause();
-    beforeSpeech = pausesEnabled() ? readNodes() : null;
+    syncCase(); cancelPause();
+    if (enabled() && panelActive) say("");
   }
-  function setPauses(on) {
-    cancelPause(); dirty.clear(); beforeSpeech = null;
-    store.set("v2IAPausas", on ? "1" : "0"); pauseCheck.checked = on;
+  function toggle(on) {
+    cancelPause(); store.set(KEY, on ? "1" : "0");
+    box.hidden = !on; botao.setAttribute("aria-pressed", String(on));
+    document.body.classList.toggle("conversar-tempo-real", on);
+    parcial.textContent = "";
+    if (on) { syncCase(); texto.focus(); }
+    else { panelActive = false; say(""); }
   }
-  pauseCheck.onchange = () => setPauses(pauseCheck.checked);
-  ui.actions.iaPausas = { label: "IA nas pausas: ligar/desligar", run: () => setPauses(!pausesEnabled()) };
-  ui.tempoReal.atividade = activity;
-  ui.tempoReal.desfazer = () => {
-    const saved = undoPatch; undoPatch = null;
-    if (!saved || saved.id !== ui.activeId() || saved.after !== sheet.innerHTML) return false;
-    cancelPause(); dirty.clear();
-    sheet.innerHTML = saved.before;
-    sheetRange = null; context = null; beforeSpeech = readNodes();
-    scheduleCaseSave();
-    return true;
-  };
   function schedulePause() {
     clearTimeout(timer);
-    if (pausesEnabled() && dirty.size) timer = setTimeout(reviewPause, 1800);
+    if (enabled() && panelActive && read()) timer = setTimeout(reviewPause, 1800);
   }
-  async function reviewPause(repetir) {
-    repetir = repetir?.text ? repetir : null;
-    timer = null;
-    if (!pausesEnabled() || pending || (!repetir && !dirty.size) || !root.TutuDelta || typeof sample !== "function") return;
-    const D = root.TutuDelta, html = sheet.innerHTML, id = ui.activeId();
-    if (repetir && (repetir.html !== html || repetir.id !== id)) { setStatus("Volte ao laudo do pedido que falhou para reprocessar.", "err"); return; }
-    const nodes = repetir ? repetir.indices.map(i => sheet.children[i]) : [...sheet.children].filter(node => dirty.get(node) === node.innerHTML && reviewed.get(node) !== node.innerHTML);
-    if (!nodes.length) return;
-    const box = document.createElement("div");
-    nodes.forEach(node => box.append(node.cloneNode(true)));
-    const text = serEditable(box), base = D.capturar(box, text, serEditable);
-    if (!base || base.nos.length !== nodes.length) return;
-    base.folha = sheet; base.nos = nodes; base.html = html;
-    const pedidoIA = repetir || { text, html, id, indices: nodes.map(node => [...sheet.children].indexOf(node)) };
-    const job = pending = { controller: new AbortController(), revision };
-    const timeout = setTimeout(() => job.controller.abort(), 12000);
-    let applying = false;
-    try {
-      // Mesma requisição delta usada pelo Conversar, sem sua reserva por fila.
-      const response = await sample("Corrija e organize estas linhas ditadas, preservando os achados e as medidas. " +
-        "Não acrescente informações nem frases de normalidade.\n" + text,
-        { signal: job.controller.signal, cache: false, modelTier: "balanced", modo: "delta", laudo: text, timeoutMs: 12000 });
-      if (!pausesEnabled() || id !== ui.activeId() || sheet.innerHTML !== html || job.revision !== revision) return;
-      if (job.controller.signal.aborted) throw Error("A IA excedeu o tempo de resposta.");
-      const result = response?.modo === "delta" && !response.truncated ? D.aplicar(text, response.text) : null;
-      if (!result) throw Error("A resposta da IA veio fora do formato.");
-      nodes.forEach(node => { dirty.delete(node); reviewed.set(node, node.innerHTML); });
-      if (result.texto === text) { root.TutuReprocessar?.sucesso("pausas", pedidoIA); return; }
-      pushVersion("Antes da IA nas pausas");
-      applying = true;
-      if (!D.aplicarDOM(base, result)) return;
-      applying = false;
-      undoPatch = { id, before: html, after: sheet.innerHTML };
-      context = null; sheetRange = null; beforeSpeech = readNodes();
-      scheduleCaseSave();
-      root.TutuReprocessar?.sucesso("pausas", pedidoIA);
-    } catch (_) {
-      if (applying) sheet.innerHTML = html;
-      if (job.revision === revision && id === ui.activeId() && sheet.innerHTML === html) {
-        setStatus("A IA nas pausas falhou. O texto foi preservado.", "err");
-        root.TutuReprocessar?.falhou("pausas", pedidoIA);
-      }
+  ui.actions.conversarTempoReal = { label: "Conversar em tempo real: ligar/desligar", run: () => toggle(!enabled()) };
+  ui.tempoReal = {
+    noPainel: () => enabled() && panelActive,
+    focar: () => texto.focus(),
+    // O caminho da folha respeita sempre o cursor; o matcher local continua exportado.
+    preparar: () => null,
+    atividade: activity,
+    comando(acao) {
+      if (!["apagar_isso", "apagar_frase", "cancelar"].includes(acao)) return false;
+      activity(); texto.textContent = ""; parcial.textContent = ""; settled = ""; inputSinceFinal = false;
+      return true;
+    },
+    desfazer() {
+      const saved = undoPatch; undoPatch = null;
+      if (!saved || saved.id !== ui.activeId() || saved.after !== sheet.innerHTML) return false;
+      cancelPause(); sheet.innerHTML = saved.before; sheetRange = null;
+      scheduleCaseSave(); renderAlerts(); updateCount();
+      return true;
+    },
+    reprocessar: reviewPause
+  };
+  document.addEventListener("focusin", e => {
+    syncCase();
+    if (texto.contains(e.target)) { panelActive = true; return; }
+    if (sheet.contains(e.target) || e.target.matches?.("input,textarea,[contenteditable=true]")) {
+      panelActive = false; cancelPause(); parcial.textContent = "";
     }
-    finally {
-      clearTimeout(timeout);
-      if (pending === job) pending = null;
+  }, true);
+  texto.addEventListener("input", () => {
+    activity(); inputSinceFinal = true; schedulePause();
+  });
+  texto.addEventListener("keydown", e => {
+    // Não deixe o Gerar global consumir Ctrl+Enter dentro do painel.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); reviewPause(); }
+  });
+  function acceptSpeech(e, final) {
+    const d = parse(e);
+    if (!enabled() || !d || !panelActive) return;
+    syncCase();
+    if (d.destino?.caso && d.destino.caso !== ui.activeId()) return;
+    if (d.destino?.id && !["laudo", texto.id].includes(d.destino.id)) return;
+    // A extensão escreve no contenteditable antes de emitir o final.
+    // Captura na window evita que os handlers da folha recebam este ditado.
+    e.stopImmediatePropagation();
+    if (!d.texto) { parcial.textContent = ""; return; }
+    if (command(d.texto, config())) { parcial.textContent = ""; return; }
+    activity();
+    if (!final) { parcial.textContent = d.texto; return; }
+    const t = String(d.texto).trim(), actual = read();
+    if (d.source === "ditado-site" || actual === settled && !inputSinceFinal || !norm(actual).endsWith(norm(t))) {
+      texto.textContent = [actual, t].filter(Boolean).join(" ");
     }
+    settled = read(); inputSinceFinal = false; parcial.textContent = "";
+    schedulePause();
   }
-  ui.tempoReal.reprocessar = reviewPause;
+  window.addEventListener("laudos-provisorio", e => acceptSpeech(e, false), true);
+  window.addEventListener("laudos-final", e => acceptSpeech(e, true), true);
+  // Atividade e edição da folha invalidam o snapshot, mas nunca agendam IA nela.
   sheet.addEventListener("beforeinput", e => {
     if (e.inputType === "historyUndo" && ui.tempoReal.desfazer()) { e.preventDefault(); return; }
     activity();
   }, true);
+  sheet.addEventListener("input", cancelPause, true);
+  new MutationObserver(() => {
+    syncCase();
+    if (pending && sheet.innerHTML !== pending.html) cancelPause();
+  }).observe(sheet, { childList: true, subtree: true, characterData: true, attributes: true });
   document.addEventListener("keydown", e => {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z" &&
         sheet.contains(e.target) && ui.tempoReal.desfazer()) {
       e.preventDefault(); e.stopImmediatePropagation();
     }
   }, true);
-  sheet.addEventListener("input", cancelPause, true);
-  document.addEventListener("laudos-provisorio", e => {
-    let d; try { d = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return; }
-    if (d?.texto) activity();
+  document.addEventListener("laudos-mic", e => {
+    const d = parse(e);
+    if (d?.on && !d.paused) return;
+    cancelPause(); parcial.textContent = "";
   }, true);
-  document.addEventListener("laudos-final", e => {
-    let d; try { d = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return; }
-    if (!d?.texto || command(d.texto, config()) || d.destino && (d.destino.id !== "laudo" || d.destino.caso && d.destino.caso !== ui.activeId())) return;
-    cancelPause();
-    for (const node of dirty.keys()) if (!sheet.contains(node)) dirty.delete(node);
-    if (pausesEnabled() && beforeSpeech) for (const node of sheet.children) {
-      if (beforeSpeech.get(node) !== node.innerHTML) dirty.set(node, node.innerHTML);
-    }
-    beforeSpeech = pausesEnabled() ? readNodes() : null;
-    schedulePause();
-  }, true);
-  document.addEventListener("laudos-mic", cancelPause, true);
   window.addEventListener("pagehide", cancelPause);
+  async function reviewPause(repetir) {
+    repetir = repetir?.text ? repetir : null;
+    clearTimeout(timer); timer = null; syncCase();
+    if (!enabled() || pending || (!repetir && !panelActive)) return;
+    const text = repetir?.text || read();
+    if (!text) return;
+    const D = root.TutuDelta, html = sheet.innerHTML, id = ui.activeId(), draft = laudoTagged();
+    if (repetir && (repetir.html !== html || repetir.id !== id || read() !== repetir.text)) {
+      say("O laudo ou o pedido mudou. Dite novamente no painel."); return;
+    }
+    const pedidoIA = repetir || { text, html, id };
+    if (!draft.trim()) { say("Abra um laudo antes de ditar o ajuste."); return; }
+    const job = pending = { controller: new AbortController(), revision, html };
+    const timeout = setTimeout(() => job.controller.abort(), 12000);
+    let applying = false;
+    say("Ajustando o laudo…");
+    try {
+      if (!D || typeof sample !== "function") throw Error("IA indisponível");
+      const base = D.capturar(sheet, draft, serEditable);
+      const response = await sample(
+        "Use o texto abaixo como INSTRUÇÃO do médico sobre o laudo inteiro. " +
+        "Encaixe isto nos Achados e na Conclusão no formato do laudo. " +
+        "Preserve as demais informações, medidas e seções. Não invente achados.\nINSTRUÇÃO:\n" + text,
+        { signal: job.controller.signal, cache: false, modelTier: "balanced", modo: "delta", laudo: draft, timeoutMs: 12000 });
+      if (!enabled() || id !== ui.activeId() || sheet.innerHTML !== html || job.revision !== revision) return;
+      if (job.controller.signal.aborted) throw Error("Tempo de resposta excedido");
+      const result = response?.modo === "delta" && !response.truncated ? D.aplicar(draft, response.text) : null;
+      if (!result) throw Error("Resposta fora do formato");
+      if (result.texto !== draft) {
+        pushVersion("Antes de conversar em tempo real");
+        applying = true;
+        if (base) { if (!D.aplicarDOM(base, result)) throw Error("A folha mudou"); }
+        else sheet.innerHTML = diffLaudoHtml(draft, result.texto);
+        applying = false;
+        undoPatch = { id, before: html, after: sheet.innerHTML };
+        sheetRange = null;
+        renderAlerts(); updateCount(); scheduleCaseSave();
+      }
+      texto.textContent = ""; parcial.textContent = ""; settled = "";
+      root.TutuReprocessar?.sucesso("tempoReal", pedidoIA);
+      say("Ajustado. Dite a próxima frase.");
+    } catch (_) {
+      if (applying) sheet.innerHTML = html;
+      if (job.revision === revision && id === ui.activeId() && sheet.innerHTML === html) {
+        say("IA indisponível. Seu pedido foi preservado.");
+        root.TutuReprocessar?.falhou("tempoReal", pedidoIA, "#tempoRealMsg");
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (pending === job) pending = null;
+    }
+  }
+  // Migra apenas uma vez; abrir a página não rouba o cursor do laudo.
+  box.hidden = !enabled(); botao.setAttribute("aria-pressed", String(enabled()));
+  document.body.classList.toggle("conversar-tempo-real", enabled());
 })(globalThis);
 
 /* Só o último pedido que falhou. Dados da aba, sem sincronização ou envio automático. */
@@ -12978,6 +13260,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     gerar: p => gerar(p),
     conversa: p => window.tutuV2.conversa.mandar(p),
     pausas: p => window.tutuV2.tempoReal.reprocessar(p),
+    tempoReal: p => window.tutuV2.tempoReal.reprocessar(p),
     imagem: p => window.tutuV2.iaViu.reprocessar(p)
   };
   function mostrar() {
@@ -13016,7 +13299,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   try {
     const salvo = JSON.parse(sessionStorage.getItem(KEY));
     if (salvo && Object.hasOwn(caminhos, salvo.modo) && salvo.pedido &&
-        ["#status", "#conversaMsg"].includes(salvo.alvo)) ultimo = salvo;
+        ["#status", "#conversaMsg", "#tempoRealMsg"].includes(salvo.alvo)) ultimo = salvo;
   } catch (_) {}
   mostrar();
 })();
