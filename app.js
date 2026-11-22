@@ -8974,7 +8974,10 @@ window.tutuSite.appReady = true;
     if (!anchor || anchor.caseId !== ui.activeId() || !sheet.contains(anchor.range.commonAncestorContainer)) {
       clearInterim(); setStatus("A folha mudou durante a frase. Posicione o cursor e continue ditando."); return;
     }
+    const encaixe = ui.tempoReal?.preparar(text, anchor.range);
+    if (encaixe) { anchor.range = encaixe.range; text = encaixe.text; }
     const r = anchor.range, node = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+    const replaced = encaixe && !r.collapsed ? r.cloneContents() : null;
     const block = node.closest("p,div,li"), container = block && sheet.contains(block) ? block : sheet;
     const before = document.createRange(); before.selectNodeContents(container); before.setEnd(r.startContainer, r.startOffset);
     const after = document.createRange(); after.selectNodeContents(container); after.setStart(r.endContainer, r.endOffset);
@@ -8995,7 +8998,7 @@ window.tutuSite.appReady = true;
     const sel = getSelection();
     if (sel.rangeCount && sheet.contains(sel.anchorNode)) sheetRange = sel.getRangeAt(0).cloneRange();
     lastInsert = sel.rangeCount && sheet.contains(sel.focusNode)
-      ? { caseId: ui.activeId(), start, end: offsetOf(sheet, sel.focusNode, sel.focusOffset) } : null;
+      ? { caseId: ui.activeId(), start, end: offsetOf(sheet, sel.focusNode, sel.focusOffset), replaced } : null;
     scheduleCaseSave();
     const T = globalThis.TextoV2;
     emit("laudos-final", { texto: t.trim(), original, conf: confidence,
@@ -9003,12 +9006,16 @@ window.tutuSite.appReady = true;
     clearInterim(); render();
   }
   function undoLast() {
+    if (ui.tempoReal?.desfazer?.()) { lastInsert = null; return; }
     const li = lastInsert; lastInsert = null;
     if (!li || li.caseId !== ui.activeId() || li.end <= li.start) return;
     const r = rangeFromOffsets(sheet, li.start, li.end); if (!r) return;
     sheet.focus({ preventScroll: true });
     const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
-    document.execCommand("delete");
+    if (li.replaced) {
+      const original = document.createElement("div"); original.append(li.replaced);
+      document.execCommand("insertHTML", false, original.innerHTML);
+    } else document.execCommand("delete");
     if (sel.rangeCount && sheet.contains(sel.anchorNode)) sheetRange = sel.getRangeAt(0).cloneRange();
   }
 
@@ -9028,8 +9035,10 @@ window.tutuSite.appReady = true;
     phrases(s, config()); on = true;
     let sessao = "";   // Android repete o acumulado da sessão em cada final (TutuV2Core.speechDelta)
     s.onstart = () => { sessao = ""; manterTela(); };
+    s.onspeechstart = () => ui.tempoReal?.atividade?.();
     s.onresult = ev => {
       if (!on || extension || speech !== s) return;
+      ui.tempoReal?.atividade?.();
       fails = 0;
       let interim = "";
       for (let i = ev.resultIndex; i < ev.results.length && on && speech === s; i++) {
@@ -9992,6 +10001,19 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     return out;
   };
   const ladoOrgao = t => /\bdireit[ao]s?\b/.test(fold(t)) ? "D" : /\besquerd[ao]s?\b/.test(fold(t)) ? "E" : "";
+  // O automático exige anatomia explícita; doenças e associações do @ não identificam um órgão.
+  const ORG_NAMES = [
+    /\b(?:figado|hepatic[oa]s?)\b/, /\bvesiculas?\b(?!\s+semina)/, /\b(?:rim|rins|renal|renais)\b/,
+    /\b(?:baco|esplenic[oa]s?)\b/, /\bapendice\b/, /\b(?:pancreas|pancreatic[oa]s?)\b/, /\b(?:aorta|aortic[oa]s?)\b/,
+    /\b(?:adrena(?:l|is)|suprarrena(?:l|is))\b/, /\b(?:bexiga|vesica(?:l|is))\b/, /\b(?:pulmao|pulmoes|pulmona(?:r|res))\b/,
+    /\b(?:pleura|pleura(?:l|is))\b/, /\b(?:tireoide|tireoidian[oa]s?)\b/, /\b(?:utero|uterin[oa]s?)\b/,
+    /\b(?:ovarios?|ovarian[oa]s?)\b/, /\b(?:prostata|prostatic[oa]s?)\b/, /\b(?:alcas|intestino|colon)\b/,
+    /\bvias?\s+bilia(?:r|res)\b/
+  ];
+  const orgaos = text => {
+    const t = fold(text);
+    return ORG_NAMES.map((re, i) => re.test(t) ? i : -1).filter(i => i >= 0);
+  };
   function encontrarParagrafoNormal(paragrafos, achados, query, maskNormals) {
     if (!Array.isArray(paragrafos) || !paragrafos.length) return -1;
     const alvoTxt = [...(achados || []), query || ""].join(" ");
@@ -10022,7 +10044,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
 
   const api = { fold, tokens, classe, paresDe, buildIndex, parseQuery, buscar, precisaIA, modalidadeDe, semContrasteDe, montarPromptIA, lerRespostaIA, validarIA, fluxoAjusteIA, montar, fraseParecer, trocarLado, ajustarMedidas, negativos, detectar, comandoFinal,
-    vazio, aprender, mesclar, aplicarNoTexto, ehNeg, limparNumeros, encontrarParagrafoNormal };
+    vazio, aprender, mesclar, aplicarNoTexto, ehNeg, limparNumeros, encontrarParagrafoNormal, orgaos };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuFrase = api;
 })(globalThis);
@@ -12519,4 +12541,256 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const api = { aplicar, habilitar, capturar, aplicarDOM };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuDelta = api;
+})(globalThis);
+
+/* Encaixe local de finais do ditado. Sem busca no banco, rede ou IA.
+   O matcher anatômico é o do modo @; só a máscara intacta pode ser substituída.
+   A revisão delta nas pausas é uma opção independente, desligada por padrão. */
+(function (root) {
+  "use strict";
+  const F = root.TutuFrase || (typeof require === "function" ? require("./117-v2-frase.js") : null);
+  const norm = s => F.fold(s).replace(/[.,;:!?]+/g, " ").replace(/\s+/g, " ").trim();
+  const side = s => {
+    const t = F.fold(s), d = /\bdireit[oa]s?\b/.test(t), e = /\besquerd[oa]s?\b/.test(t);
+    return d && e ? "DE" : d ? "D" : e ? "E" : "";
+  };
+  const command = (s, cfg = {}) => /^(?:corrigir|corrige|corrija|mascaras?|exames?|modelos?|copiar|gerar|apagar|desfazer|pausar|retomar|cancelar|proximo campo)(?: |$)/.test(norm(s)) ||
+    (cfg.commands || []).some(c => norm(c.fala) === norm(s));
+  function planejar(lines, text, normals = new Set(), context = -1, cfg = {}) {
+    text = String(text || "").trim();
+    if (!text || command(text, cfg) || /@|\barroba\b/i.test(text)) return null;
+    const heads = lines.map(norm), hi = heads.indexOf("achados");
+    const ci = heads.findIndex(h => /^(?:conclusao|impressao diagnostica)$/.test(h));
+    if (heads.filter(h => h === "achados").length > 1 || heads.filter(h => /^(?:conclusao|impressao diagnostica)$/.test(h)).length > 1) return null;
+    const explicit = text.match(/^(?:conclus[aã]o|impress[aã]o diagn[oó]stica)\s*[:,]?\s+(.+)$/i);
+    const endOf = start => {
+      let end = start + 1;
+      while (end < lines.length && !/^(?:achados|conclusao|impressao diagnostica|achados adicionais|tecnica(?: de exame)?|informacoes clinicas)$/.test(heads[end])) end++;
+      return end;
+    };
+    if (explicit) {
+      if (ci < 0 || endOf(ci) === ci + 1) return null;
+      const index = endOf(ci) - 1, prior = lines[index];
+      return { index, start: prior.length, end: prior.length, text: (prior.trim() ? " " : "") + explicit[1] };
+    }
+    if (hi < 0) return null;
+    const end = endOf(hi), ids = F.orgaos(text);
+    const volume = text.match(/^volume(?:\s+estimado)?(?:\s+de)?\s+(\d+(?:[.,]\d+)?)\s*(ml|cm\s*[³3]|cm\^3)[.!]?$/i);
+    let index = -1;
+    if (ids.length === 1) {
+      const candidates = lines.slice(hi + 1, end).map(t => {
+        const organs = F.orgaos(t), a = side(text), b = side(t);
+        return organs.length === 1 && organs[0] === ids[0] && a === b ? t : "";
+      });
+      const i = F.encontrarParagrafoNormal(candidates, [text], "", null);
+      if (i >= 0) index = hi + 1 + i;
+    } else if (!ids.length && volume && /^volume\b/i.test(text) && context > hi && context < end && F.orgaos(lines[context]).length === 1) index = context;
+    if (index < 0) return null;
+    const prior = lines[index];
+    if (volume) {
+      const blank = /\bvolume(?:\s+total)?(?:\s+estimado)?(?:\s+de)?\s*[:=]?\s*(___+|\[<>\]|\[\?\])\s*(ml|cm\s*[³3]|cm\^3)/i.exec(prior);
+      if (blank) {
+        const start = blank.index + blank[0].indexOf(blank[1]);
+        return { index, start, end: start + blank[1].length, text: volume[1] };
+      }
+    }
+    if (normals.has(F.fold(prior.trim())) && ids.length) return { index, start: 0, end: prior.length, text };
+    return { index, start: prior.length, end: prior.length, text: (prior.trim() ? " " : "") + text };
+  }
+  const api = { planejar, command };
+  if (typeof module !== "undefined" && module.exports) { module.exports = api; return; }
+  root.TutuTempoReal = api;
+  if (!root.tutuV2 || typeof sheet === "undefined") return;
+  const ui = root.tutuV2;
+  let context = null;
+  const enabled = () => store.get("v2TempoReal") !== "0";
+  const label = ui.el("label"), checkbox = ui.el("input", { type: "checkbox", id: "tempoReal" });
+  checkbox.checked = enabled();
+  label.append(checkbox, document.createTextNode(" Encaixar ditado por órgão (sem IA)"));
+  document.querySelector(".v2-settings-extras")?.append(label);
+  function toggle(on) { context = null; store.set("v2TempoReal", on ? "1" : "0"); checkbox.checked = on; }
+  checkbox.onchange = () => toggle(checkbox.checked);
+  ui.actions.tempoReal = { label: "Encaixar ditado por órgão: ligar/desligar", run: () => toggle(!enabled()) };
+  const config = () => { try { return JSON.parse(document.getElementById("voiceConfig").textContent); } catch (_) { return {}; } };
+  function normals() {
+    const out = new Set();
+    if (typeof current === "undefined" || !current) return out;
+    for (const ln of String(maskOf(current) || "").split(/\r?\n/)) {
+      const m = ln.trim().replace(/^\{\{[^}]*\}\}/, "").match(/^\[<(.*)>\]$/);
+      if (m) out.add(F.fold(m[1].replace(/<\/?[bui]>/gi, "").trim()));
+    }
+    return out;
+  }
+  function plan(text, ps, lines, cursor) {
+    // Contexto só vale na mesma folha e sem edição posterior do parágrafo.
+    let idx = context && context.id === ui.activeId() && context.signature === signature(lines) ? ps.indexOf(context.block) : -1;
+    if (cursor) {
+      const node = cursor.startContainer.nodeType === 1 ? cursor.startContainer : cursor.startContainer.parentElement;
+      const block = node.closest("p,div,li"), caretIndex = ps.indexOf(block);
+      if (caretIndex >= 0) {
+        const before = document.createRange(); before.selectNodeContents(block); before.setEnd(cursor.startContainer, cursor.startOffset);
+        if (F.detectar(before.toString())) { context = null; return null; }
+      }
+      // Um órgão escolhido pelo médico no cursor prevalece sobre a frase anterior.
+      if (idx < 0 || caretIndex >= 0 && F.orgaos(lines[caretIndex]).length === 1) idx = caretIndex;
+    }
+    const p = planejar(lines, text, normals(), idx, config() || {});
+    if (!p) context = null;
+    return p;
+  }
+  const signature = lines => lines.map(t => t.trim()).join("\n");
+  function range(p, ps) {
+    const block = ps[p.index];
+    if (block.querySelector('del,ins,[contenteditable="false"]')) return null;
+    if (!blockText(block)) { const r = document.createRange(); r.selectNodeContents(block); return r; }
+    return rangeFromOffsets(block, p.start, p.end);
+  }
+  function remember(block) {
+    context = { id: ui.activeId(), block, signature: signature([...sheet.children].map(blockText)) };
+  }
+  ui.tempoReal = {
+    preparar(text, cursor) {
+      if (!enabled() || !cursor.collapsed) return null;
+      const ps = [...sheet.children], p = plan(text, ps, ps.map(blockText), cursor);
+      if (!p) return null;
+      const r = range(p, ps); if (!r) return null;
+      // O final é síncrono; o contexto é atualizado pelo laudos-final após inserir.
+      context = { id: ui.activeId(), block: ps[p.index], signature: "" };
+      return { range: r, text: p.text.trimStart() };
+    }
+  };
+  document.addEventListener("laudos-final", e => {
+    let d; try { d = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return; }
+    if (!enabled() || !d) return;
+    if (d.source === "ditado-site") { if (context?.block?.isConnected) remember(context.block); return; }
+    if (d.destino && (d.destino.id !== "laudo" || d.destino.caso && d.destino.caso !== ui.activeId())) return;
+    const text = String(d.texto || "").trim(), sel = getSelection();
+    if (!text || !sel.rangeCount || !sel.isCollapsed || !sheet.contains(sel.anchorNode)) return;
+    const cursor = sel.getRangeAt(0).cloneRange();
+    const node = cursor.startContainer.nodeType === 1 ? cursor.startContainer : cursor.startContainer.parentElement;
+    const block = node.closest("p,div,li"), ps = [...sheet.children], bi = ps.indexOf(block);
+    if (bi < 0) return;
+    const at = offsetOf(block, cursor.startContainer, cursor.startOffset), prior = blockText(block);
+    // A extensão já inseriu: só mova o trecho final comprovadamente idêntico ao evento.
+    let end = at; while (end > 0 && /\s/.test(prior[end - 1])) end--;
+    const start = end - text.length;
+    if (start < 0 || prior.slice(start, end) !== text) return;
+    const lines = ps.map(blockText); lines[bi] = prior.slice(0, start) + prior.slice(end);
+    const p = plan(text, ps, lines, cursor);
+    if (!p || p.index === bi) return;
+    const target = range(p, ps), inserted = rangeFromOffsets(block, start, end);
+    if (!target || !inserted) return;
+    pushVersion("Antes do encaixe do ditado");
+    sheet.focus({ preventScroll: true });
+    sel.removeAllRanges(); sel.addRange(inserted); document.execCommand("delete");
+    sel.removeAllRanges(); sel.addRange(target); sheetRange = target.cloneRange(); insertAtCaret(p.text);
+    if (sel.rangeCount) sheetRange = sel.getRangeAt(0).cloneRange();
+    remember(ps[p.index]); scheduleCaseSave();
+  }, true);
+
+  // Só finais de ditado tornam linhas elegíveis; edições comuns apenas cancelam.
+  const pauseLabel = ui.el("label"), pauseCheck = ui.el("input", { type: "checkbox", id: "iaPausas" });
+  const pausesEnabled = () => store.get("v2IAPausas") === "1";
+  pauseCheck.checked = pausesEnabled();
+  pauseLabel.append(pauseCheck, document.createTextNode(" IA nas pausas"));
+  label.after(pauseLabel);
+  let timer = null, pending = null, beforeSpeech = null, undoPatch = null, revision = 0;
+  const dirty = new Map(), reviewed = new WeakMap();
+  const readNodes = () => new Map([...sheet.children].map(node => [node, node.innerHTML]));
+  function cancelPause() {
+    clearTimeout(timer); timer = null; revision++;
+    pending?.controller.abort();
+  }
+  function activity() {
+    cancelPause();
+    beforeSpeech = pausesEnabled() ? readNodes() : null;
+  }
+  function setPauses(on) {
+    cancelPause(); dirty.clear(); beforeSpeech = null;
+    store.set("v2IAPausas", on ? "1" : "0"); pauseCheck.checked = on;
+  }
+  pauseCheck.onchange = () => setPauses(pauseCheck.checked);
+  ui.actions.iaPausas = { label: "IA nas pausas: ligar/desligar", run: () => setPauses(!pausesEnabled()) };
+  ui.tempoReal.atividade = activity;
+  ui.tempoReal.desfazer = () => {
+    const saved = undoPatch; undoPatch = null;
+    if (!saved || saved.id !== ui.activeId() || saved.after !== sheet.innerHTML) return false;
+    cancelPause(); dirty.clear();
+    sheet.innerHTML = saved.before;
+    sheetRange = null; context = null; beforeSpeech = readNodes();
+    scheduleCaseSave();
+    return true;
+  };
+  function schedulePause() {
+    clearTimeout(timer);
+    if (pausesEnabled() && dirty.size) timer = setTimeout(reviewPause, 1800);
+  }
+  async function reviewPause() {
+    timer = null;
+    if (!pausesEnabled() || pending || !dirty.size || !root.TutuDelta || typeof sample !== "function") return;
+    const D = root.TutuDelta, html = sheet.innerHTML, id = ui.activeId();
+    const nodes = [...sheet.children].filter(node => dirty.get(node) === node.innerHTML && reviewed.get(node) !== node.innerHTML);
+    if (!nodes.length) return;
+    const box = document.createElement("div");
+    nodes.forEach(node => box.append(node.cloneNode(true)));
+    const text = serEditable(box), base = D.capturar(box, text, serEditable);
+    if (!base || base.nos.length !== nodes.length) return;
+    base.folha = sheet; base.nos = nodes; base.html = html;
+    const job = pending = { controller: new AbortController(), revision };
+    const timeout = setTimeout(() => job.controller.abort(), 12000);
+    let applying = false;
+    try {
+      // Mesma requisição delta usada pelo Conversar, sem sua reserva por fila.
+      const response = await sample("Corrija e organize estas linhas ditadas, preservando os achados e as medidas. " +
+        "Não acrescente informações nem frases de normalidade.\n" + text,
+        { signal: job.controller.signal, cache: false, modelTier: "balanced", modo: "delta", laudo: text, timeoutMs: 12000 });
+      if (job.controller.signal.aborted || !pausesEnabled() || id !== ui.activeId() || sheet.innerHTML !== html) return;
+      const result = response?.modo === "delta" && !response.truncated ? D.aplicar(text, response.text) : null;
+      if (!result) return;
+      nodes.forEach(node => { dirty.delete(node); reviewed.set(node, node.innerHTML); });
+      if (result.texto === text) return;
+      pushVersion("Antes da IA nas pausas");
+      applying = true;
+      if (!D.aplicarDOM(base, result)) return;
+      applying = false;
+      undoPatch = { id, before: html, after: sheet.innerHTML };
+      context = null; sheetRange = null; beforeSpeech = readNodes();
+      scheduleCaseSave();
+    } catch (_) {
+      if (applying) sheet.innerHTML = html;
+      // Ponte indisponível, timeout e patch inválido são silenciosos.
+    }
+    finally {
+      clearTimeout(timeout);
+      if (pending === job) pending = null;
+    }
+  }
+  sheet.addEventListener("beforeinput", e => {
+    if (e.inputType === "historyUndo" && ui.tempoReal.desfazer()) { e.preventDefault(); return; }
+    activity();
+  }, true);
+  document.addEventListener("keydown", e => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z" &&
+        sheet.contains(e.target) && ui.tempoReal.desfazer()) {
+      e.preventDefault(); e.stopImmediatePropagation();
+    }
+  }, true);
+  sheet.addEventListener("input", cancelPause, true);
+  document.addEventListener("laudos-provisorio", e => {
+    let d; try { d = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return; }
+    if (d?.texto) activity();
+  }, true);
+  document.addEventListener("laudos-final", e => {
+    let d; try { d = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return; }
+    if (!d?.texto || command(d.texto, config()) || d.destino && (d.destino.id !== "laudo" || d.destino.caso && d.destino.caso !== ui.activeId())) return;
+    cancelPause();
+    for (const node of dirty.keys()) if (!sheet.contains(node)) dirty.delete(node);
+    if (pausesEnabled() && beforeSpeech) for (const node of sheet.children) {
+      if (beforeSpeech.get(node) !== node.innerHTML) dirty.set(node, node.innerHTML);
+    }
+    beforeSpeech = pausesEnabled() ? readNodes() : null;
+    schedulePause();
+  }, true);
+  document.addEventListener("laudos-mic", cancelPause, true);
+  window.addEventListener("pagehide", cancelPause);
 })(globalThis);
