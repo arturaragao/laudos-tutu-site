@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "18fdd9c · 22/11 19:21";
+window.__SITE_VERSION__ = "0afc6c0 · 22/11 19:32";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -4611,9 +4611,37 @@ window.tutuSite.appReady = true;
   const top = el("header", { id: "v2Top" });
   // 17/11/2026 (Artur): fileira de cima com o ícone e "Laudos" à esquerda; sincronizado, Ctrl K, ⚙ e ☾ à direita
   const brand = el("div", { class: "v2-brand", id: "v2Brand" });
+  const updateBtn = button("Nova versão disponível — Atualizar", () => location.reload(), {
+    id: "v2Update", class: "v2-update", hidden: "",
+    title: "Há uma versão mais recente publicada. Clique para atualizar."
+  });
   brand.append(el("img", { src: "icones/laudos-192.png", alt: "", width: "26", height: "26" }), "Laudos",
     el("span", { class: "v2-version", title: "Versão do site: commit curto e horário da compilação" },
-      `v ${window.__SITE_VERSION__ || "dev"}`));
+      `v ${window.__SITE_VERSION__ || "dev"}`),
+    updateBtn);
+  let checkingVersion = false;
+  const checkVersion = async () => {
+    const loaded = String(window.__SITE_VERSION__ || "").trim();
+    if (checkingVersion || !loaded) return;
+    checkingVersion = true;
+    try {
+      const res = await fetch("version.json", { cache: "no-store" });
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      if (!data || !data.v) return;
+      const remote = data.t ? `${data.v} · ${data.t}` : String(data.v);
+      const cur = data.t ? loaded : loaded.split(" · ")[0].trim();
+      if (remote !== cur) updateBtn.hidden = false;
+    } catch (_) {
+      // Falha de rede: silêncio.
+    } finally {
+      checkingVersion = false;
+    }
+  };
+  checkVersion();
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkVersion(); });
+  window.addEventListener("focus", checkVersion);
+  setInterval(checkVersion, 5 * 60 * 1000);
   top.append(brand, el("span", { class: "v2-top-break", "aria-hidden": "true" }));
   const tabs = el("nav", { id: "caseTabs", role: "tablist", "aria-label": "Casos abertos" });
   top.append(tabs, button("+", () => ui.newTab(), { id: "newCaseTab", title: "Novo caso", "aria-label": "Novo caso" }),

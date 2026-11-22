@@ -463,6 +463,8 @@ body.tutu-v2.v2-hud { box-sizing:border-box; min-width:0; height:100dvh; padding
 #v2Top { grid-area:top; display:flex; align-items:center; gap:7px; padding:0 10px; border-bottom:1px solid var(--line); }
 .v2-brand { font:600 19px "Literata",Georgia,serif; padding-right:8px; }
 .v2-version { color:var(--muted); font:500 10px/1 var(--f-mono); letter-spacing:0; white-space:nowrap; }
+.tutu-v2 button.v2-update { font:500 11px/1.2 "Figtree",system-ui,sans-serif; padding:3px 8px; border-radius:999px; border-color:var(--accent); background:var(--panel); color:var(--text); white-space:nowrap; }
+.tutu-v2 button.v2-update[hidden] { display:none; }
 #caseTabs { display:flex; align-self:stretch; align-items:end; gap:3px; overflow:auto; flex:1; min-width:65px; scrollbar-width:thin; }
 .tutu-v2 #caseTabs button { border-color:transparent; border-radius:10px 10px 0 0; background:transparent; white-space:nowrap; max-width:210px; display:flex; align-items:center; gap:7px; height:37px; flex-shrink:0; }
 #caseTabs button span { overflow:hidden; text-overflow:ellipsis; }
