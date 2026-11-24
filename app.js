@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "ef72381 · 24/11 15:28";
+window.__SITE_VERSION__ = "289c6de · 24/11 17:03";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -1340,6 +1340,7 @@ function applyGenerated(draft, text){
   const lau = i === -1 ? text : text.slice(0, i), rev = i === -1 ? "" : text.slice(i + MARK.length);
   pushVersion("Antes da correção");
   sheet.innerHTML = diffLaudoHtml(draft, lau);
+  window.tutuV2?.duvidas?.aposIA?.({ autoFocar: true });
   lastGenerated = laudoText(); lastGenTagged = laudoTagged(); pushVersion("Corrigido pelo Claude");
   renderAlerts(); updateCount(); updVolHint(); scheduleCaseSave(); checkedHash = "";
   confItems = parseConf(rev); if (confItems.length) renderConf(); else resetReview();
@@ -1390,7 +1391,7 @@ async function gerar(repetir){
       emitExt("laudos-aviso", { tipo: "erro" });
       if (e && (e.code==="not_granted"||e.code==="sampling_disabled")) disableClaude();
     }
-  }finally{ genBusy = false; busy(false); lockSheet(false); if (document.hasFocus()) focusSheet(); }
+  }finally{ genBusy = false; busy(false); lockSheet(false); if (document.hasFocus() && !window.tutuV2?.duvidas?.ativa?.()) focusSheet(); }
 }
 function revisar(){ return conferirLocal(); }
 
@@ -2805,7 +2806,8 @@ function undoVersion(){
   if (versions.length && html !== versions[verPtr]?.html) pushVersion("Sua edição");
   if (verPtr <= 0){ setStatus("Não há alteração anterior."); return; }
   verPtr--;
-  $("laudo").innerHTML = versions[verPtr].html; renderAlerts(); scheduleCaseSave();
+  $("laudo").innerHTML = versions[verPtr].html; renderAlerts(); updateCount(); updVolHint(); scheduleCaseSave();
+  window.tutuV2?.duvidas?.atualizarObrigatorios?.();
   setStatus(`Voltou para: ${versions[verPtr].label} (${versions[verPtr].hora}).`, "ok");
 }
 $("undoBtn").onclick = undoVersion;
@@ -4806,7 +4808,78 @@ window.tutuSite.appReady = true;
   const leftTools = el("div", { class: "v2-tools" });
   ["mascBtn", "verMask", "vozBtn"].forEach(id => move(id, leftTools)); leftBody.append(leftTools);
   const center = ui.center = el("main", { id: "v2Center", "aria-label": "Folha do laudo" });
-  center.append(document.querySelector('#paneLaudo > .fmt-bar'));
+  const fmtBar = document.querySelector('#paneLaudo > .fmt-bar');
+  center.append(fmtBar);
+  ui.voltarEdicao = () => {
+    ui.volume?.cancel?.();
+    if (ui.tempoReal?.desfazer?.()) return true;
+    const curHtml = sheet.innerHTML;
+    if (typeof versions !== "undefined" && typeof verPtr !== "undefined" && versions[verPtr]?.html !== curHtml) {
+      for (let i = verPtr - 1; i >= 0; i--) {
+        if (versions[i].html === curHtml) { verPtr = i; break; }
+      }
+    }
+    const ver = typeof versions !== "undefined" && typeof verPtr !== "undefined" ? versions[verPtr] : null;
+    const ehProgramatica = !!(ver && verPtr > 0 && ver.html === curHtml && ver.label !== "Sua edição" && ver.label !== "Modelo");
+    if (ehProgramatica && typeof undoVersion === "function") {
+      undoVersion();
+      return true;
+    }
+    const before = sheet.innerHTML;
+    if (document.activeElement !== sheet && !sheet.contains(document.activeElement)) focusSheet();
+    try { document.execCommand("undo"); } catch (_) {}
+    if (sheet.innerHTML !== before) {
+      if (typeof editVerTimer !== "undefined") clearTimeout(editVerTimer);
+      if (typeof versions !== "undefined" && typeof verPtr !== "undefined") {
+        const afterHtml = sheet.innerHTML;
+        for (let i = verPtr - 1; i >= 0; i--) {
+          if (versions[i].html === afterHtml) { verPtr = i; break; }
+        }
+      }
+      if (typeof updateCount === "function") updateCount();
+      if (typeof updVolHint === "function") updVolHint();
+      if (typeof renderAlerts === "function") renderAlerts();
+      if (typeof scheduleCaseSave === "function") scheduleCaseSave();
+      ui.duvidas?.atualizarObrigatorios?.();
+      return true;
+    }
+    if (typeof undoVersion === "function") {
+      undoVersion();
+      return true;
+    }
+    return false;
+  };
+  if (fmtBar) {
+    const undoBarBtn = button("", () => ui.voltarEdicao(), {
+      id: "v2UndoBtn",
+      class: "v2-undo-btn",
+      title: "Voltar para a última edição (Ctrl+Z)",
+      "aria-label": "Voltar para a última edição (Ctrl+Z)"
+    });
+    const svgNS = "http://www.w3.org/2000/svg";
+    const ico = document.createElementNS(svgNS, "svg");
+    ico.setAttribute("viewBox", "0 0 16 16");
+    ico.setAttribute("aria-hidden", "true");
+    for (const d of ["M5.5 3.5 2.5 6.5l3 3", "M2.5 6.5h7a4 4 0 0 1 0 8h-2"]) {
+      const p = document.createElementNS(svgNS, "path");
+      p.setAttribute("d", d);
+      ico.append(p);
+    }
+    undoBarBtn.append(ico, el("span", {}, "Voltar"));
+    undoBarBtn.addEventListener("mousedown", e => e.preventDefault());
+    fmtBar.append(el("span", { class: "fmt-sep", "aria-hidden": "true" }), undoBarBtn);
+  }
+  window.addEventListener("keydown", e => {
+    if (typeof capturing !== "undefined" && capturing) return;
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    if (e.code !== "KeyZ" && String(e.key || "").toLowerCase() !== "z") return;
+    if (document.querySelector("dialog[open], .modal:not([hidden])")) return;
+    const a = document.activeElement;
+    if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || (a.isContentEditable && a !== sheet && !sheet.contains(a)))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    ui.voltarEdicao();
+  }, true);
   ["tasyBar", "compBox", "laudoBox", "volHint", "corrNote"].forEach(id => move(id, center));
   const right = ui.right = el("aside", { id: "v2Right", "aria-label": "Ferramentas do laudo" });
   const rnav = el("nav", { id: "rightTabs", role: "tablist", "aria-label": "Ferramentas" });
@@ -6969,7 +7042,11 @@ window.tutuSite.appReady = true;
   async function aplicarBancos() {
     const g = await T.lerBancosGh();
     window.BANK_PARES = g.pares;
-    if (!g.tc && !g.nt) { if (g.pares.length) document.dispatchEvent(new CustomEvent("tutu-bancos")); return; }
+    window.BANK_BY_SLUG = g.porSlug || {};
+    if (!g.tc && !g.nt) {
+      if (g.pares.length || Object.keys(window.BANK_BY_SLUG).length) document.dispatchEvent(new CustomEvent("tutu-bancos"));
+      return;
+    }
     const b = (await T.exportBackup()).bancos;
     const tc = T.mergeBank(g.tc ? g.tc.frases : window.BANK_TC, b.bank_tc).entries;
     const nt = T.mergeBank(g.nt ? g.nt.frases : window.BANK_NT, b.bank_nt).entries;
@@ -8363,6 +8440,7 @@ window.tutuSite.appReady = true;
       const html = modelSheetHtml({ ...ex, mask: r.mask });
       pushVersion("Antes do rascunho da IA");
       trocarFolha(html);
+      ui.duvidas?.aposIA?.({ autoFocar: true });
       ultimo = { exId: ex.id, html: sheet.innerHTML };
       pushVersion("Rascunho da IA");
       updateCount(); renderAlerts(); scheduleCaseSave(); atualizarBarra();
@@ -9486,8 +9564,10 @@ window.tutuSite.appReady = true;
           const final = (res?.laudo || acumulado || "").trim();
           if (!final) throw Error("Resposta vazia do Direct.");
           if (!ui.audioTarget(ex)) throw Error("A folha está ocupada.");
+          if (typeof pushVersion === "function") pushVersion("Antes do laudo da IA");
           sheet.innerHTML = modelSheetHtml({ ...ex, mask: final });
           const nDuv = ui.duvidas?.aposIA?.({ autoFocar: true }) || 0;
+          if (typeof pushVersion === "function") pushVersion("Laudo da IA");
           updateCount(); renderAlerts();
           ui.registrarIA?.(laudoTagged(), fresh, { direct: true });
           const avisoDuv = nDuv ? ` Confira ${nDuv} ponto(s) sublinhado(s) em amarelo (←/→, Enter, Del, ↓) e copie.` : " Revise e copie.";
@@ -9557,7 +9637,8 @@ window.tutuSite.appReady = true;
           const laudoFinal = (res?.laudo || ultimoTexto || "").trim();
           if (!laudoFinal) throw Error("Resposta vazia do Direct.");
           aplicarFolha(laudoFinal);
-          const nDuv = ui.duvidas?.aposIA?.({ autoFocar: false }) || 0;
+          const nDuv = ui.duvidas?.aposIA?.({ autoFocar: true }) || 0;
+          if (typeof pushVersion === "function") pushVersion("Laudo da IA");
           renderAlerts();
           ui.registrarIA?.(laudoTagged(), fresh, { direct: true });
           const avisoDuv = nDuv ? ` Confira ${nDuv} ponto(s) sublinhado(s) em amarelo.` : " Revise e copie.";
@@ -9722,8 +9803,10 @@ window.tutuSite.appReady = true;
       const caso = ui.activeId(), pedido = id;
       if (caso === antes) throw Error("Aguarde a operação na folha.");
       if (d.laudo) {   // laudo organizado pela IA (nuvem ou tools/ia_laudo.py no repo de dados)
+        if (typeof pushVersion === "function") pushVersion("Antes do laudo da IA");
         sheet.innerHTML = modelSheetHtml({ ...ex, mask: d.laudo });
-        const nDuv = ui.duvidas?.aposIA?.({ autoFocar: !ui.isMobile() }) || 0;
+        const nDuv = ui.duvidas?.aposIA?.({ autoFocar: true }) || 0;
+        if (typeof pushVersion === "function") pushVersion("Laudo da IA");
         updateCount(); renderAlerts();
         ui.registrarIA?.(laudoTagged(), d.texto || "", { direct: true });
         await mudarVinculos(vinculos => { vinculos[caso] = pedido; });
@@ -9860,15 +9943,11 @@ window.tutuSite.appReady = true;
         }
       }
       const rows = [];
-      let novoDeOutroAparelho = false;
       for (const item of entries) {
         const id = item.id, d = item.json, sha = item.sha || "";
         if (!d || !id) continue;
         const criado = Date.parse(d.criado);
         const expirado = Number.isFinite(criado) && Date.now() - criado >= 30 * 86400000;
-        if (!expirado && d.laudo && !idsVistos.has(id) && !idsCriadosAqui.has(id)) {
-          novoDeOutroAparelho = true;
-        }
         idsVistos.add(id);
         const row = el("div", { class: "usg-pedido", "data-id": id, "data-state": expirado ? "expirado" : "recebido" }), ex = EXAMS.find(e => e.id === d.exame);
         // 17/11/2026 (Artur): mostrar o motivo do erro e avisar quando a IA está parada, para corrigir rápido
@@ -9889,9 +9968,8 @@ window.tutuSite.appReady = true;
       }
       rows.sort((a, b) => b._criado - a._criado);   // 17/11/2026 (Artur): mais recente primeiro
       lista.replaceChildren(...rows);
-      painelSummary.textContent = rows.length ? `Laudos Áudio (${rows.length})` : "Laudos Áudio";
-      inboxMsg.textContent = rows.length ? "Organização neste navegador. Revise antes de copiar." : "Nenhum pedido.";
-      if (novoDeOutroAparelho && !painel.open && !ui.isMobile()) painel.open = true;
+      painelSummary.textContent = "Laudos Áudio";
+      inboxMsg.textContent = rows.length ? "" : "Nenhum pedido.";
       return true;
     } catch (_) { inboxMsg.textContent = "Fila indisponível; confira IA na nuvem ou chave em Sincronização."; return false; }
     finally { listBusy = false; } })();
@@ -10786,7 +10864,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
         }
         changed.forEach(p => { if (p.isConnected) p.classList.add("conversa-flash"); });
         if (changed.length) setTimeout(() => changed.forEach(p => p.classList.remove("conversa-flash")), 2400);
-        ui.duvidas?.aposIA?.({ autoFocar: false });
+        ui.duvidas?.aposIA?.({ autoFocar: true });
         pushVersion("Ajustado na conversa (" + motor + ")");
         ui.registrarIA?.(laudoTagged(), draft);   // última versão da IA: ao copiar vira ia/correcoes e regra automática de voz (114)
         renderAlerts(); updateCount(); scheduleCaseSave();
@@ -14287,12 +14365,19 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       hidratando = false;
     }
     const lista = listar();
-    if (autoFocar && lista.length) selecionar(lista[0], { focar: true });
-    else refresh();
+    if (autoFocar && lista.length) {
+      const primeiro = lista[0];
+      selecionar(primeiro, { editar: false, focar: true });
+      requestAnimationFrame(() => {
+        if (ativa === primeiro && primeiro.isConnected && document.activeElement !== sheet) {
+          selecionar(primeiro, { editar: !!editando, focar: true });
+        }
+      });
+    } else refresh();
     return lista.length || (novos + inseridos);
   }
 
-  function aposIA({ autoFocar = false } = {}) {
+  function aposIA({ autoFocar = true } = {}) {
     return analisar({ autoFocar });
   }
 
@@ -15457,8 +15542,9 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         if (base) { if (!D.aplicarDOM(base, result)) throw Error("A folha mudou"); }
         else sheet.innerHTML = diffLaudoHtml(draft, result.texto);
         applying = false;
-        undoPatch = { id, before: html, after: sheet.innerHTML };
         sheetRange = null;
+        ui.duvidas?.aposIA?.({ autoFocar: true });
+        undoPatch = { id, before: html, after: sheet.innerHTML };
         renderAlerts(); updateCount(); scheduleCaseSave();
       }
       texto.textContent = ""; parcial.textContent = ""; settled = "";
@@ -16672,11 +16758,12 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   carregarUso(false);
 })();
 
-/* Textos padrão da máscara: fora da folha, organizados por órgão/alteração no botão "Textos padrão",
-   com inserção automática na linha correspondente de Achados e na Conclusão. */
+/* Textos padrão da máscara + árvore das notas (Notas TC, USG, Tomografia e Exames!!),
+   com favoritos fixados (★), inserção direta na linha certa + Conclusão e cópia rápida. */
 (function (root) {
   "use strict";
   const Sug = root.TutuSugestoes || (typeof require !== "undefined" ? require("./119-v2-sugestoes.js") : null);
+  const Frase = root.TutuFrase || (typeof require !== "undefined" ? require("./117-v2-frase.js") : null);
   const fold = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
   const ORGAO_LABEL = new Map((Sug?.ORGAOS || []).map(o => [o.id, o.label]));
@@ -16684,6 +16771,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const DESC_START_RE = /^(?:art[eé]rias?|veias?|f[ií]gado|ves[ií]cula|p[aâ]ncreas|ba[çc]o|rins?|rim\b|bexiga|pr[oó]stata|[uú]tero|ov[aá]rios?|tireoide|par[eê]nquima|vias?\s+biliares|n[aã]o\s+h[aá]\b|aus[eê]ncia\s+de|todas?\s+as?\s+|presen[cç]a\s+de|realizada|pun[cç][aã]o)/i;
   const ACH_LBL_RE = /^(?:achados?|descri[cç][aã]o|frase)\s*:\s*(.*)$/i;
   const CONC_LBL_RE = /^(?:conclus[aã]o|conc\.?|impress[aã]o)\s*:\s*(.*)$/i;
+  const AREA_EXCLUIDA_RE = /^(?:exames?|estudos?|acompanhar|nao conformidades|laudo padrao|licenca)\b/;
 
   function cleanText(raw) {
     let t = String(raw || "")
@@ -16769,6 +16857,10 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     };
   }
 
+  function itemKey(it) {
+    return fold(it?.achado || "").slice(0, 140) + "|" + fold(it?.conclusao || "").slice(0, 100);
+  }
+
   function parsePadroes(rawText, _exame, sugApi = Sug) {
     const rawLines = String(rawText || "").replace(/\r\n?/g, "\n").split("\n");
     const items = [];
@@ -16785,13 +16877,15 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         const det = !cur.orgaoId ? detectarOrgaoTexto(ach + " " + cur.titulo, sugApi) : null;
         const orgId = cur.orgaoId || det?.id || "geral";
         const orgLabel = cur.orgaoLabel || det?.label || "Geral";
-        items.push({
+        const it = {
           orgaoId: orgId,
           orgaoLabel: orgLabel,
           titulo: cur.titulo || "",
           achado: ach,
           conclusao: conc
-        });
+        };
+        it.id = itemKey(it);
+        items.push(it);
       }
       cur = null;
       expectField = "";
@@ -16883,7 +16977,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
 
     const seen = new Set();
     return items.filter(it => {
-      const k = fold(it.achado) + "|" + fold(it.conclusao);
+      const k = it.id;
       if (seen.has(k)) return false;
       seen.add(k);
       return true;
@@ -16915,7 +17009,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     return "";
   }
 
-  const SUBJECT_STOP = new Set("a o as os e de da do dos das em no na nos nas com sem para pelo pela comeco apresentando evidencia sinais sinal ausencia nao".split(" "));
+  const SUBJECT_STOP = new Set("a o as os e de da do dos das em na no nas nos com sem para pelo pela comeco apresentando evidencia sinais sinal ausencia nao".split(" "));
   const SUBJECT_STOP_WORDS = new Set("todas todos ambas ambos discreto discreta leve moderada moderado raras raros pequeno pequena grande".split(" "));
   const SUBJ_SYN = {
     figad: "hepat", hepat: "hepat",
@@ -17024,7 +17118,390 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     return { modo: "anexar", texto: cur + sep + novo };
   }
 
-  const api = { cleanText, parsePadroes, agruparPorOrgao, encontrarAlvo, aplicarNoParagrafo, sameSubject, isLikelyConc };
+  /* ---------- árvore das notas (Notas TC, USG, Tomografia e Exames!!) ---------- */
+  const modalNorm = m => {
+    const up = String(m || "").trim().toUpperCase();
+    return up === "USG" ? "US" : up;
+  };
+
+  function detectarModalidadeExame(exame, fraseApi = Frase) {
+    if (!exame) return null;
+    if (fraseApi?.modalidadeDe) {
+      const d = modalNorm(fraseApi.modalidadeDe(exame));
+      if (d) return d;
+    }
+    const maskLine = String(exame.mask || "").split("\n").find(l => l.trim()) || "";
+    const code = modalNorm(exame.code);
+    if (["US", "TC", "RM", "RX"].includes(code)) return code;
+    for (const src of [exame.name, exame.proto, maskLine, exame.id]) {
+      for (const w of fold(src).split(/[^a-z0-9]+/)) {
+        if (/^(usg|ultrassom|ultrassonografia|ultrassonografico|doppler|ecografia)$/.test(w)) return "US";
+        if (/^(rm|ressonancia|rnm)$/.test(w)) return "RM";
+        if (/^(rx|radiografia|radiografias|raio|raios)$/.test(w)) return "RX";
+        if (/^(tc|tomografia|angiotc|politrauma)$/.test(w)) return "TC";
+      }
+    }
+    return null;
+  }
+
+  function regioesAlvoDoExame(exame, fraseApi = Frase) {
+    const mod = detectarModalidadeExame(exame, fraseApi);
+    const regioes = new Set();
+    const mskGrupos = new Set();
+    if (!exame) return { modalidade: mod, regioes, mskGrupos };
+
+    const add = (...rs) => { for (const r of rs) regioes.add(fold(r).replace(/\s+/g, " ").trim()); };
+    for (const g of (exame.groups || [])) add(g);
+
+    const texto = fold([exame.name, exame.id, exame.proto, ...(exame.groups || [])].join(" "));
+
+    if (mod === "US") {
+      if (/\b(?:abdom|figado|vesicul|urinari|renai|cava|aorta|iliac|baco|pancreas)\b/.test(texto) && !/\bparede\b/.test(texto)) {
+        add("abdome total");
+        if (/\b(?:aorta|iliac|cava)\b/.test(texto)) add("doppler aorta e iliacas");
+        if (/\b(?:total|prostat|urinari)\b/.test(texto)) add("prostata");
+        if (/\b(?:figado|elastograf|tx)\b/.test(texto)) add("elastografia", "elastografia tx hepatico");
+      }
+      if (/\bmapeamento\s+venoso\b/.test(texto)) add("mapeamento venoso", "doppler venoso mmii");
+      if (/\bvenoso\s+mmii|tvp\b/.test(texto)) add("doppler venoso mmii", "mapeamento venoso");
+      if (/\bvenoso\s+mmss\b/.test(texto)) add("doppler venoso mmii", "doppler arterial mmss");
+      if (/\barterial\s+mmii\b/.test(texto)) add("doppler arterial mmii");
+      if (/\barterial\s+mmss|arco\s+palmar|desfiladeiro|\bfav\b/.test(texto)) add("doppler arterial mmss", "doppler arterial mmii");
+      if (/\bcarotid/.test(texto)) add("carotidas");
+      if (/\btireoid/.test(texto)) add("tireoide", "cervical");
+      if (/\bcervical|salivar/.test(texto)) add("cervical");
+      if (/\bmama/.test(texto)) add("mamas", "axilas");
+      if (/\baxil/.test(texto)) add("axilas", "mamas");
+      if (/\bprostat/.test(texto)) add("prostata", "abdome total");
+      if (/\btesticul|bolsa/.test(texto)) add("testiculo");
+      if (/\bpeni/.test(texto)) add("penis");
+      if (/\bparede\s+abdominal|inguinal/.test(texto)) add("parede abdominal / regiao inguinal", "parede abdominal regiao inguinal");
+      if (/\btransvaginal|pelvica/.test(texto)) add("transvaginal");
+      if (/\bobstetr|morfologic|gemelar|aborto|precoce/.test(texto)) add("obstetrico");
+      if (/\brim\s*(?:e\s*pancreas\s*)?tx\b/.test(texto)) add("rim tx", "abdome total");
+      if (/\bpartes?\s+moles?|dermatolog/.test(texto)) add("partes moles", "dermatologico");
+      if (/\btorax|toracocent/.test(texto)) add("torax", "procedimento");
+      if (/\b(?:biopsia|paaf|drenagem|paracentese|nefrostomia|puncao)\b/.test(texto)) add("procedimento", "marcacao paracentese");
+
+      const mskMap = [
+        [/\bombro|manguito\b/, "Ombro"],
+        [/\bjoelho\b/, "Joelho"],
+        [/\bcotovelo\b/, "Cotovelo"],
+        [/\b(?:mao|punho)\b/, "Mão / Punho"],
+        [/\btornozelo\b/, "Tornozelo"],
+        [/\b(?:pe|calcaneo)\b/, "Pé"],
+        [/\bcoxa|perna\b/, "Coxa"],
+        [/\bpubis|quadril\b/, "Pubis"],
+        [/\bmuscul|tend/, "TENDÕES"],
+      ];
+      for (const [re, grp] of mskMap) {
+        if (re.test(texto)) {
+          add("msk");
+          mskGrupos.add(fold(grp));
+        }
+      }
+      if (regioes.has("msk") && !mskGrupos.size) add("msk");
+    } else if (mod === "TC" || mod === "RM" || mod === "RX") {
+      if (/\b(?:abdom|pelv|urinari|figado|renal|enterotc)\b/.test(texto)) {
+        add("abdome", "abdome com contraste", "enterotc", "angio abd e iliacas", "angio tc abd e iliacas");
+      }
+      if (/\baorta|iliac/.test(texto)) add("abdome", "angio abd e iliacas", "angio tc abd e iliacas");
+      if (/\btorax|pulm|\btep\b/.test(texto)) add("torax", "angiotc torax - tep", "angiotc torax tep", "biopsia pulmonar");
+      if (/\bcranio|encef|face|seios|mastoide|orbit|cabeca\b/.test(texto)) {
+        add("cranio", "cabeca", "mastoide", "angio cranio", "angiotc venosa cranio", "angiotc arterial cranio");
+      }
+      if (/\bpescoc|cervical|carotid\b/.test(texto) && !/\bcoluna\b/.test(texto)) add("pescoco", "angio pescoco");
+      if (/\bcolun|lombar|cervical|toracic|sacr\b/.test(texto)) add("coluna");
+      if (/\bpolitrauma\b/.test(texto)) add("cranio", "coluna", "torax", "abdome");
+      if (/\bmmii\b/.test(texto)) add("angio mmii");
+      if (/\b(?:ombro|joelho|cotovelo|punho|mao|tornozelo|quadril|bacia)\b/.test(texto)) add("msk");
+    }
+
+    return { modalidade: mod, regioes, mskGrupos };
+  }
+
+  function normReg(s) {
+    return fold(s).replace(/[-–—/›>]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  function regiaoCasa(regiaoBanco, alvo) {
+    if (!alvo?.regioes?.size) return false;
+    const fb = normReg(regiaoBanco);
+    if (!fb) return false;
+    for (const r of alvo.regioes) {
+      const fr = normReg(r);
+      if (!fr) continue;
+      if (fb === fr) return true;
+      if (fb.includes(fr) || fr.includes(fb)) return true;
+    }
+    return false;
+  }
+
+  function extrairItensEntradaBanco(entry, meta, sugApi = Sug) {
+    if (!Array.isArray(entry) || entry.length < 4) return [];
+    const reg = String(entry[0] || "").trim();
+    const grp = String(entry[1] || "").trim() || "Geral";
+    const sub = String(entry[2] || "").trim();
+    const regF = fold(reg), grpF = fold(grp);
+    if (AREA_EXCLUIDA_RE.test(regF) || AREA_EXCLUIDA_RE.test(grpF)) return [];
+
+    const titulo = sub ? sub.split("›").pop().trim() : grp;
+    const mod = modalNorm(entry[5] || meta?.modalidade || "");
+    const fonte = meta?.slug || "";
+    const fonteLabel = meta?.titulo || fonte || "Notas";
+    const items = [];
+    const seenLocal = new Set();
+
+    const pushItem = (achRaw, concRaw) => {
+      const ach = cleanText(achRaw);
+      const conc = String(concRaw || "").split("\n").map(cleanText).filter(Boolean).join("\n");
+      if (!ach || ach.length < 6) return;
+      const org = detectarOrgaoTexto(`${grp} ${sub} ${ach}`, sugApi);
+      const it = {
+        fonte,
+        fonteLabel,
+        modalidade: mod,
+        regiao: reg,
+        grupo: grp,
+        sub: sub,
+        titulo: titulo !== grp ? titulo : "",
+        achado: ach,
+        conclusao: conc,
+        orgaoId: org.id || "geral",
+        orgaoLabel: org.label || grp
+      };
+      it.id = itemKey(it);
+      if (seenLocal.has(it.id)) return;
+      seenLocal.add(it.id);
+      items.push(it);
+    };
+
+    const pares = Array.isArray(entry[4]) ? entry[4] : null;
+    if (pares && pares.length) {
+      for (const par of pares) {
+        if (!par) continue;
+        const as = (par.a || []).map(cleanText).filter(l => l.length >= 6);
+        const cs = (par.c || []).map(cleanText).filter(l => l.length >= 4);
+        if (as.length && cs.length) {
+          pushItem(as.join(" "), cs.join("\n"));
+        } else if (as.length) {
+          for (const a of as) pushItem(a, "");
+        } else if (cs.length) {
+          for (const c of cs) pushItem(c, "");
+        }
+      }
+      return items;
+    }
+
+    for (const rawLine of String(entry[3] || "").split(/\r?\n/)) {
+      const l = cleanText(rawLine);
+      if (!l || l.length < 8) continue;
+      pushItem(l, "");
+    }
+    return items;
+  }
+
+  function resolverFontes({ bySlug, bankTc, bankPares } = {}) {
+    const out = [];
+    const ordemSlugs = ["notas-usg", "notas-tc", "notas-exames", "notas-tomografia", "notas-rm", "notas-rx"];
+    if (bySlug && Object.keys(bySlug).length) {
+      const keys = [...ordemSlugs.filter(s => bySlug[s]), ...Object.keys(bySlug).filter(s => !ordemSlugs.includes(s))];
+      for (const slug of keys) {
+        const b = bySlug[slug];
+        if (b && (Array.isArray(b.frases) || Array.isArray(b.pares))) out.push(b);
+      }
+      return out;
+    }
+    const porMod = new Map();
+    const labelMod = { US: "Notas USG", TC: "Notas TC", RM: "Notas RM", RX: "Notas RX" };
+    const slugMod = { US: "notas-usg", TC: "notas-tc", RM: "notas-rm", RX: "notas-rx" };
+    for (const e of (bankTc || [])) {
+      if (!Array.isArray(e) || e.length < 4) continue;
+      const m = modalNorm(e[5] || "TC") || "TC";
+      if (!porMod.has(m)) porMod.set(m, { slug: slugMod[m] || "notas-" + m.toLowerCase(), titulo: labelMod[m] || "Notas " + m, modalidade: m, frases: [], pares: [] });
+      porMod.get(m).frases.push(e);
+    }
+    for (const m of ["US", "TC", "RM", "RX"]) {
+      if (porMod.has(m)) out.push(porMod.get(m));
+    }
+    if (Array.isArray(bankPares) && bankPares.length) {
+      out.push({ slug: "notas-tomografia", titulo: "Notas Tomografia", modalidade: "TC", frases: [], pares: bankPares });
+    }
+    return out;
+  }
+
+  function criarNoArvore(key, label, level, fonte, fonteLabel) {
+    return { key, label, level, fonte, fonteLabel, count: 0, defaultOpen: false, children: [], childMap: new Map(), items: [], itemIds: new Set() };
+  }
+
+  function contarNos(no) {
+    let total = no.items.length;
+    for (const ch of no.children) total += contarNos(ch);
+    no.count = total;
+    return total;
+  }
+
+  function limparMapa(no) {
+    delete no.childMap;
+    delete no.itemIds;
+    for (const ch of no.children) limparMapa(ch);
+  }
+
+  function inserirNaArvore(roots, rootMap, fonteObj, segments, item) {
+    if (!segments.length || !item) return;
+    const reg = segments[0];
+    const rKey = `${fonteObj.slug}::${fold(reg)}`;
+    let node = rootMap.get(rKey);
+    if (!node) {
+      node = criarNoArvore(rKey, reg, 0, fonteObj.slug, fonteObj.titulo);
+      rootMap.set(rKey, node);
+      roots.push(node);
+    }
+    let cur = node;
+    for (let i = 1; i < segments.length; i++) {
+      const seg = segments[i];
+      if (!seg) continue;
+      const cKey = `${cur.key} › ${fold(seg)}`;
+      let child = cur.childMap.get(cKey);
+      if (!child) {
+        child = criarNoArvore(cKey, seg, i, fonteObj.slug, fonteObj.titulo);
+        cur.childMap.set(cKey, child);
+        cur.children.push(child);
+      }
+      cur = child;
+    }
+    if (!cur.itemIds.has(item.id)) {
+      cur.itemIds.add(item.id);
+      cur.items.push(item);
+    }
+  }
+
+  function construirArvoreNotas({ bySlug, bankTc, bankNt, bankPares, exame, todas = false } = {}, sugApi = Sug, fraseApi = Frase) {
+    const fontes = resolverFontes({ bySlug, bankTc, bankNt, bankPares });
+    if (!fontes.length) return [];
+    const alvo = todas ? { modalidade: null, regioes: new Set(), mskGrupos: new Set() } : regioesAlvoDoExame(exame, fraseApi);
+
+    const buildRoots = useRegiaoFilter => {
+      const roots = [];
+      const rootMap = new Map();
+      const fontesUsadas = (!todas && alvo.modalidade)
+        ? fontes.filter(f => !f.modalidade || modalNorm(f.modalidade) === alvo.modalidade)
+        : fontes;
+
+      for (const f of fontesUsadas) {
+        if (f.slug === "notas-tomografia" && Array.isArray(f.pares) && f.pares.length) {
+          for (const pr of f.pares) {
+            if (!Array.isArray(pr) || pr.length < 4) continue;
+            const [reg, org, achRaw, concRaw, freq] = pr;
+            const regStr = String(reg || "").trim();
+            if (!regStr || AREA_EXCLUIDA_RE.test(fold(regStr))) continue;
+            if (useRegiaoFilter && alvo.regioes.size && !regiaoCasa(regStr, alvo)) continue;
+            const ach = cleanText(achRaw);
+            const conc = cleanText(concRaw);
+            if (!ach || ach.length < 8) continue;
+            const orgDet = detectarOrgaoTexto(`${org} ${ach}`, sugApi);
+            const it = {
+              fonte: f.slug,
+              fonteLabel: f.titulo || "Notas Tomografia",
+              modalidade: modalNorm(f.modalidade || "TC"),
+              regiao: regStr,
+              grupo: String(org || "Geral").trim(),
+              sub: "",
+              titulo: "",
+              achado: ach,
+              conclusao: conc,
+              freq: Number(freq) || 1,
+              orgaoId: orgDet.id || "geral",
+              orgaoLabel: orgDet.label || String(org || "Geral")
+            };
+            it.id = itemKey(it);
+            inserirNaArvore(roots, rootMap, f, [regStr, it.grupo], it);
+          }
+          continue;
+        }
+
+        for (const e of (f.frases || [])) {
+          if (!Array.isArray(e) || e.length < 4) continue;
+          const reg = String(e[0] || "").trim();
+          const grp = String(e[1] || "").trim() || "Geral";
+          if (AREA_EXCLUIDA_RE.test(fold(reg)) || AREA_EXCLUIDA_RE.test(fold(grp))) continue;
+          if (useRegiaoFilter && alvo.regioes.size && !regiaoCasa(reg, alvo)) continue;
+          if (useRegiaoFilter && alvo.mskGrupos.size && fold(reg) === "msk") {
+            const grpFold = fold(grp);
+            const matchMsk = [...alvo.mskGrupos].some(mg => grpFold.includes(mg) || mg.includes(grpFold));
+            if (!matchMsk) continue;
+          }
+          const itens = extrairItensEntradaBanco(e, f, sugApi);
+          if (!itens.length) continue;
+          const subParts = String(e[2] || "").split("›").map(s => s.trim()).filter(Boolean);
+          const segs = [reg, grp, ...subParts];
+          for (const it of itens) inserirNaArvore(roots, rootMap, f, segs, it);
+        }
+      }
+      for (const r of roots) {
+        contarNos(r);
+        limparMapa(r);
+      }
+      return roots.filter(r => r.count > 0);
+    };
+
+    let roots = buildRoots(!todas && alvo.regioes.size > 0);
+    if (!todas && !roots.length && alvo.modalidade) {
+      // Exame reconhecido pela modalidade, mas região específica sem match: mostra notas da modalidade inteira
+      roots = buildRoots(false);
+    }
+    if (!todas && roots.length <= 3) {
+      for (const r of roots) r.defaultOpen = true;
+    }
+    return roots;
+  }
+
+  function filtrarArvoreNotas(roots, query) {
+    const tokens = fold(query || "").trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return roots;
+
+    const matchAll = textFold => tokens.every(tk => textFold.includes(tk));
+
+    function rec(no, pathFold) {
+      const myPath = pathFold + " " + fold(no.label);
+      const matchedItems = no.items.filter(it =>
+        matchAll(`${myPath} ${fold(it.titulo)} ${fold(it.achado)} ${fold(it.conclusao)} ${fold(it.fonteLabel)}`)
+      );
+      const matchedChildren = [];
+      for (const ch of no.children) {
+        const sub = rec(ch, myPath);
+        if (sub) matchedChildren.push(sub);
+      }
+      if (!matchedItems.length && !matchedChildren.length) return null;
+      const clone = {
+        ...no,
+        defaultOpen: true,
+        items: matchedItems,
+        children: matchedChildren,
+        count: 0
+      };
+      contarNos(clone);
+      return clone;
+    }
+
+    return (roots || []).map(r => rec(r, "")).filter(Boolean);
+  }
+
+  const api = {
+    cleanText,
+    parsePadroes,
+    agruparPorOrgao,
+    encontrarAlvo,
+    aplicarNoParagrafo,
+    sameSubject,
+    isLikelyConc,
+    itemKey,
+    detectarModalidadeExame,
+    regioesAlvoDoExame,
+    extrairItensEntradaBanco,
+    construirArvoreNotas,
+    filtrarArvoreNotas
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuPadroes = api;
 })(globalThis);
@@ -17037,8 +17514,80 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const el = ui.el, button = ui.button;
   const fold = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
+  const FAV_STORAGE_KEY = "v2PadroesFavs";
+  const MAX_SEARCH_NODES = 120;
+
   let itensCache = [];
+  let arvoreTodas = false;
+  let arvoreCacheKey = "";
+  let arvoreCache = [];
+  let favsState = carregarFavsLocal();
   const collapsedOrgs = new Set();
+  const expandedNodes = new Set();
+
+  function carregarFavsLocal() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || "null");
+      if (parsed && typeof parsed.porExame === "object" && parsed.porExame) return parsed;
+    } catch (_) {}
+    return { versao: 1, porExame: {} };
+  }
+
+  function salvarFavsLocal(state) {
+    favsState = state;
+    try { localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(state)); } catch (_) {}
+  }
+
+  function mesclarFavs(remoto) {
+    if (!remoto || typeof remoto.porExame !== "object" || !remoto.porExame) return;
+    const next = { versao: 1, porExame: { ...remoto.porExame } };
+    salvarFavsLocal(next);
+  }
+
+  function examKeyAtual() {
+    return (typeof current !== "undefined" && current?.id) ? current.id : "_geral";
+  }
+
+  function favsDoExame(exId = examKeyAtual()) {
+    const list = favsState.porExame?.[exId];
+    return Array.isArray(list) ? list : [];
+  }
+
+  function isFav(it, exId = examKeyAtual()) {
+    const id = it?.id || P.itemKey(it);
+    return favsDoExame(exId).some(f => (f.id || P.itemKey(f)) === id);
+  }
+
+  function compactFav(it) {
+    return {
+      id: it.id || P.itemKey(it),
+      fonte: it.fonte || "",
+      fonteLabel: it.fonteLabel || it.exame || "",
+      orgaoId: it.orgaoId || "geral",
+      orgaoLabel: it.orgaoLabel || "Geral",
+      titulo: it.titulo || "",
+      achado: it.achado || "",
+      conclusao: it.conclusao || ""
+    };
+  }
+
+  function toggleFav(it) {
+    const exId = examKeyAtual();
+    const id = it?.id || P.itemKey(it);
+    const curList = favsDoExame(exId).slice();
+    const idx = curList.findIndex(f => (f.id || P.itemKey(f)) === id);
+    if (idx >= 0) curList.splice(idx, 1);
+    else curList.unshift(compactFav(it));
+
+    const nextPorExame = { ...(favsState.porExame || {}) };
+    if (curList.length) nextPorExame[exId] = curList;
+    else delete nextPorExame[exId];
+
+    const next = { versao: 1, porExame: nextPorExame };
+    salvarFavsLocal(next);
+    try { window.tutuSite?.db?.doc("config/padroes-favs")?.set(next); } catch (_) {}
+    renderLista();
+  }
 
   function listar() {
     if (typeof current === "undefined" || !current) return [];
@@ -17050,13 +17599,38 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         : (typeof maskPadroesOf === "function" ? maskPadroesOf(ex).join("\n") : "");
       if (!raw || !raw.trim()) continue;
       for (const it of P.parsePadroes(raw, ex, Sug)) {
-        const k = fold(it.achado) + "|" + fold(it.conclusao);
+        const k = it.id || P.itemKey(it);
         if (seen.has(k)) continue;
         seen.add(k);
-        out.push({ ...it, exame: ex.name || ex.id || "Máscara", texto: it.achado });
+        out.push({ ...it, id: k, exame: ex.name || ex.id || "Máscara", texto: it.achado });
       }
     }
     return out;
+  }
+
+  function snapshotBancosKey() {
+    const slugs = window.BANK_BY_SLUG ? Object.keys(window.BANK_BY_SLUG).sort().map(s => `${s}:${window.BANK_BY_SLUG[s]?.frases?.length || 0}:${window.BANK_BY_SLUG[s]?.pares?.length || 0}`).join(",") : "";
+    const tcLen = Array.isArray(window.BANK_TC) ? window.BANK_TC.length : 0;
+    const prLen = Array.isArray(window.BANK_PARES) ? window.BANK_PARES.length : 0;
+    return `${examKeyAtual()}|${arvoreTodas ? 1 : 0}|${slugs}|tc:${tcLen}|pr:${prLen}`;
+  }
+
+  function obterArvoreNotas() {
+    const k = snapshotBancosKey();
+    if (k === arvoreCacheKey) return arvoreCache;
+    arvoreCacheKey = k;
+    const roots = P.construirArvoreNotas({
+      bySlug: window.BANK_BY_SLUG,
+      bankTc: typeof BANK_TC !== "undefined" ? BANK_TC : window.BANK_TC,
+      bankNt: typeof BANK_NT !== "undefined" ? BANK_NT : window.BANK_NT,
+      bankPares: typeof BANK_PARES !== "undefined" ? BANK_PARES : window.BANK_PARES,
+      exame: typeof current !== "undefined" ? current : null,
+      todas: arvoreTodas
+    }, Sug, window.TutuFrase);
+    arvoreCache = roots;
+    expandedNodes.clear();
+    for (const r of roots) if (r.defaultOpen) expandedNodes.add(r.key);
+    return roots;
   }
 
   function maskNormalSet() {
@@ -17077,7 +17651,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       : String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
-  function inserirConclusaoPadrao(conc) {
+  function inserirUmaConclusao(conc) {
     if (!conc) return false;
     const ps = [...sheet.children];
     const ci = ps.findIndex(p => norm(p.textContent) === "conclusão");
@@ -17119,6 +17693,13 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     return true;
   }
 
+  function inserirConclusaoPadrao(conc) {
+    const linhas = String(conc || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    let entrou = false;
+    for (const c of linhas) if (inserirUmaConclusao(c)) entrou = true;
+    return entrou;
+  }
+
   function inserirItem(item) {
     const achado = typeof item === "string" ? item : (item?.achado || "");
     const conclusao = typeof item === "string" ? "" : (item?.conclusao || "");
@@ -17152,10 +17733,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         p.innerHTML = htmlDeTexto(achado);
         const before = ci > hi ? ps[ci] : null;
         if (before) {
-          // Se houver parágrafo em branco logo antes de Conclusão, insere antes dele
-          const prev = before.previousElementSibling;
-          if (prev && prev !== ps[hi] && !prev.textContent.trim()) before.before(p);
-          else before.before(p);
+          before.before(p);
         } else {
           const last = achBlocos[achBlocos.length - 1]?.el || ps[hi];
           last.after(p);
@@ -17189,10 +17767,14 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     }
   }
 
-  async function copiarItem(item) {
+  async function copiarItem(item, btnRef) {
     const txt = item.conclusao ? `${item.achado}\n\nConclusão:\n${item.conclusao}` : item.achado;
     try {
       if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(txt);
+      if (btnRef) {
+        btnRef.textContent = "Copiado ✓";
+        setTimeout(() => { if (btnRef.isConnected) btnRef.textContent = "Copiar"; }, 1200);
+      }
       if (typeof setStatus === "function") setStatus("Texto padrão copiado.", "ok");
     } catch (_) {}
   }
@@ -17203,7 +17785,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     class: "v2-padroes-btn",
     "aria-expanded": "false",
     "aria-controls": "v2PadroesPop",
-    title: "Textos padrão desta máscara — clique para colar direto na linha certa e na conclusão",
+    title: "Textos padrão e notas deste exame — clique para colar direto na linha certa e na conclusão",
     hidden: ""
   });
   btn.addEventListener("mousedown", e => e.preventDefault());
@@ -17217,13 +17799,29 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     id: "v2PadroesPop",
     class: "v2-padroes-pop",
     role: "dialog",
-    "aria-label": "Textos padrão da máscara",
+    "aria-label": "Textos padrão da máscara e notas",
     hidden: ""
   });
   const popHead = el("div", { class: "v2-padroes-head" });
   const popTitle = el("strong", {}, "Textos padrão");
   const popClose = button("×", () => fechar(), { class: "v2-padroes-close", "aria-label": "Fechar textos padrão" });
   popHead.append(popTitle, popClose);
+
+  const popTabs = el("div", { class: "v2-padroes-tabs", hidden: "" });
+  const tabExame = button("Este exame", () => { arvoreTodas = false; renderLista(); }, {
+    id: "v2PadroesScopeExame",
+    class: "v2-padroes-tab",
+    "aria-pressed": "true"
+  });
+  const tabTodas = button("Todas as notas", () => { arvoreTodas = true; renderLista(); }, {
+    id: "v2PadroesScopeTodas",
+    class: "v2-padroes-tab",
+    "aria-pressed": "false"
+  });
+  tabExame.addEventListener("mousedown", e => e.preventDefault());
+  tabTodas.addEventListener("mousedown", e => e.preventDefault());
+  popTabs.append(tabExame, tabTodas);
+
   const popFilter = el("input", {
     id: "v2PadroesFiltro",
     type: "search",
@@ -17232,73 +17830,180 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     hidden: ""
   });
   const popList = el("div", { id: "v2PadroesLista", class: "v2-padroes-lista" });
-  const popFoot = el("div", { class: "v2-padroes-foot" }, "Clique na frase para colar na linha correspondente (+ conclusão) · F9 desfaz");
-  pop.append(popHead, popFilter, popList, popFoot);
+  const popFoot = el("div", { class: "v2-padroes-foot" }, "Clique na frase para colar na linha correspondente (+ conclusão) · ★ fixa na máscara · Voltar (Ctrl+Z) ou F9 desfaz");
+  pop.append(popHead, popTabs, popFilter, popList, popFoot);
   document.body.append(pop);
+
+  // Somente leitura no init: o navegador não escreve no IndexedDB antes do médico estrelar algum item.
+  try {
+    const dbRef = window.tutuSite?.db;
+    if (dbRef) {
+      dbRef.collection("config").onSnapshot(snap => {
+        const doc = snap?.docs?.find(d => d.id === "padroes-favs");
+        if (doc?.exists) {
+          mesclarFavs(doc.data());
+          if (!pop.hidden) renderLista();
+        }
+      });
+    }
+  } catch (_) {}
+
+  function criarCardItem(it, extraClass = "") {
+    const card = el("div", { class: "v2-padroes-item" + (extraClass ? " " + extraClass : "") });
+    const textoBtn = button("", () => { inserirItem(it); fechar(); }, {
+      class: "v2-padroes-tx v2-padroes-ins",
+      title: it.conclusao ? "Colar achado na linha certa + conclusão" : "Colar achado na linha certa"
+    });
+    textoBtn.addEventListener("mousedown", e => e.preventDefault());
+    if (it.titulo || it.fonteLabel || (it.freq && it.freq > 1)) {
+      const metaRow = el("span", { class: "v2-padroes-meta" });
+      if (it.titulo) metaRow.append(el("span", { class: "v2-padroes-tit" }, it.titulo));
+      if (it.fonteLabel) metaRow.append(el("span", { class: "v2-padroes-src" }, it.fonteLabel));
+      if (it.freq && it.freq > 1) metaRow.append(el("span", { class: "v2-padroes-freq" }, `×${it.freq}`));
+      textoBtn.append(metaRow);
+    }
+    textoBtn.append(el("span", { class: "v2-padroes-ach" }, it.achado));
+    if (it.conclusao) {
+      const concTag = el("span", { class: "v2-padroes-conc" });
+      concTag.append(el("b", {}, "Conclusão: "), it.conclusao.replace(/\n+/g, " · "));
+      textoBtn.append(concTag);
+    }
+    const act = el("div", { class: "v2-padroes-act" });
+    const ativoFav = isFav(it);
+    const favBtn = button(ativoFav ? "★" : "☆", () => toggleFav(it), {
+      class: "v2-padroes-fav",
+      "aria-pressed": String(ativoFav),
+      "aria-label": ativoFav ? "Remover dos favoritos desta máscara" : "Fixar nos favoritos desta máscara",
+      title: ativoFav ? "Remover dos favoritos" : "Fixar nos favoritos desta máscara"
+    });
+    favBtn.addEventListener("mousedown", e => e.preventDefault());
+    const copBtn = button("Copiar", () => { copiarItem(it, copBtn); }, {
+      class: "v2-padroes-cop",
+      title: "Copiar para área de transferência"
+    });
+    copBtn.addEventListener("mousedown", e => e.preventDefault());
+    act.append(favBtn, copBtn);
+    card.append(textoBtn, act);
+    return card;
+  }
+
+  let mostrarMaisBusca = false;
 
   function renderLista() {
     const q = fold(popFilter.value).trim();
+    const arvBruta = obterArvoreNotas();
+    const temNotas = arvBruta.length > 0;
+
     popTitle.textContent = typeof current !== "undefined" && current?.name
       ? `Textos padrão · ${current.name}`
       : "Textos padrão";
-    popFilter.hidden = itensCache.length <= 3;
+    popTabs.hidden = !temNotas;
+    tabExame.setAttribute("aria-pressed", String(!arvoreTodas));
+    tabTodas.setAttribute("aria-pressed", String(arvoreTodas));
+    popFilter.hidden = itensCache.length <= 3 && !temNotas;
     popList.replaceChildren();
-    const filtrados = q
-      ? itensCache.filter(it => fold(`${it.orgaoLabel} ${it.titulo} ${it.achado} ${it.conclusao}`).includes(q))
-      : itensCache;
-    if (!filtrados.length) {
-      popList.append(el("p", { class: "v2-padroes-vazio" }, "Nenhuma frase encontrada."));
-      return;
+
+    const matchesQuery = it => !q || q.split(/\s+/).every(tk => fold(`${it.orgaoLabel} ${it.titulo} ${it.fonteLabel} ${it.achado} ${it.conclusao}`).includes(tk));
+
+    // 1. Favoritos deste exame (★)
+    const favs = favsDoExame().filter(matchesQuery);
+    if (favs.length) {
+      popList.append(el("div", { class: "v2-padroes-sec-hdr" }, `★ Favoritos deste exame (${favs.length})`));
+      for (const it of favs) popList.append(criarCardItem(it, "v2-padroes-fav-item"));
     }
 
-    const grupos = P.agruparPorOrgao(filtrados, typeof current !== "undefined" ? current : null, Sug);
-    const mostrarCabOrgao = grupos.length > 1 || (grupos[0] && grupos[0].id !== "geral");
-
-    for (const grp of grupos) {
-      const aberto = !!q || !collapsedOrgs.has(grp.id);
-      if (mostrarCabOrgao) {
-        const orgBtn = button("", () => {
-          if (collapsedOrgs.has(grp.id)) collapsedOrgs.delete(grp.id);
-          else collapsedOrgs.add(grp.id);
-          renderLista();
-        }, { class: "v2-padroes-org", "aria-expanded": String(aberto) });
-        orgBtn.append(
-          el("span", { class: "v2-padroes-chev" }, aberto ? "▾" : "▸"),
-          el("span", { class: "v2-padroes-org-lbl" }, grp.label),
-          el("small", { class: "v2-padroes-org-cnt" }, String(grp.itens.length))
-        );
-        orgBtn.addEventListener("mousedown", e => e.preventDefault());
-        popList.append(orgBtn);
-        if (!aberto) continue;
+    // 2. Padrões próprios da máscara
+    const filtradosMask = itensCache.filter(matchesQuery);
+    if (filtradosMask.length) {
+      if (temNotas || favs.length) {
+        popList.append(el("div", { class: "v2-padroes-sec-hdr" }, "Padrões da máscara"));
       }
+      const grupos = P.agruparPorOrgao(filtradosMask, typeof current !== "undefined" ? current : null, Sug);
+      const mostrarCabOrgao = grupos.length > 1 || (grupos[0] && grupos[0].id !== "geral");
 
-      for (const it of grp.itens) {
-        const card = el("div", { class: "v2-padroes-item" });
-        const textoBtn = button("", () => { inserirItem(it); fechar(); }, {
-          class: "v2-padroes-tx v2-padroes-ins",
-          title: it.conclusao ? "Colar achado na linha certa + conclusão" : "Colar achado na linha certa"
-        });
-        textoBtn.addEventListener("mousedown", e => e.preventDefault());
-        if (it.titulo) textoBtn.append(el("span", { class: "v2-padroes-tit" }, it.titulo));
-        textoBtn.append(el("span", { class: "v2-padroes-ach" }, it.achado));
-        if (it.conclusao) {
-          const concTag = el("span", { class: "v2-padroes-conc" });
-          concTag.append(el("b", {}, "Conclusão: "), it.conclusao);
-          textoBtn.append(concTag);
+      for (const grp of grupos) {
+        const aberto = !!q || !collapsedOrgs.has(grp.id);
+        if (mostrarCabOrgao) {
+          const orgBtn = button("", () => {
+            if (collapsedOrgs.has(grp.id)) collapsedOrgs.delete(grp.id);
+            else collapsedOrgs.add(grp.id);
+            renderLista();
+          }, { class: "v2-padroes-org", "aria-expanded": String(aberto) });
+          orgBtn.append(
+            el("span", { class: "v2-padroes-chev" }, aberto ? "▾" : "▸"),
+            el("span", { class: "v2-padroes-org-lbl" }, grp.label),
+            el("small", { class: "v2-padroes-org-cnt" }, String(grp.itens.length))
+          );
+          orgBtn.addEventListener("mousedown", e => e.preventDefault());
+          popList.append(orgBtn);
+          if (!aberto) continue;
         }
-        const act = el("div", { class: "v2-padroes-act" });
-        const copBtn = button("Copiar", () => { copiarItem(it); }, { class: "v2-padroes-cop", title: "Copiar para área de transferência" });
-        copBtn.addEventListener("mousedown", e => e.preventDefault());
-        act.append(copBtn);
-        card.append(textoBtn, act);
-        popList.append(card);
+        for (const it of grp.itens) popList.append(criarCardItem(it));
       }
+    }
+
+    // 3. Árvore das notas (Notas TC, USG, Tomografia, Exames!!)
+    const arvFiltrada = q ? P.filtrarArvoreNotas(arvBruta, q) : arvBruta;
+    if (arvFiltrada.length) {
+      popList.append(el("div", { class: "v2-padroes-sec-hdr" }, arvoreTodas ? "Todas as notas" : "Notas deste exame"));
+      const wrap = el("div", { class: "v2-padroes-tree-wrap" });
+      let renderizados = 0;
+      let truncado = false;
+      const limite = q && !mostrarMaisBusca ? MAX_SEARCH_NODES : Infinity;
+
+      const renderNo = (no, container) => {
+        if (renderizados >= limite) { truncado = true; return; }
+        const aberto = q ? true : expandedNodes.has(no.key);
+        const nodeEl = el("div", { class: "v2-padroes-tree-node", "data-level": String(no.level) });
+        const nodeBtn = button("", () => {
+          if (expandedNodes.has(no.key)) expandedNodes.delete(no.key);
+          else expandedNodes.add(no.key);
+          renderLista();
+        }, { class: "v2-padroes-tree-btn", "aria-expanded": String(aberto) });
+        nodeBtn.append(
+          el("span", { class: "v2-padroes-chev" }, aberto ? "▾" : "▸"),
+          el("span", { class: "v2-padroes-tree-lbl" }, no.label)
+        );
+        if (no.level === 0 && no.fonteLabel) {
+          nodeBtn.append(el("span", { class: "v2-padroes-src" }, no.fonteLabel));
+        }
+        nodeBtn.append(el("small", { class: "v2-padroes-org-cnt" }, String(no.count)));
+        nodeBtn.addEventListener("mousedown", e => e.preventDefault());
+        nodeEl.append(nodeBtn);
+
+        if (aberto) {
+          const childrenBox = el("div", { class: "v2-padroes-tree-children" });
+          for (const ch of no.children) renderNo(ch, childrenBox);
+          for (const it of no.items) {
+            if (renderizados >= limite) { truncado = true; break; }
+            childrenBox.append(criarCardItem(it));
+            renderizados++;
+          }
+          nodeEl.append(childrenBox);
+        }
+        container.append(nodeEl);
+      };
+
+      for (const r of arvFiltrada) renderNo(r, wrap);
+      popList.append(wrap);
+
+      if (truncado) {
+        const maisBtn = button("Mostrar todos os resultados", () => { mostrarMaisBusca = true; renderLista(); }, {
+          class: "v2-padroes-mais"
+        });
+        maisBtn.addEventListener("mousedown", e => e.preventDefault());
+        popList.append(maisBtn);
+      }
+    }
+
+    if (!popList.childElementCount) {
+      popList.append(el("p", { class: "v2-padroes-vazio" }, "Nenhuma frase encontrada."));
     }
   }
 
   function posicionarPop() {
     const r = btn.getBoundingClientRect();
-    const w = Math.min(540, window.innerWidth - 24);
+    const w = Math.min(620, window.innerWidth - 24);
     const left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left));
     const top = Math.min(window.innerHeight - 200, r.bottom + 6);
     pop.style.left = left + "px";
@@ -17307,8 +18012,10 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
 
   function abrir() {
     itensCache = listar();
-    if (!itensCache.length) return;
+    const temNotas = obterArvoreNotas().length > 0;
+    if (!itensCache.length && !temNotas) return;
     popFilter.value = "";
+    mostrarMaisBusca = false;
     renderLista();
     pop.hidden = false;
     btn.setAttribute("aria-expanded", "true");
@@ -17329,14 +18036,15 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
 
   function atualizar() {
     itensCache = listar();
-    btn.hidden = !itensCache.length;
+    const temNotas = obterArvoreNotas().length > 0;
+    btn.hidden = !itensCache.length && !temNotas;
     btn.textContent = itensCache.length ? `Textos padrão (${itensCache.length})` : "Textos padrão";
-    if (!itensCache.length && !pop.hidden) fechar();
+    if (btn.hidden && !pop.hidden) fechar();
     if (!pop.hidden) renderLista();
   }
 
   pop.addEventListener("keydown", e => {
-    const btns = [...popList.querySelectorAll(".v2-padroes-ins, .v2-padroes-org")];
+    const btns = [...popList.querySelectorAll(".v2-padroes-ins, .v2-padroes-org, .v2-padroes-tree-btn")];
     if (!btns.length) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault(); e.stopPropagation();
@@ -17345,7 +18053,8 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       btns[next].focus();
     }
   });
-  popFilter.addEventListener("input", renderLista);
+  popFilter.addEventListener("input", () => { mostrarMaisBusca = false; renderLista(); });
+  document.addEventListener("tutu-bancos", () => { arvoreCacheKey = ""; atualizar(); });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && !pop.hidden) {
       e.preventDefault(); e.stopPropagation();
@@ -17353,14 +18062,16 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       if (typeof focusSheet === "function") focusSheet();
     }
   }, true);
+  pop.addEventListener("click", e => e.stopPropagation());
   document.addEventListener("click", e => {
     if (pop.hidden) return;
-    if (pop.contains(e.target) || btn.contains(e.target)) return;
+    const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+    if (path.includes(pop) || path.includes(btn) || pop.contains(e.target) || btn.contains(e.target)) return;
     fechar();
   });
   window.addEventListener("resize", () => { if (!pop.hidden) posicionarPop(); });
 
-  ui.padroes = { listar, atualizar, abrir, fechar, inserirItem, cleanText: P.cleanText };
+  ui.padroes = { listar, atualizar, abrir, fechar, inserirItem, cleanText: P.cleanText, favoritos: () => favsDoExame() };
   if (ui.actions) ui.actions.padroes = { label: "Textos padrão da máscara", run: abrir };
   atualizar();
 })();

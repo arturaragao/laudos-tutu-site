@@ -787,6 +787,13 @@
     if (name === "permissions") return { state: () => "unavailable" };
     return null; // Notion/MCP indisponível: o módulo compartilhado mantém a cópia salva.
   } };
+  function validBankEntry(e){
+    if (!Array.isArray(e) || e.length < 4) return false;
+    if (e.slice(0, 4).some(v => typeof v !== "string")) return false;
+    if (e.length >= 5 && e[4] != null && !Array.isArray(e[4])) return false;
+    if (e.length >= 6 && e[5] != null && typeof e[5] !== "string") return false;
+    return true;
+  }
   function validateBackup(backup){
     if (!backup || backup.app !== "Laudos" || ![1, 2].includes(backup.versao) || !backup.dados || Array.isArray(backup.dados)) throw new Error("Formato de backup inválido.");
     const writes = [];
@@ -808,7 +815,7 @@
         const value = backup.bancos[name];
         if (name.endsWith("_meta")){
           if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Metadados de banco inválidos.");
-        } else if (!Array.isArray(value) || value.some(e => !Array.isArray(e) || e.length < 4 || e.some(v => typeof v !== "string"))) throw new Error("Banco de frases inválido.");
+        } else if (!Array.isArray(value) || value.some(e => !validBankEntry(e))) throw new Error("Banco de frases inválido.");
         writes.push(["_bancos/" + name, value]);
       }
     } else if (backup.versao === 2) throw new Error("Backup sem bancos de frases.");
@@ -1002,7 +1009,7 @@
       const c = await kvGet("_gh/banco/" + b.slug);
       if (c && (b.hash ? c.hash === b.hash : c.atualizado === b.atualizado)) continue;
       const f = await gh.getJson("bancos/" + b.slug + ".json");
-      if (!f || !Array.isArray(f.json?.frases) || f.json.frases.some(e => !Array.isArray(e) || e.length < 4 || e.some(v => typeof v !== "string")))
+      if (!f || !Array.isArray(f.json?.frases) || f.json.frases.some(e => !validBankEntry(e)))
         throw new Error("Banco inválido ou ausente: " + b.slug);
       writes.push(["_gh/banco/" + b.slug, { hash: b.hash || null, atualizado: b.atualizado || j.gerado || f.json.atualizado, doc: f.json }]); mudou = true;
     }
@@ -1023,7 +1030,7 @@
   // {tc, nt}: cada lado = {frases, atualizado} ou null. notas-tomografia = NT; as demais (TC, USG, RM, RX) = TC.
   async function lerBancosGh(){
     const rows = new Map(await readAll());
-    const out = { tc: null, nt: null, pares: [] }, idx = rows.get("_gh/indice");
+    const out = { tc: null, nt: null, pares: [], porSlug: {} }, idx = rows.get("_gh/indice");
     if (!idx) return out;
     for (const slug of idx.slugs){
       const c = rows.get("_gh/banco/" + slug);
@@ -1031,7 +1038,17 @@
       if (slug === "notas-tomografia" && Array.isArray(c.doc?.pares)) out.pares = c.doc.pares.filter(p => Array.isArray(p) && p.length >= 4);   // achado -> conclusão (só nesta página)
       const lado = slug === "notas-tomografia" ? "nt" : "tc";
       const o = out[lado] || (out[lado] = { frases: [], atualizado: "" });
-      o.frases.push(...c.doc.frases.filter(e => Array.isArray(e) && e.length >= 4).map(e => e.length >= 6 ? e : [e[0], e[1], e[2], e[3], e[4] || null, c.doc.modalidade || "TC"]));   // e[4] = pares {a,c} do robô; e[5] = modalidade (modo Frase @)
+      const mod = c.doc.modalidade || "TC";
+      const normFrases = c.doc.frases.filter(e => Array.isArray(e) && e.length >= 4).map(e => e.length >= 6 ? e : [e[0], e[1], e[2], e[3], e[4] || null, mod]);
+      o.frases.push(...normFrases);   // e[4] = pares {a,c} do robô; e[5] = modalidade (modo Frase @)
+      out.porSlug[slug] = {
+        slug,
+        titulo: c.doc.titulo || slug,
+        modalidade: mod,
+        atualizado: c.atualizado || c.doc.atualizado || "",
+        frases: normFrases,
+        pares: slug === "notas-tomografia" ? out.pares : []
+      };
       if (!o.atualizado || (slug === "notas-tc" || slug === "notas-tomografia")) o.atualizado = c.atualizado || o.atualizado;
     }
     return out;
@@ -1077,6 +1094,7 @@
     }
     if (!g.pares.length && ["127.0.0.1", "localhost", "[::1]"].includes(location.hostname)) await loadScript("bancos/pares.js");   // reserva local (data/notas-tomografia.json)
     window.BANK_PARES = g.pares.length ? g.pares : (window.BANK_PARES || []);
+    window.BANK_BY_SLUG = g.porSlug || {};
     const fileTC = window.BANK_TC || [], fileNT = window.BANK_NT || [], b = backup.bancos;
     const fileMeta = window.BANK_NT_META || {}, fileDate = window.BANK_TC_DATE;
     window.BANK_TC = mergeBank(g.tc ? g.tc.frases : fileTC, b.bank_tc).entries;
@@ -1086,7 +1104,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=ef72381"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=289c6de"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();
