@@ -771,10 +771,12 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
 #usgDialog[data-estado="ouvindo"] #usgEstado{color:var(--crit)}
 #usgDialog[data-estado="ouvindo"] #usgEstado::before{content:"";display:inline-block;width:9px;height:9px;margin-right:7px;border-radius:50%;background:var(--crit);animation:usg-pisca 1.2s ease-in-out infinite}
 #usgDialog[data-estado="pausado"] #usgEstado,#usgDialog[data-estado="enviado"] #usgEstado{color:var(--changed,var(--ok))}
+#usgDialog[data-estado="transcrevendo"] #usgEstado{color:var(--accent);animation:usg-pisca 1.2s ease-in-out infinite}
 #usgContador{font-size:12px;color:var(--muted)}
-.usg-modo-ia{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--line,#ccc);border-radius:999px;background:var(--panel,#f4ede0)}
-#usgDialog .usg-modo-ia button{min-height:24px;padding:2px 9px;border:0;border-radius:999px;background:transparent;color:var(--muted);font-size:11px;font-weight:600;cursor:pointer;line-height:1.2}
-#usgDialog .usg-modo-ia button[aria-checked="true"]{background:var(--accent);color:var(--accent-ink)}
+.usg-modo-ia,.usg-motor-voz{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--line,#ccc);border-radius:999px;background:var(--panel,#f4ede0)}
+#usgDialog .usg-modo-ia button,#usgDialog .usg-motor-voz button{min-height:24px;padding:2px 9px;border:0;border-radius:999px;background:transparent;color:var(--muted);font-size:11px;font-weight:600;cursor:pointer;line-height:1.2}
+#usgDialog .usg-modo-ia button[aria-checked="true"],#usgDialog .usg-motor-voz button[aria-checked="true"]{background:var(--accent);color:var(--accent-ink)}
+#usgDialog .usg-motor-voz button:disabled{opacity:.55;cursor:default}
 .usg-leitura{display:flex;flex-direction:column;min-height:0;flex:1 1 auto;background:var(--panel,#f4ede0);border:1px solid var(--line,#ccc);border-radius:14px;overflow:hidden}
 #usgDialog[data-estado="ouvindo"] .usg-leitura{border-color:var(--crit)}
 #usgTexto{box-sizing:border-box;display:block;flex:1 1 auto;width:100%;min-height:170px;margin:0;padding:14px 14px 6px;border:0;outline:0;background:transparent;color:var(--text);font:inherit;font-size:18px;line-height:1.6;resize:none;overflow:auto}

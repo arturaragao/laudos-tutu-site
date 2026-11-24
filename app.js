@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "bcfb7f4 · 24/11 14:50";
+window.__SITE_VERSION__ = "ef72381 · 24/11 15:28";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -8973,9 +8973,37 @@ window.tutuSite.appReady = true;
     return t.trim();
   }
   const normalizar = (t, cfg) => (root.TutuV2Core?.fixFala || String)(root.usgVoice.posTexto(root.usgVoice.punct(t), cfg));
+  const MIME_TRANS_ALIAS = {
+    "audio/mp4": "audio/m4a",
+    "audio/x-m4a": "audio/m4a",
+    "video/webm": "audio/webm",
+    "audio/x-wav": "audio/wav",
+    "audio/wave": "audio/wav",
+    "audio/x-mpeg": "audio/mpeg"
+  };
+  function normalizarMimeAudio(raw) {
+    const base = String(raw || "").split(";")[0].trim().toLowerCase();
+    return MIME_TRANS_ALIAS[base] || (/^audio\/[a-z0-9.+-]+$/.test(base) ? base : "audio/webm");
+  }
+  function coletarVocabularioTranscricao(cfg = {}, limite = 100) {
+    const out = [], seen = new Set();
+    const push = raw => {
+      if (out.length >= limite) return;
+      const s = String(raw || "").replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+      if (s.length < 3 || s.length > 60) return;
+      const k = s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(s);
+    };
+    for (const t of (cfg.vocabExame || [])) push(t);
+    for (const c of [...(cfg.corrections || []), ...(cfg.correcoes || [])]) push(c?.para ?? (Array.isArray(c) ? c[1] : ""));
+    for (const t of (cfg.vocab || [])) push(t);
+    return out;
+  }
   const prioridade = e => /arterial.*(?:inferior|mmii)/i.test(e.name) ? 0 : /car[oó]tid/i.test(e.name) ? 1 : /abd[oô]m/i.test(e.name) ? 2 : 3;
   const examesUSG = list => list.filter(e => /\busg\b|ultrass|doppler|ecograf/i.test([e.name, e.code, e.mask?.split("\n")[0]].join(" "))).sort((a, b) => prioridade(a) - prioridade(b));
-  const api = { anonimizar, normalizar, examesUSG };
+  const api = { anonimizar, normalizar, examesUSG, normalizarMimeAudio, coletarVocabularioTranscricao };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuUSG = api;
 })(globalThis);
@@ -9037,11 +9065,11 @@ window.tutuSite.appReady = true;
   const parcial = el("p", { id: "usgParcial", "aria-live": "polite" });
   const ICONE_MIC = '<svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>';
   const ICONE_PARAR = '<svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
-  const iniciar = button("", () => { try { captar(); } catch (e) { stop(); dizer(e.message); } }, { id: "usgIniciar", class: "usg-mic-btn", "aria-label": "Iniciar áudio", title: "Iniciar áudio" }); iniciar.innerHTML = ICONE_MIC;
-  const parar = button("", () => stop(), { id: "usgParar", class: "usg-mic-btn usg-parar", "aria-label": "Parar", title: "Parar" }); parar.innerHTML = ICONE_PARAR; parar.disabled = true;
+  const iniciar = button("", () => { try { captar(); } catch (e) { stop({ descartar: true }); dizer(e.message); } }, { id: "usgIniciar", class: "usg-mic-btn", "aria-label": "Iniciar áudio", title: "Iniciar áudio" }); iniciar.innerHTML = ICONE_MIC;
+  const parar = button("", () => { stop(); }, { id: "usgParar", class: "usg-mic-btn usg-parar", "aria-label": "Parar", title: "Parar" }); parar.innerHTML = ICONE_PARAR; parar.disabled = true;
   const enviar = button("Enviar para a IA", () => enviarPedido(), { id: "usgEnviar" });
   const estado = el("p", { id: "usgEstado", "aria-live": "polite" }), contador = el("span", { id: "usgContador" });
-  const legenda = el("p", { id: "usgLegenda" }), fechar = button("×", () => { stop(); dialog.close(); }, { id: "usgFechar", "aria-label": "Fechar", title: "Fechar" });
+  const legenda = el("p", { id: "usgLegenda" }), fechar = button("×", () => { stop({ descartar: true }); dialog.close(); }, { id: "usgFechar", "aria-label": "Fechar", title: "Fechar" });
   const MODO_IA_KEY = "usgModoIA";
   const lerModoIA = () => {
     try { const v = localStorage.getItem(MODO_IA_KEY); return v === "direct" || v === "completo" || v === "auto" ? v : "auto"; }
@@ -9063,18 +9091,53 @@ window.tutuSite.appReady = true;
     for (const b of modoBtns) b.setAttribute("aria-checked", b.dataset.modo === modoIA ? "true" : "false");
   }
   atualizarModoUI();
+  let mediaRec = null, mediaStream = null, audioChunks = [], recInicio = 0, recTimer = 0;
+  let transcrevendo = false, transcreverPromessa = null, recCtrl = null, recSeq = 0;
+  const motorVozBtns = [
+    ["gemini", "Gemini 3.5", "Transcreve o áudio gravado com Gemini 3.5 Transcribe (alta precisão médica · ~$0,005/min)"],
+    ["navegador", "Navegador", "Ditado direto pelo reconhecedor do navegador (grátis)"]
+  ].map(([k, rotulo, title]) => button(rotulo, () => {
+    if (ouvindo || transcrevendo) return;
+    T.salvarVozMotor?.(k);
+    atualizarMotorVozUI();
+  }, { type: "button", role: "radio", "data-motor": k, title, "aria-checked": "false" }));
+  const motorVozWrap = el("div", { id: "usgMotorVoz", class: "usg-motor-voz", role: "radiogroup", "aria-label": "Motor de voz" });
+  motorVozWrap.append(...motorVozBtns);
+  function atualizarMotorVozUI() {
+    const st = T.nuvemStatus?.();
+    motorVozWrap.hidden = !st?.configurada;
+    const ativo = st?.vozMotor === "navegador" ? "navegador" : "gemini";
+    for (const b of motorVozBtns) {
+      b.setAttribute("aria-checked", b.dataset.motor === ativo ? "true" : "false");
+      b.disabled = !!(ouvindo || transcrevendo);
+    }
+  }
+  atualizarMotorVozUI();
+  document.addEventListener("tutu-nuvem-mudou", atualizarMotorVozUI);
   let enviado = false;
-  /* Estado visual único: ouvindo / pausado (com texto) / vazio / enviado. Só estilo e rótulos; a lógica de áudio não passa por aqui. */
+  const fmtTempoRec = ms => {
+    const seg = Math.max(0, Math.floor(ms / 1000));
+    return `${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, "0")}`;
+  };
+  /* Estado visual único: transcrevendo / ouvindo / pausado / vazio / enviado. Só estilo e rótulos; a lógica de áudio não passa por aqui. */
   function atualizarUI() {
     const t = texto.value.trim(), n = t ? t.split(/\s+/).length : 0;
-    const k = ouvindo ? "ouvindo" : enviado ? "enviado" : t ? "pausado" : "vazio";
+    const k = transcrevendo ? "transcrevendo" : ouvindo ? "ouvindo" : enviado ? "enviado" : t ? "pausado" : "vazio";
     dialog.dataset.estado = k;
-    estado.textContent = { ouvindo: "Ouvindo…", pausado: "Pausado · pronto para enviar", enviado: "Enviado ✓", vazio: "Pronto para ditar" }[k];
-    legenda.textContent = ouvindo ? "Toque para parar" : "Toque para ditar";
+    estado.textContent = k === "transcrevendo"
+      ? "Transcrevendo com Gemini 3.5…"
+      : k === "ouvindo" && mediaRec
+        ? `Gravando (Gemini 3.5) · ${fmtTempoRec(Date.now() - recInicio)}`
+        : { ouvindo: "Ouvindo…", pausado: "Pausado · pronto para enviar", enviado: "Enviado ✓", vazio: "Pronto para ditar" }[k];
+    legenda.textContent = transcrevendo ? "Aguarde a transcrição…" : ouvindo ? (mediaRec ? "Toque para parar e transcrever" : "Toque para parar") : "Toque para ditar";
     contador.textContent = n ? n + (n === 1 ? " palavra" : " palavras") : "";
-    enviar.hidden = !t;
+    enviar.hidden = !t && !(ouvindo && mediaRec) && !transcrevendo;
+    enviar.disabled = !!(busy || transcrevendo);
     iniciar.style.visibility = ouvindo ? "hidden" : ""; parar.style.visibility = ouvindo ? "" : "hidden";
-    iniciar.style.pointerEvents = ouvindo ? "none" : ""; parar.style.pointerEvents = ouvindo ? "" : "none";
+    iniciar.style.pointerEvents = (ouvindo || transcrevendo) ? "none" : ""; parar.style.pointerEvents = ouvindo ? "" : "none";
+    iniciar.disabled = !!(ouvindo || transcrevendo);
+    parar.disabled = !ouvindo;
+    atualizarMotorVozUI();
   }
   texto.addEventListener("input", () => { enviado = false; atualizarUI(); });
   let escolhaManual = false;
@@ -9102,19 +9165,195 @@ window.tutuSite.appReady = true;
   }
   /* Mesmo filtro para o Conversar sem ponte (116): usa o exame aberto na folha (vocabulário), lança "bloqueado" se não puder filtrar. */
   ui.anonimizar = t => filtrar(t, (typeof current !== "undefined" && current) || U.examesUSG(EXAMS)[0] || EXAMS[0] || {});
-  function stop() {
-    ouvindo = false; const s = speech; speech = null; s?.stop(); soltarTela();
-    iniciar.disabled = false; parar.disabled = true; exame.disabled = false; parcial.textContent = ""; if (msg.textContent.startsWith("Ouvindo")) dizer(""); atualizarUI();
+  const usarGeminiVoz = () => !!T.nuvemStatus?.()?.configurada && T.nuvemStatus().vozMotor === "gemini" &&
+    typeof T.transcreverAudioNuvem === "function" && typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  const blobToBase64 = blob => new Promise((ok, no) => {
+    const rd = new FileReader();
+    rd.onload = () => {
+      const res = String(rd.result || "");
+      const idx = res.indexOf(",");
+      ok(idx >= 0 ? res.slice(idx + 1) : res);
+    };
+    rd.onerror = () => no(new Error("Falha ao ler áudio gravado."));
+    rd.readAsDataURL(blob);
+  });
+  function escolherMimeGravacao() {
+    if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") return "";
+    return ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find(m => MediaRecorder.isTypeSupported(m)) || "";
+  }
+  const pararStream = st => { try { st?.getTracks?.().forEach(t => t.stop()); } catch (_) {} };
+  const errVozMsg = e => {
+    const nm = e?.name || "", msgErr = String(e?.message || "");
+    if (/NotAllowed|Permission/i.test(nm)) return "Permita o acesso ao microfone no navegador para gravar.";
+    if (/NotFound|DevicesNotFound/i.test(nm)) return "Nenhum microfone encontrado neste aparelho.";
+    return msgErr || "Não foi possível gravar o áudio.";
+  };
+
+  function stop(opts = {}) {
+    const descartar = !!opts?.descartar;
+    if (recTimer) { clearInterval(recTimer); recTimer = 0; }
+    ouvindo = false;
+    soltarTela();
+    if (speech) {
+      const s = speech; speech = null; s?.stop();
+      iniciar.disabled = false; parar.disabled = true; exame.disabled = false; parcial.textContent = "";
+      if (msg.textContent.startsWith("Ouvindo")) dizer("");
+      atualizarUI();
+      return Promise.resolve(true);
+    }
+    if (!mediaRec && !transcrevendo) {
+      recSeq++;
+      pararStream(mediaStream); mediaStream = null; audioChunks = [];
+      iniciar.disabled = false; parar.disabled = true; exame.disabled = false;
+      if (msg.textContent.startsWith("Abrindo") || msg.textContent.startsWith("Gravando")) dizer("");
+      atualizarUI();
+      return Promise.resolve(false);
+    }
+    if (descartar) {
+      recSeq++;
+      try { recCtrl?.abort(); } catch (_) {}
+      recCtrl = null;
+      const rec = mediaRec; mediaRec = null;
+      if (rec) {
+        rec.ondataavailable = rec.onstop = rec.onerror = null;
+        try { if (rec.state !== "inactive") rec.stop(); } catch (_) {}
+      }
+      pararStream(mediaStream); mediaStream = null; audioChunks = [];
+      transcrevendo = false; transcreverPromessa = null;
+      iniciar.disabled = false; parar.disabled = true; exame.disabled = false;
+      if (/^(?:Abrindo|Gravando|Transcrevendo)/.test(msg.textContent)) dizer("");
+      atualizarUI();
+      return Promise.resolve(false);
+    }
+    if (transcreverPromessa) return transcreverPromessa;
+
+    const rec = mediaRec; mediaRec = null;
+    const st = mediaStream; mediaStream = null;
+    const duracaoSeg = Math.max(1, Math.round((Date.now() - recInicio) / 1000));
+    const seq = ++recSeq;
+    const mimeRaw = rec?.mimeType || "audio/webm";
+    const exAtual = exameEscolhido() || U.examesUSG(EXAMS)[0] || EXAMS[0] || {};
+    const cfg = config(exAtual);
+    transcrevendo = true;
+    atualizarUI();
+    dizer("Transcrevendo áudio com Gemini 3.5…");
+
+    const t0 = performance.now();
+    transcreverPromessa = (async () => {
+      try {
+        await new Promise(resolve => {
+          if (!rec || rec.state === "inactive") return resolve();
+          rec.onstop = () => resolve();
+          rec.onerror = () => resolve();
+          try { rec.stop(); } catch (_) { resolve(); }
+        });
+        pararStream(st);
+        const chunks = audioChunks.splice(0, audioChunks.length);
+        if (seq !== recSeq) return false;
+        const blob = new Blob(chunks, { type: mimeRaw });
+        if (!blob.size) {
+          dizer("Nenhum áudio captado. Tente falar mais perto do microfone.");
+          return false;
+        }
+        const audioBase64 = await blobToBase64(blob);
+        if (seq !== recSeq) return false;
+        if (audioBase64.length < 60) {
+          dizer("Áudio muito curto. Grave novamente.");
+          return false;
+        }
+        const ctl = recCtrl = new AbortController();
+        const r = await T.transcreverAudioNuvem(
+          {
+            audioBase64,
+            mimeType: U.normalizarMimeAudio(mimeRaw),
+            vocabulary: U.coletarVocabularioTranscricao(cfg, 100),
+            mode: T.nuvemStatus?.()?.vozModo || "smart",
+            duracaoSeg
+          },
+          { signal: ctl.signal }
+        );
+        if (seq !== recSeq || r?.cancelado) return false;
+        if (!r?.ok) {
+          dizer((r?.erro || "Falha ao transcrever com Gemini 3.5.") + " Se preferir, mude para Navegador.");
+          return false;
+        }
+        const bruto = String(r.texto || "").trim();
+        if (!bruto) {
+          dizer("Nenhuma fala detectada no áudio.");
+          return false;
+        }
+        const normTxt = U.normalizar(bruto, cfg).trim() || bruto;
+        texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + normTxt;
+        enviado = false;
+        texto.scrollTop = texto.scrollHeight;
+        const secs = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
+        const custo = Number(r.custoUsd || 0);
+        const custoTxt = custo > 0 ? " · $" + custo.toFixed(4).replace(".", ",") : "";
+        dizer(`Transcrito com Gemini 3.5 (${secs} s${custoTxt}) ✓`);
+        return true;
+      } catch (e) {
+        dizer(e?.message || "Erro ao processar áudio.");
+        return false;
+      } finally {
+        if (seq === recSeq) {
+          transcrevendo = false;
+          transcreverPromessa = null;
+          recCtrl = null;
+          exame.disabled = false;
+          atualizarUI();
+        }
+      }
+    })();
+    return transcreverPromessa;
   }
   function pedirToque(motivo) {
     if (!dialog.open || !dialog.classList.contains("usg-full")) return;
     dizer(motivo + " Toque em Iniciar áudio para gravar.");
     iniciar.focus();
   }
+  async function captarGemini(seq) {
+    iniciar.disabled = true; exame.disabled = true;
+    dizer("Abrindo microfone…");
+    let st = null;
+    try {
+      st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      if (seq !== recSeq || !dialog.open) { pararStream(st); return; }
+      const mimeOpt = escolherMimeGravacao();
+      const recOpts = mimeOpt ? { mimeType: mimeOpt, audioBitsPerSecond: 32000 } : { audioBitsPerSecond: 32000 };
+      let rec;
+      try { rec = new MediaRecorder(st, recOpts); }
+      catch (_) { rec = new MediaRecorder(st); }
+      audioChunks = [];
+      mediaStream = st;
+      mediaRec = rec;
+      rec.ondataavailable = ev => { if (ev.data && ev.data.size > 0) audioChunks.push(ev.data); };
+      rec.onerror = () => { stop({ descartar: true }); pedirToque("Erro ao gravar áudio."); };
+      recInicio = Date.now();
+      rec.start(250);
+      ouvindo = true;
+      manterTela();
+      recTimer = setInterval(() => { if (ouvindo && mediaRec) atualizarUI(); }, 1000);
+      atualizarUI();
+      dizer("Gravando (Gemini 3.5 · sem retenção no Google). Dite só achados, sem nome do paciente.");
+    } catch (e) {
+      pararStream(st);
+      if (seq !== recSeq) return;
+      const errMsg = errVozMsg(e);
+      stop({ descartar: true });
+      dizer(errMsg);
+      pedirToque(errMsg);
+    }
+  }
   function captar() {
+    if (transcrevendo || ouvindo) return;
     const ex = exameEscolhido() || U.examesUSG(EXAMS)[0] || EXAMS[0]; if (!ex) throw Error("Nenhuma máscara neste navegador. Sincronize nas Configurações.");   // vocabulário; o exame final vem do áudio se não escolhido
+    if (usarGeminiVoz()) {
+      const seq = ++recSeq;
+      captarGemini(seq);
+      return;
+    }
     const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Speech) throw Error("Áudio indisponível neste navegador. Digite os achados ou use um navegador com Web Speech.");
+    if (!Speech) throw Error("Áudio indisponível neste navegador. Conecte a IA na nuvem (Gemini 3.5) ou use um navegador com Web Speech.");
     const s = speech = new Speech(); s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
     const cfg = config(ex);
     if (!phrasesOff && window.SpeechRecognitionPhrase && "phrases" in s) {
@@ -9187,12 +9426,22 @@ window.tutuSite.appReady = true;
     setTimeout(() => { dispararFilaIA(); }, FILA_IA_ATRASO_MS);
   }
   async function enviarPedido() {
-    if (busy || (enviado && !ouvindo)) return;
+    if (busy || (enviado && !ouvindo && !transcrevendo)) return;
     if (ouvindo) {
       if (ui.isMobile()) { dizer("Pare o ditado antes de enviar."); return; }
-      const pendente = parcial.textContent;
-      stop();
-      if (pendente) texto.value += (texto.value ? " " : "") + pendente;
+      if (mediaRec) {
+        busy = true; enviar.disabled = true;
+        await stop({ descartar: false });
+        busy = false;
+      } else {
+        const pendente = parcial.textContent;
+        stop();
+        if (pendente) texto.value += (texto.value ? " " : "") + pendente;
+      }
+    } else if (transcrevendo && transcreverPromessa) {
+      busy = true; enviar.disabled = true;
+      await transcreverPromessa;
+      busy = false;
     }
     busy = true; enviar.disabled = true;
     try {
@@ -9364,15 +9613,15 @@ window.tutuSite.appReady = true;
   micSlot.append(el("span", { class: "usg-onda", "aria-hidden": "true" }), el("span", { class: "usg-onda usg-onda2", "aria-hidden": "true" }), iniciar, parar);
   leitura.append(texto, parcial);
   cab.append(el("h2", { id: "usgTitulo" }, "Audio"), el("label", { for: "usgExame", class: "usg-sr" }, "Exame"), exame, fechar);
-  meta.append(estado, modoWrap, contador);
+  meta.append(estado, motorVozWrap, modoWrap, contador);
   dialog.append(cab, el("p", { id: "usgModo", class: "usg-sr" }, "Áudio"), meta, leitura, msg, enviar, micSlot, legenda);
   atualizarUI();
   document.body.append(dialog);
-  const abrirDialog = () => { preencher(); if (!dialog.open) dialog.showModal(); };
+  const abrirDialog = () => { preencher(); atualizarMotorVozUI(); if (!dialog.open) dialog.showModal(); };
   ui.openAudio = () => {
     ui.siteDictation?.stop?.();
     abrirDialog();
-    if (!ouvindo && !busy) { try { captar(); } catch (e) { stop(); dizer(e.message); } }
+    if (!ouvindo && !transcrevendo && !busy) { try { captar(); } catch (e) { stop({ descartar: true }); dizer(e.message); } }
   };
   texto.addEventListener("keydown", ev => {
     if (!ui.isMobile() && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
@@ -9390,9 +9639,10 @@ window.tutuSite.appReady = true;
   dialog.addEventListener("pointercancel", () => { gestoFora = false; });
   dialog.addEventListener("click", ev => {
     const fechar = gestoFora && fora(ev) && !temSelecao(); gestoFora = false;
-    if (fechar) { stop(); dialog.close(); }
+    if (fechar) { stop({ descartar: true }); dialog.close(); }
   });
-  dialog.addEventListener("cancel", stop); dialog.addEventListener("close", stop); window.addEventListener("pagehide", stop);
+  const descartarAoSair = () => stop({ descartar: true });
+  dialog.addEventListener("cancel", descartarAoSair); dialog.addEventListener("close", descartarAoSair); window.addEventListener("pagehide", descartarAoSair);
   if (new URLSearchParams(location.search).get("audio") === "1" || ui.isMobile()) {
     dialog.classList.add("usg-full");
     const abrirAudio = () => {
@@ -10126,6 +10376,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   if (!ui || !ui.footerActions || !C) return;
   const el = ui.el, button = ui.button, ANDROID = /Android/i.test(navigator.userAgent);
   let busy = false, speech = null, ouvindo = false, tela = null, ultimaRegra = null, ctlConversa = null;
+  let mediaRec = null, mediaStream = null, recChunks = [], recInicio = 0, recSeq = 0, recCtrl = null, transcrevendo = false, transcreverProm = null;
 
   const MODELOS_CONVERSA = [
     ["gemini-3.5-flash-lite", "3.5 Flash-Lite · econômico"],
@@ -10202,18 +10453,68 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   function abrir(on) {
     box.hidden = !on; abrirBtn.setAttribute("aria-pressed", String(!!on));
     if (on) { syncModeloConversa(); dizer(temLaudo() ? "" : "Abra ou escreva um laudo na folha primeiro."); texto.focus(); }
-    else parar();
+    else parar({ descartar: true });
   }
   texto.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); mandar(); }
     else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); abrir(false); if (typeof focusSheet === "function") focusSheet(); }
   });
 
-  /* ---------- voz: mesmo motor do site (Web Speech + usgVoice + fixFala); Android: speechDelta e Wake Lock ---------- */
+  /* ---------- voz: Gemini 3.5 Transcribe (quando nuvem ativa) ou Web Speech ---------- */
   const manterTela = async () => { try { if (ouvindo && !tela && navigator.wakeLock && document.visibilityState === "visible") { tela = await navigator.wakeLock.request("screen"); tela.addEventListener("release", () => { tela = null; }); } } catch (_) { tela = null; } };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") manterTela(); });
   const cfgVoz = () => { try { return JSON.parse(document.getElementById("voiceConfig").textContent) || {}; } catch (_) { return {}; } };
+  const usarGeminiVozConversa = () => !!T?.nuvemStatus?.()?.configurada && T.nuvemStatus().vozMotor === "gemini" &&
+    typeof T.transcreverAudioNuvem === "function" && typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  const pararStreamConv = st => { try { st?.getTracks?.().forEach(t => t.stop()); } catch (_) {} };
+  const blobToB64Conv = blob => new Promise((ok, no) => {
+    const rd = new FileReader();
+    rd.onload = () => { const s = String(rd.result || ""); const i = s.indexOf(","); ok(i >= 0 ? s.slice(i + 1) : s); };
+    rd.onerror = () => no(new Error("Falha ao ler áudio."));
+    rd.readAsDataURL(blob);
+  });
+  function coletarVocabConversa(cfg) {
+    if (window.TutuUSG?.coletarVocabularioTranscricao) return window.TutuUSG.coletarVocabularioTranscricao(cfg, 100);
+    return [...new Set([...(cfg.vocabExame || []), ...(cfg.vocab || [])])].slice(0, 100);
+  }
+  async function ouvirGemini(seq) {
+    dizer("Abrindo microfone…");
+    let st = null;
+    try {
+      st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      if (seq !== recSeq || box.hidden) { pararStreamConv(st); return; }
+      const mimeOpt = typeof MediaRecorder.isTypeSupported === "function"
+        ? (["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find(m => MediaRecorder.isTypeSupported(m)) || "")
+        : "";
+      let rec;
+      try { rec = new MediaRecorder(st, mimeOpt ? { mimeType: mimeOpt, audioBitsPerSecond: 32000 } : { audioBitsPerSecond: 32000 }); }
+      catch (_) { rec = new MediaRecorder(st); }
+      recChunks = [];
+      mediaStream = st;
+      mediaRec = rec;
+      recInicio = Date.now();
+      rec.ondataavailable = ev => { if (ev.data && ev.data.size > 0) recChunks.push(ev.data); };
+      rec.onerror = () => { parar({ descartar: true }); dizer("Erro no microfone."); };
+      rec.start(250);
+      ouvindo = true;
+      mic.classList.add("on");
+      mic.setAttribute("aria-pressed", "true");
+      manterTela();
+      dizer("Gravando pedido (Gemini 3.5)… toque no microfone para parar.");
+    } catch (_) {
+      pararStreamConv(st);
+      if (seq !== recSeq) return;
+      parar({ descartar: true });
+      dizer("Permita o microfone ou digite o pedido.");
+    }
+  }
   function ouvir() {
+    if (transcrevendo || ouvindo) return;
+    if (usarGeminiVozConversa()) {
+      const seq = ++recSeq;
+      ouvirGemini(seq);
+      return;
+    }
     const Speech = window.SpeechRecognition || window.webkitSpeechRecognition, V = window.usgVoice;
     if (!Speech || !V) { dizer("Voz indisponível neste navegador: escreva o pedido."); return; }
     const s = speech = new Speech(); s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
@@ -10238,11 +10539,85 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
     ouvindo = true; mic.classList.add("on"); mic.setAttribute("aria-pressed", "true"); manterTela();
     dizer("Ouvindo. Toque no microfone para parar.");
   }
-  function parar() {
+  function parar(opts = {}) {
+    const descartar = !!opts?.descartar;
     const s = speech; speech = null; ouvindo = false;
     if (s) { s.onresult = s.onend = s.onerror = null; try { s.stop(); } catch (_) {} }
     try { tela?.release(); } catch (_) {} tela = null;
     mic.classList.remove("on"); mic.setAttribute("aria-pressed", "false");
+    if (!mediaRec && !transcrevendo) {
+      recSeq++;
+      pararStreamConv(mediaStream); mediaStream = null; recChunks = [];
+      return Promise.resolve();
+    }
+    if (descartar) {
+      recSeq++;
+      try { recCtrl?.abort(); } catch (_) {}
+      recCtrl = null;
+      const rec = mediaRec; mediaRec = null;
+      if (rec) { rec.ondataavailable = rec.onstop = rec.onerror = null; try { if (rec.state !== "inactive") rec.stop(); } catch (_) {} }
+      pararStreamConv(mediaStream); mediaStream = null; recChunks = [];
+      transcrevendo = false; transcreverProm = null; mic.disabled = false;
+      return Promise.resolve();
+    }
+    if (transcreverProm) return transcreverProm;
+    const rec = mediaRec; mediaRec = null;
+    const st = mediaStream; mediaStream = null;
+    const duracaoSeg = Math.max(1, Math.round((Date.now() - recInicio) / 1000));
+    const seq = ++recSeq;
+    const mimeRaw = rec?.mimeType || "audio/webm";
+    const mimeNorm = window.TutuUSG?.normalizarMimeAudio ? window.TutuUSG.normalizarMimeAudio(mimeRaw) : "audio/webm";
+    const cfg = cfgVoz();
+    transcrevendo = true; mic.disabled = true;
+    dizer("Transcrevendo pedido com Gemini 3.5…");
+    transcreverProm = (async () => {
+      try {
+        await new Promise(resolve => {
+          if (!rec || rec.state === "inactive") return resolve();
+          rec.onstop = () => resolve();
+          rec.onerror = () => resolve();
+          try { rec.stop(); } catch (_) { resolve(); }
+        });
+        pararStreamConv(st);
+        const chunks = recChunks.splice(0, recChunks.length);
+        if (seq !== recSeq) return;
+        const blob = new Blob(chunks, { type: mimeRaw });
+        if (!blob.size) { dizer("Nenhum áudio captado."); return; }
+        const audioBase64 = await blobToB64Conv(blob);
+        if (seq !== recSeq || audioBase64.length < 60) { dizer("Áudio muito curto."); return; }
+        const ctl = recCtrl = new AbortController();
+        const r = await T.transcreverAudioNuvem(
+          {
+            audioBase64,
+            mimeType: mimeNorm,
+            vocabulary: coletarVocabConversa(cfg),
+            mode: T.nuvemStatus?.()?.vozModo || "smart",
+            duracaoSeg
+          },
+          { signal: ctl.signal }
+        );
+        if (seq !== recSeq || r?.cancelado) return;
+        if (!r?.ok) { dizer(r?.erro || "Falha ao transcrever pedido."); return; }
+        const bruto = String(r.texto || "").trim();
+        if (!bruto) { dizer("Nenhuma fala detectada."); return; }
+        const V = window.usgVoice;
+        const limpo = V ? (window.TutuV2Core?.fixFala || String)(V.posTexto(V.punct(bruto), cfg)).trim() : bruto;
+        const finalPed = limpo || bruto;
+        texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + finalPed;
+        texto.focus();
+        dizer("Pedido transcrito (Gemini 3.5) ✓ — Enter para enviar.");
+      } catch (_) {
+        dizer("Falha ao transcrever o pedido.");
+      } finally {
+        if (seq === recSeq) {
+          transcrevendo = false;
+          transcreverProm = null;
+          recCtrl = null;
+          mic.disabled = false;
+        }
+      }
+    })();
+    return transcreverProm;
   }
 
   /* ---------- sem a ponte: fila do repo de dados (fila-conversa/<uuid>.json), processada pela ponte do PC ou pela Action ---------- */
@@ -10349,7 +10724,8 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   async function mandar(repetir) {
     repetir = repetir?.prompt ? repetir : null;
     if (busy) return;
-    if (ouvindo) parar();
+    if (ouvindo) await parar({ descartar: false });
+    else if (transcrevendo && transcreverProm) await transcreverProm;
     const pedido = repetir?.pedido ?? C.limparPedido(texto.value);
     if (!pedido) { dizer("Fale ou escreva o que ajustar."); texto.focus(); return; }
     if (typeof genBusy !== "undefined" && genBusy) { dizer("Aguarde o Gerar terminar."); return; }
@@ -15937,6 +16313,14 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     ["low", "Baixo (rápido — padrão)"],
     ["medium", "Médio (casos complexos)"]
   ];
+  const VOZ_MOTOR_OPCOES = [
+    ["gemini", "Gemini 3.5 Transcribe (alta precisão · ~$0,005/min)"],
+    ["navegador", "Voz do navegador (Web Speech · grátis)"]
+  ];
+  const VOZ_MODO_OPCOES = [
+    ["smart", "Inteligente (remove pausas, corrige autocorreções e pontua)"],
+    ["verbatim", "Literal (palavra por palavra)"]
+  ];
 
   const preencherSelect = (sel, opcoes) => {
     for (const [val, label] of opcoes) sel.append(el("option", { value: val }, label));
@@ -15971,6 +16355,8 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const modeloAudioSel = preencherSelect(el("select", { id: "nuvemModeloAudio", class: "field", "aria-label": "Modelo para Áudio" }), MODELO_OPCOES);
   const modeloConversaSel = preencherSelect(el("select", { id: "nuvemModeloConversa", class: "field", "aria-label": "Modelo para Conversar" }), MODELO_OPCOES);
   const thinkingSel = preencherSelect(el("select", { id: "nuvemThinking", class: "field", "aria-label": "Raciocínio Gemini" }), THINKING_OPCOES);
+  const vozMotorSel = preencherSelect(el("select", { id: "nuvemVozMotor", class: "field", "aria-label": "Reconhecimento de voz (Áudio / Conversar)" }), VOZ_MOTOR_OPCOES);
+  const vozModoSel = preencherSelect(el("select", { id: "nuvemVozModo", class: "field", "aria-label": "Estilo da transcrição Gemini" }), VOZ_MODO_OPCOES);
 
   const grid = el("div", { class: "form-grid nuvem-grid" });
   grid.append(
@@ -15978,7 +16364,9 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     campo("Token de acesso (APP_TOKEN)", tokenInput),
     campo("Modelo para Áudio", modeloAudioSel),
     campo("Modelo para Conversar", modeloConversaSel),
-    campo("Raciocínio Gemini", thinkingSel)
+    campo("Raciocínio Gemini", thinkingSel),
+    campo("Reconhecimento de voz (Áudio / Conversar)", vozMotorSel),
+    campo("Estilo da transcrição Gemini", vozModoSel)
   );
 
   const msgEl = el("p", { id: "nuvemMsg", class: "voz-msg", role: "status", "aria-live": "polite" });
@@ -15994,9 +16382,11 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     modeloAudioSel.value = st.modeloAudio || "gemini-4-hydrogen";
     modeloConversaSel.value = st.modeloConversa || "gemini-4-hydrogen";
     thinkingSel.value = st.thinking || "low";
+    vozMotorSel.value = st.vozMotor || "gemini";
+    vozModoSel.value = st.vozModo || "smart";
     statusEl.dataset.ativo = st.configurada ? "1" : "0";
     statusEl.textContent = st.configurada
-      ? `Conectada · ${st.url} · Áudio: ${st.modeloAudio}`
+      ? `Conectada · ${st.url} · Áudio: ${st.modeloAudio} · Voz: ${st.vozMotor === "gemini" ? "Gemini 3.5" : "Navegador"}`
       : "Não configurada (usando ponte local ou fila do GitHub).";
     linkBtn.disabled = !st.configurada;
     limparBtn.disabled = !st.configurada;
@@ -16008,7 +16398,9 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       token: tokenInput.value,
       modeloAudio: modeloAudioSel.value,
       modeloConversa: modeloConversaSel.value,
-      thinking: thinkingSel.value
+      thinking: thinkingSel.value,
+      vozMotor: vozMotorSel.value,
+      vozModo: vozModoSel.value
     });
     if (!ok) {
       dizer("Informe uma URL https:// válida e o token de acesso.", true);

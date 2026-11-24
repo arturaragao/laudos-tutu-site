@@ -279,14 +279,30 @@
   const NUVEM_MODELO_AUDIO_KEY = "tutu_nuvem_modelo_audio";
   const NUVEM_MODELO_CONVERSA_KEY = "tutu_nuvem_modelo_conversa";
   const NUVEM_THINKING_KEY = "tutu_nuvem_thinking";
+  const NUVEM_VOZ_MOTOR_KEY = "tutu_nuvem_voz_motor";
+  const NUVEM_VOZ_MODO_KEY = "tutu_nuvem_voz_modo";
   const NUVEM_MODELOS = ["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite", "claude-haiku-5-5", "claude-sonnet-5-5"];
   const NUVEM_THINKINGS = ["minimal", "low", "medium"];
   const normModeloNuvem = (m, def = "gemini-4-hydrogen") => NUVEM_MODELOS.includes(m) ? m : def;
   const normThinkingNuvem = t => NUVEM_THINKINGS.includes(t) ? t : "low";
+  const normVozMotor = v => (v === "navegador" || v === "gemini") ? v : "gemini";
+  const normVozModo = v => (v === "verbatim" || v === "smart") ? v : "smart";
   function salvarModeloConversa(modelo){
     const m = normModeloNuvem(modelo, "");
     if (!m) return false;
     try{ localStorage.setItem(NUVEM_MODELO_CONVERSA_KEY, m); }catch(_){ return false; }
+    document.dispatchEvent(new CustomEvent("tutu-nuvem-mudou"));
+    return true;
+  }
+  function salvarVozMotor(motor){
+    const m = normVozMotor(motor);
+    try{ localStorage.setItem(NUVEM_VOZ_MOTOR_KEY, m); }catch(_){ return false; }
+    document.dispatchEvent(new CustomEvent("tutu-nuvem-mudou"));
+    return true;
+  }
+  function salvarVozModo(modo){
+    const m = normVozModo(modo);
+    try{ localStorage.setItem(NUVEM_VOZ_MODO_KEY, m); }catch(_){ return false; }
     document.dispatchEvent(new CustomEvent("tutu-nuvem-mudou"));
     return true;
   }
@@ -315,11 +331,13 @@
         token,
         modeloAudio: normModeloNuvem(localStorage.getItem(NUVEM_MODELO_AUDIO_KEY) || ""),
         modeloConversa: normModeloNuvem(localStorage.getItem(NUVEM_MODELO_CONVERSA_KEY) || ""),
-        thinking: normThinkingNuvem(localStorage.getItem(NUVEM_THINKING_KEY) || "")
+        thinking: normThinkingNuvem(localStorage.getItem(NUVEM_THINKING_KEY) || ""),
+        vozMotor: normVozMotor(localStorage.getItem(NUVEM_VOZ_MOTOR_KEY) || ""),
+        vozModo: normVozModo(localStorage.getItem(NUVEM_VOZ_MODO_KEY) || "")
       };
     }catch(_){ return null; }
   }
-  function salvarNuvem({ url, token, modeloAudio, modeloConversa, thinking } = {}){
+  function salvarNuvem({ url, token, modeloAudio, modeloConversa, thinking, vozMotor, vozModo } = {}){
     const prev = lerNuvem();
     const urlOk = validarNuvemUrl(url !== undefined ? url : (prev?.url || ""));
     const tokRaw = token !== undefined ? String(token || "").trim() : "";
@@ -328,12 +346,16 @@
     const ma = normModeloNuvem(modeloAudio !== undefined ? modeloAudio : (prev?.modeloAudio || ""));
     const mc = normModeloNuvem(modeloConversa !== undefined ? modeloConversa : (prev?.modeloConversa || ""));
     const th = normThinkingNuvem(thinking !== undefined ? thinking : (prev?.thinking || ""));
+    const vm = normVozMotor(vozMotor !== undefined ? vozMotor : (prev?.vozMotor || localStorage.getItem(NUVEM_VOZ_MOTOR_KEY) || ""));
+    const vmd = normVozModo(vozModo !== undefined ? vozModo : (prev?.vozModo || localStorage.getItem(NUVEM_VOZ_MODO_KEY) || ""));
     try{
       localStorage.setItem(NUVEM_URL_KEY, urlOk);
       localStorage.setItem(NUVEM_TOKEN_KEY, tokOk);
       localStorage.setItem(NUVEM_MODELO_AUDIO_KEY, ma);
       localStorage.setItem(NUVEM_MODELO_CONVERSA_KEY, mc);
       localStorage.setItem(NUVEM_THINKING_KEY, th);
+      localStorage.setItem(NUVEM_VOZ_MOTOR_KEY, vm);
+      localStorage.setItem(NUVEM_VOZ_MODO_KEY, vmd);
     }catch(_){ return false; }
     document.dispatchEvent(new CustomEvent("tutu-nuvem-mudou"));
     return true;
@@ -354,10 +376,12 @@
         url: validarNuvemUrl(localStorage.getItem(NUVEM_URL_KEY) || ""),
         modeloAudio: normModeloNuvem(localStorage.getItem(NUVEM_MODELO_AUDIO_KEY) || ""),
         modeloConversa: normModeloNuvem(localStorage.getItem(NUVEM_MODELO_CONVERSA_KEY) || ""),
-        thinking: normThinkingNuvem(localStorage.getItem(NUVEM_THINKING_KEY) || "")
+        thinking: normThinkingNuvem(localStorage.getItem(NUVEM_THINKING_KEY) || ""),
+        vozMotor: normVozMotor(localStorage.getItem(NUVEM_VOZ_MOTOR_KEY) || ""),
+        vozModo: normVozModo(localStorage.getItem(NUVEM_VOZ_MODO_KEY) || "")
       };
     }catch(_){
-      return { configurada: false, url: "", modeloAudio: "gemini-4-hydrogen", modeloConversa: "gemini-4-hydrogen", thinking: "low" };
+      return { configurada: false, url: "", modeloAudio: "gemini-4-hydrogen", modeloConversa: "gemini-4-hydrogen", thinking: "low", vozMotor: "gemini", vozModo: "smart" };
     }
   }
   function nuvemLinkPareamento(){
@@ -366,7 +390,7 @@
     const base = typeof location !== "undefined" && (location.hostname === "127.0.0.1" || location.hostname === "localhost")
       ? (location.origin + location.pathname)
       : "https://arturaragao.github.io/laudos-tutu-site/";
-    return `${base}#nuvem=${encodeURIComponent(n.token)}&nuvemUrl=${encodeURIComponent(n.url)}&ma=${encodeURIComponent(n.modeloAudio)}&mc=${encodeURIComponent(n.modeloConversa)}&th=${encodeURIComponent(n.thinking)}`;
+    return `${base}#nuvem=${encodeURIComponent(n.token)}&nuvemUrl=${encodeURIComponent(n.url)}&ma=${encodeURIComponent(n.modeloAudio)}&mc=${encodeURIComponent(n.modeloConversa)}&th=${encodeURIComponent(n.thinking)}&vm=${encodeURIComponent(n.vozMotor)}&vmd=${encodeURIComponent(n.vozModo)}`;
   }
   async function testarNuvem(){
     const n = lerNuvem();
@@ -426,6 +450,46 @@
   const salvarNuvemUso = cfg => nuvemFetchJson("/uso/config", { method: "POST", body: cfg });
   const salvarRegraNuvem = doc => nuvemFetchJson("/aprendizado/regra", { method: "POST", body: doc });
   const salvarCorrecaoNuvem = doc => nuvemFetchJson("/aprendizado/correcao", { method: "POST", body: doc });
+  async function transcreverAudioNuvem({ audioBase64, mimeType, vocabulary, mode, duracaoSeg } = {}, options = {}){
+    const n = lerNuvem();
+    if (!n) return { ok: false, erro: "IA na nuvem não configurada." };
+    const ctl = new AbortController();
+    const abort = () => ctl.abort();
+    let timedOut = false;
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    const ms = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 45000;
+    const timer = setTimeout(() => { timedOut = true; ctl.abort(); }, ms);
+    try{
+      const r = await fetch(n.url + "/transcrever", {
+        method: "POST",
+        headers: { "X-Tutu-Token": n.token, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioBase64: audioBase64 || "",
+          mimeType: mimeType || "",
+          vocabulary: Array.isArray(vocabulary) ? vocabulary : [],
+          mode: normVozModo(mode || n.vozModo),
+          duracaoSeg: Number(duracaoSeg) || 0
+        }),
+        cache: "no-store",
+        signal: ctl.signal
+      });
+      const dados = await r.json().catch(() => ({}));
+      if (r.status === 401) return { ok: false, status: 401, authNuvem: true, erro: "Token da IA na nuvem recusado — confira em Configurações › IA." };
+      if (r.status === 402) return { ok: false, status: 402, codigo: "limite_uso", erro: dados?.erro || "Limite mensal de créditos atingido. Ajuste em Configurações › IA." };
+      if (!r.ok) return { ok: false, status: r.status, erro: dados?.erro || `Falha na transcrição (HTTP ${r.status}).` };
+      const custoUsd = Number(dados?.custoUsd) || 0;
+      const modelo = dados?.modelo || "gemini-3.5-transcribe";
+      try{ document.dispatchEvent(new CustomEvent("tutu-uso-atualizado", { detail: { modelo, custoUsd } })); }catch(_){}
+      return { ok: true, texto: String(dados?.texto || ""), modelo, custoUsd };
+    }catch(e){
+      if (options.signal?.aborted && !timedOut) return { ok: false, cancelado: true, erro: "Transcrição cancelada." };
+      return { ok: false, erro: timedOut ? "Tempo esgotado ao transcrever áudio." : "Não foi possível conectar à IA na nuvem para transcrever." };
+    }finally{
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+    }
+  }
   function validarPonteUrl(raw){
     try{
       const u = new URL(String(raw || "").trim());
@@ -485,7 +549,9 @@
           token: tok,
           modeloAudio: params.get("ma") || undefined,
           modeloConversa: params.get("mc") || undefined,
-          thinking: params.get("th") || undefined
+          thinking: params.get("th") || undefined,
+          vozMotor: params.get("vm") || undefined,
+          vozModo: params.get("vmd") || undefined
         })) return;
         try{ history.replaceState(null, "", location.pathname + location.search); }catch(_){}
         pontePareadaMsg = "IA na nuvem conectada ✓";
@@ -987,9 +1053,9 @@
   }
   window.tutuSite = { ready, db, importBackup, exportBackup, mergeBank, saveBankNT, sync, gh, setToken, pedirChave,
     onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream,
-    nuvemStatus, salvarNuvem, salvarModeloConversa, limparNuvem, testarNuvem, nuvemLinkPareamento,
+    nuvemStatus, salvarNuvem, salvarModeloConversa, salvarVozMotor, salvarVozModo, limparNuvem, testarNuvem, nuvemLinkPareamento,
     filaUsgListar, filaUsgSalvar, filaUsgApagar, nuvemUso, salvarNuvemUso,
-    salvarRegraNuvem, salvarCorrecaoNuvem,
+    salvarRegraNuvem, salvarCorrecaoNuvem, transcreverAudioNuvem,
     ponteStatus: () => { const p = lerPonte(); return { pareada: !!p, url: p?.url || "" }; }, desparearPonte };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
   // Fonte: repo de dados (cache local) > bancos/*.js (reserva, só no PC) + o que foi importado/guardado no IndexedDB.
@@ -1020,7 +1086,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=bcfb7f4"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=ef72381"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();
