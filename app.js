@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "e6b7220 · 23/11 21:34";
+window.__SITE_VERSION__ = "4485613 · 24/11 08:22";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -8726,7 +8726,7 @@ window.tutuSite.appReady = true;
   "use strict";
   if (typeof document === "undefined") return;
   const ui = window.tutuV2, T = window.tutuSite, G = T.gh, U = window.TutuUSG, el = ui.el, button = ui.button;
-  let speech = null, ouvindo = false, busy = false, listBusy = false, dicaFilaMostrada = false;
+  let speech = null, ouvindo = false, busy = false, listBusy = false, dicaFilaMostrada = false, phrasesOff = false;
   const FILA_IA_DISPATCH_URL = "https://api.github.com/repos/arturaragao/fila-ia/actions/workflows/fila.yml/dispatches";
   const FILA_IA_ATRASO_MS = 130000;
   const FILA_IA_DICA = "Pedido salvo. Para a IA começar na hora com o PC desligado, dê à chave acesso 'Actions: leitura e escrita' no repo fila-ia (Configurações › Sincronização).";
@@ -8824,8 +8824,8 @@ window.tutuSite.appReady = true;
     if (!Speech) throw Error("Áudio indisponível neste navegador. Digite os achados ou use um navegador com Web Speech.");
     const s = speech = new Speech(); s.lang = "pt-BR"; s.continuous = true; s.interimResults = true; s.maxAlternatives = 5;
     const cfg = config(ex);
-    if (window.SpeechRecognitionPhrase && "phrases" in s) {
-      try { s.phrases = [...new Set([...cfg.vocabExame, ...cfg.vocab])].slice(0, 300).map(w => new SpeechRecognitionPhrase(w, cfg.vocabExame.includes(w) ? 8.0 : 2.0)); } catch (_) {}
+    if (!phrasesOff && window.SpeechRecognitionPhrase && "phrases" in s) {
+      try { s.phrases = [...new Set([...cfg.vocabExame, ...cfg.vocab])].slice(0, 300).map(w => new SpeechRecognitionPhrase(w, cfg.vocabExame.includes(w) ? 8.0 : 2.0)); } catch (_) { phrasesOff = true; }
     }
     let sessao = "";   // Android repete o acumulado da sessão em cada final: só entra o trecho novo (TutuV2Core.speechDelta)
     s.onstart = () => { sessao = ""; };
@@ -8842,6 +8842,24 @@ window.tutuSite.appReady = true;
       parcial.textContent = interim; atualizarUI(); texto.scrollTop = texto.scrollHeight;
     };
     s.onerror = ev => {
+      if (ev.error === "phrases-not-supported") {
+        phrasesOff = true;
+        try { s.phrases = []; } catch (_) {}
+        if (ouvindo && speech === s) {
+          let feito = false;
+          const recriar = () => {
+            if (feito || !ouvindo || speech !== s) return;
+            feito = true;
+            s.onend = s.onerror = s.onresult = null;
+            speech = null;
+            try { captar(); } catch (e) { stop(); dizer(e.message); }
+          };
+          s.onend = recriar;
+          try { s.stop(); } catch (_) {}
+          setTimeout(recriar, 150);
+        }
+        return;
+      }
       dizer("Voz: " + ev.error);
       if (/not-allowed|audio-capture|service-not-allowed/.test(ev.error)) { stop(); pedirToque("Voz: " + ev.error + "."); }
     };
@@ -9325,11 +9343,12 @@ window.tutuSite.appReady = true;
   window.addEventListener("focus", ping);
 
   /* ---------- vocabulário (SpeechRecognitionPhrase, como mic.js e o modo Áudio) ---------- */
+  let phrasesOff = false, recriarSemPhrases = false;
   function phrases(s, cfg) {
-    if (!window.SpeechRecognitionPhrase || !("phrases" in s)) return;
+    if (phrasesOff || !window.SpeechRecognitionPhrase || !("phrases" in s)) return;
     const exam = cfg.vocabExame || [];
     try { s.phrases = [...new Set([...exam, ...(cfg.vocab || [])])].slice(0, 300)
-      .map(w => new SpeechRecognitionPhrase(w, exam.includes(w) ? 8.0 : 2.0)); } catch (_) {}
+      .map(w => new SpeechRecognitionPhrase(w, exam.includes(w) ? 8.0 : 2.0)); } catch (_) { phrasesOff = true; }
   }
   // Novo vocabulário vale a partir da próxima sessão do reconhecedor (reinício em onend).
   const vc = document.getElementById("voiceConfig");
@@ -9499,6 +9518,12 @@ window.tutuSite.appReady = true;
     };
     s.onerror = ev => {
       if (speech !== s) return;
+      if (ev.error === "phrases-not-supported") {
+        phrasesOff = true;
+        recriarSemPhrases = true;
+        try { s.phrases = []; } catch (_) {}
+        return;
+      }
       if (/not-allowed|audio-capture|service-not-allowed|language-not-supported/.test(ev.error)) { stop(); setStatus("Voz: " + ev.error + ". Libere o microfone para este site."); }
       else if (ev.error !== "no-speech" && ev.error !== "aborted") fails++;
     };
@@ -9506,6 +9531,13 @@ window.tutuSite.appReady = true;
       if (speech !== s) return;
       clearInterim();
       if (!on || extension) return;
+      if (recriarSemPhrases) {
+        recriarSemPhrases = false;
+        s.onend = s.onerror = s.onresult = null;
+        speech = null; on = false;
+        toggle();
+        return;
+      }
       if (fails > 5) { stop(); setStatus("Ditado do site parou após erros seguidos. Alt+S para tentar de novo."); return; }
       restart = setTimeout(() => {   // Chrome encerra sessões longas/silenciosas: religa enquanto estiver ligado
         if (!on || extension || speech !== s) return;
