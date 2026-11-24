@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "0a9a843 · 24/11 10:06";
+window.__SITE_VERSION__ = "22c451c · 24/11 11:09";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -4715,7 +4715,61 @@ window.tutuSite.appReady = true;
   setInterval(checkVersion, 5 * 60 * 1000);
   top.append(brand, el("span", { class: "v2-top-break", "aria-hidden": "true" }));
   const tabs = el("nav", { id: "caseTabs", role: "tablist", "aria-label": "Casos abertos" });
-  top.append(tabs, button("+", () => ui.newTab(), { id: "newCaseTab", title: "Novo caso", "aria-label": "Novo caso" }),
+  const quickMenu = el("div", { id: "newCaseQuickMenu", class: "v2-new-quick", role: "menu", "aria-label": "Exames mais frequentes", hidden: "" });
+  let quickHideTimer = null;
+  const closeQuickMenu = () => {
+    clearTimeout(quickHideTimer);
+    quickMenu.hidden = true;
+  };
+  const scheduleQuickClose = () => {
+    clearTimeout(quickHideTimer);
+    quickHideTimer = setTimeout(() => { quickMenu.hidden = true; }, 180);
+  };
+  const openQuickMenu = () => {
+    if (mobile.matches) return;
+    clearTimeout(quickHideTimer);
+    const items = ui.frequentExams?.(7) || [];
+    if (!items.length) return;
+    const head = el("div", { class: "v2-new-quick-head" }, "Mais frequentes");
+    const list = el("div", { class: "v2-new-quick-list" });
+    for (const { ex, count } of items) {
+      const b = button("", () => { closeQuickMenu(); ui.newTab(ex.id); }, {
+        class: "v2-new-quick-item",
+        role: "menuitem",
+        "data-exam-id": ex.id,
+        title: fullName(ex)
+      });
+      b.append(el("span", { class: "v2-new-quick-lbl" }, shortName(ex)));
+      if (count > 0) b.append(el("small", { class: "v2-new-quick-cnt" }, count + "×"));
+      list.append(b);
+    }
+    const foot = el("div", { class: "v2-new-quick-foot" }, "Clique no + para laudo em branco");
+    quickMenu.replaceChildren(head, list, foot);
+    quickMenu.hidden = false;
+    const r = newCaseBtn.getBoundingClientRect();
+    const w = quickMenu.offsetWidth || 268;
+    const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left));
+    const topPos = Math.max(8, Math.min(window.innerHeight - 180, r.bottom + 6));
+    quickMenu.style.left = left + "px";
+    quickMenu.style.top = topPos + "px";
+  };
+  const newCaseBtn = button("+", () => { closeQuickMenu(); ui.newTab(); }, {
+    id: "newCaseTab",
+    title: "Novo laudo em branco (passe o mouse para ver os mais frequentes)",
+    "aria-label": "Novo caso"
+  });
+  newCaseBtn.addEventListener("mouseenter", openQuickMenu);
+  newCaseBtn.addEventListener("mouseleave", scheduleQuickClose);
+  quickMenu.addEventListener("mouseenter", () => clearTimeout(quickHideTimer));
+  quickMenu.addEventListener("mouseleave", scheduleQuickClose);
+  document.addEventListener("pointerdown", e => {
+    if (!quickMenu.hidden && !quickMenu.contains(e.target) && e.target !== newCaseBtn) closeQuickMenu();
+  }, true);
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !quickMenu.hidden) closeQuickMenu();
+  });
+  document.body.append(quickMenu);
+  top.append(tabs, newCaseBtn,
     button("Histórico", () => openHistory(), { id: "histTopBtn", title: "Todos os exames salvos (os 4 mais recentes ficam nas abas)" }));
   const actions = el("div", { class: "v2-top-actions" });
   actions.append(el("span", { id: "saveState", role: "status", hidden: "" }, "salvo agora"), button("Ctrl K", () => ui.openPalette(), { title: "Buscar ações · Ctrl+K" }),
@@ -5317,6 +5371,39 @@ window.tutuSite.appReady = true;
     ui.closePalette?.(); persist(); load(target); persist();
   };
   ui.cycleTabs = delta => { const index = tabs.findIndex(t => t.id === active); if (tabs.length) ui.switchTab(tabs[(index + delta + tabs.length) % tabs.length].id); };
+  const FREQ_KEY = "tutu_exam_freq_v1";
+  const readExamFreq = () => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(FREQ_KEY) || "{}");
+      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    } catch (_) { return {}; }
+  };
+  const recordExamUse = examId => {
+    if (!examId || typeof EXAMS === "undefined" || !EXAMS.some(e => e.id === examId)) return;
+    try {
+      const map = readExamFreq();
+      map[examId] = (Number(map[examId]) || 0) + 1;
+      localStorage.setItem(FREQ_KEY, JSON.stringify(map));
+    } catch (_) {}
+  };
+  ui.recordExamUse = recordExamUse;
+  ui.frequentExams = (limit = 7) => {
+    if (typeof EXAMS === "undefined" || !Array.isArray(EXAMS)) return [];
+    const map = readExamFreq();
+    const recentIds = new Map();
+    [...tabs].reverse().forEach((t, idx) => {
+      if (t.examId && !recentIds.has(t.examId)) recentIds.set(t.examId, tabs.length - idx);
+    });
+    return EXAMS.map((ex, idx) => ({
+      ex,
+      idx,
+      count: Number(map[ex.id]) || 0,
+      recent: recentIds.get(ex.id) || 0
+    }))
+      .sort((a, b) => (b.count - a.count) || (b.recent - a.recent) || (a.idx - b.idx))
+      .slice(0, limit)
+      .map(({ ex, count }) => ({ ex, count }));
+  };
   ui.newTab = (examId = null) => {
     if (restoring || !canSwitch()) return;
     if (!examId) {
@@ -5326,12 +5413,14 @@ window.tutuSite.appReady = true;
       return;
     }
     const ex = EXAMS.find(e => e.id === examId); if (!ex) return;
+    recordExamUse(ex.id);
     persist();
     const t = { id: newId(), examId: ex.id, exam: clone(ex), html: modelSheetHtml(ex), started: stamp(), versions: [], extraExams: [] };
     tabs.push(t); load(t); modelSig = laudoTagged(); pushVersion("Modelo"); persist();
   };
   ui.audioTarget = ex => {
     if (restoring || !canSwitch()) return false;
+    if (ex?.id) recordExamUse(ex.id);
     if (sheetHasContent() && !modelIntact()) { ui.newTab(ex.id); return true; }
     if (current.id === ex.id && modelIntact()) return true;
     persist();
@@ -5353,8 +5442,8 @@ window.tutuSite.appReady = true;
   const originalSelect = selectExam;
   selectExam = (id, focus, add) => {
     if (restoring) return originalSelect(id, focus, add);
-    if (add) { originalSelect(id, focus, add); persist(); return; }
-    if (id === current.id) { if (focus) focusSheet(); return; }
+    if (add) { recordExamUse(id); originalSelect(id, focus, add); persist(); return; }
+    if (id === current.id) { recordExamUse(id); if (focus) focusSheet(); return; }
     ui.newTab(id);
   };
   openMaskAsNew = ex => ui.newTab(ex.id);
@@ -5414,7 +5503,8 @@ window.tutuSite.appReady = true;
     proximo: { label: "Próximo campo", run: () => { if (!nextField()) sectionNav(1); } },
     normal: { label: "Normal", run: () => { laudoNormal(); ui.panel("Revisar"); } },
     copiar: { label: "Copiar", run: () => $("copiar").click() },
-    gerar: { label: "IA", run: () => { ui.conversa?.abrir?.(true); $("gerar").click(); } },
+    conversar: { label: "Conversar IA", run: () => ui.conversa?.abrir?.(document.getElementById("conversaBox")?.hidden ?? true) },
+    gerar: { label: "Conversar IA", legacy: true, run: () => ui.conversa?.abrir?.(true) },
     conferir: { label: "Conferir", run: () => { ui.panel("Revisar"); conferirLocal(); } },
     sugestoes: { label: "Sugestões", run: () => ui.toggleSugestoes ? ui.toggleSugestoes() : ui.panel("Sugestões") },
     classificar: { label: "Calc", run: () => ui.panel("Calc") },
@@ -5423,7 +5513,7 @@ window.tutuSite.appReady = true;
     hud: { label: "Janelinha sobre o PACS", run: () => ui.openHUD() }
   };
   // Objeto único editável: rodapé e execução usam exatamente a mesma configuração.
-  ui.shortcuts = { F1: "ditar", F2: "proximo", F3: "normal", F4: "copiar", F6: "gerar", F7: "conferir", F8: "sugestoes", "Shift+F8": "classificar", F9: "desfazer", "Ctrl+Shift+L": "compacto" };
+  ui.shortcuts = { F1: "ditar", F2: "proximo", F3: "normal", F4: "copiar", F6: "conversar", F7: "conferir", F8: "sugestoes", "Shift+F8": "classificar", F9: "desfazer", "Ctrl+Shift+L": "compacto" };
   try { const saved = JSON.parse(store.get("v2Shortcuts") || "null"); if (saved && Object.values(saved).every(a => ui.actions[a])) Object.assign(ui.shortcuts, saved); } catch (_) {}
   const foot = $("v2Footer");
   ui.renderShortcuts = () => {
@@ -5439,7 +5529,7 @@ window.tutuSite.appReady = true;
   keyEditor.append(ui.el("h2", {}, "Teclas do rodapé"));
   for (const key of Object.keys(ui.shortcuts)) {
     const label = ui.el("label", {}, key), select = ui.el("select", { "aria-label": "Ação de " + key });
-    for (const [action, entry] of Object.entries(ui.actions)) select.append(ui.el("option", { value: action }, entry.label));
+    for (const [action, entry] of Object.entries(ui.actions)) if (!entry.legacy) select.append(ui.el("option", { value: action }, entry.label));
     select.value = ui.shortcuts[key]; select.onchange = () => { ui.shortcuts[key] = select.value; store.set("v2Shortcuts", JSON.stringify(ui.shortcuts)); ui.renderShortcuts(); };
     label.append(select); keyEditor.append(label);
   }
@@ -5486,6 +5576,7 @@ window.tutuSite.appReady = true;
     for (const m of macros) add("Macro", m.nome, () => insert(m.texto), m.texto);
     const shortcutOf = id => Object.entries(ui.shortcuts).filter(([, a]) => a === id).map(([k]) => k).join(", ");
     for (const [id, entry] of Object.entries(ui.actions)) {
+      if (entry.legacy) continue;
       const sc = shortcutOf(id);
       add("Ação", entry.label + (sc ? " · " + sc : ""), entry.run, id + (sc ? " " + sc : ""));
     }
@@ -5499,8 +5590,6 @@ window.tutuSite.appReady = true;
     add("Ação", "Máscaras: minimizar/restaurar", () => ui.toggleLeft());
     add("Ação", "Painel direito: minimizar/restaurar", () => ui.toggleRight());
     add("Ação", "Sépia dia / noite", () => ui.night());
-    add("Ação", "Aceitar tudo da IA", () => { acceptAllEdits(); scheduleCaseSave(); });
-    add("Ação", "Desfazer IA", () => { undoAllClaude(); ui.conversa?.abrir?.(true); });
     add("Ação", "Aprendido (estilo e voz)", () => ui.openTools?.(), "aprendido estilo regras voz ferramentas");
     add("Ação", "Corretor · preliminar × definitivo", () => ui.openCorretor?.(true), "corretor preliminar definitivo chefe ferramentas");
     add("Ação", "Versões do laudo", () => { ui.panel("Revisar"); $("verBtn").click(); });
@@ -5584,6 +5673,7 @@ window.tutuSite.appReady = true;
     const k = e.key.toLowerCase();
     let action = null;
     if (e.altKey && !e.ctrlKey && !e.shiftKey && k === "a" && !ui.isMobile()) action = () => ui.openAudio?.();
+    else if (e.altKey && !e.ctrlKey && !e.shiftKey && k === "c") action = () => ui.actions.conversar.run();
     else if (e.ctrlKey && !e.altKey && k === "k") action = () => ui.openPalette();
     else if (e.ctrlKey && e.shiftKey && !e.altKey && k === "j") action = () => ui.openHUD();
     else if (!pal.hidden && ["escape", "enter", "tab", "arrowdown", "arrowup"].includes(k) && !(k === "tab" && (e.ctrlKey || e.altKey))) action = () => {
@@ -8785,7 +8875,7 @@ window.tutuSite.appReady = true;
     const numero = "(?:um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa)";
     const dia = "(?:\\d{1,2}|primeiro|" + numero + "(?:\\s+e\\s+" + numero + ")?)";
     const ano = "(?:\\d{4}|(?:dois\\s+mil|mil\\s+novecentos)(?:\\s+(?:e\\s+)?" + numero + ")*)";
-    let t = texto.replace(/\0/g, "")
+    let t = texto.replace(/[\0\uE100-\uE8FF]/g, "")
       .replace(/\b(?:sr|sra|senhor|senhora)\b(?:\(a\))?\.?\s*[:=-]?\s*[^\n;.!?]+/gi, "[identidade]")
       .replace(/\bpaciente(?:\(a\))?\s*[:=-]\s*[^\n;.!?]+/gi, "[identidade]")
       .replace(/\bpaciente(?:\(a\))?\.?\s+([^\n;.!?]+)/gi, (full, resto) => {
@@ -8820,10 +8910,24 @@ window.tutuSite.appReady = true;
         if (desconhecidos(f.slice(0, m.index)) || desconhecidos(f.slice(m.index + m[0].length))) return true;
       return [...f.replace(/Informações Clínicas|Técnica de exame|Achados|Conclusão/g, "").matchAll(/\b[A-ZÀ-Ý][a-zà-ÿ]+\s+(?:(?:da|de|do|dos|das)\s+)?[A-ZÀ-Ý][a-zà-ÿ]+\b/g)].some(m => desconhecidos(m[0]));
     });
+    // Preserva marcações HTML/alinhamento da folha e códigos clínicos padrão antes de filtrar códigos alfanuméricos de paciente.
+    const protegidos = [];
+    const segurar = m => {
+      if (protegidos.length >= 1700) return m;
+      const tok = String.fromCharCode(0xE100 + protegidos.length);
+      protegidos.push(m);
+      return tok;
+    };
+    t = t
+      .replace(/<\/?(?:b|u|i)>|\{\{(?:centro|justificado|esquerda|direita|fonte:[^}\n]+)\}\}|\[<>\]/gi, segurar)
+      .replace(/\b(?:N[1-9]|TR[1-5]|2F|T[12]W?|(?:C[1-7]|T(?:[1-9]|1[0-2])|L[1-5]|S[1-5])(?:-(?:C[1-7]|T(?:[1-9]|1[0-2])|L[1-5]|S[1-5]))?|\d+(?:[.,]\d+)?(?:mm|cm|ml|mg|kg|hz|khz|mhz|uh|hu))\b/gi, segurar);
     t = t.replace(/\b(?=[a-z\d-]*[a-z])(?=[a-z\d-]*\d)[a-z\d]+(?:-[a-z\d]+)*\b/gi, "[identificador]")
       .replace(/(?:\+?55[\s-]*)?\(?\b\d{2}\)?[\s-]*\d{4,5}[\s-]?\d{4}\b|\b\d{3}\.\d{3}\.\d{3}-\d{2}\b|\d{6,}/g, "[identificador]")
       .replace(/\b(?:acesso|prontu[aá]rio|cpf)\s*[:#=-]?\s*(?:\[identificador\]|[\d .-]+)/gi, "[identificador]");
     t = remover(t, f => /@|\b(?:nome|identifica[cç][aã]o|benefici[aá]rio|nascimento|telefone|celular|endere[cç]o|rg|cns|acesso|prontu[aá]rio|cpf)\s*[:#=]?\s*\S|\b\d{6,}\b|\b\d{2,}(?:[ .-]\d{2,}){2,}\b/i.test(f));
+    if (protegidos.length) {
+      t = t.replace(/[\uE100-\uE7FF]/g, ch => protegidos[ch.charCodeAt(0) - 0xE100] ?? ch);
+    }
     return t.trim();
   }
   const normalizar = (t, cfg) => (root.TutuV2Core?.fixFala || String)(root.usgVoice.posTexto(root.usgVoice.punct(t), cfg));
@@ -9384,6 +9488,7 @@ window.tutuSite.appReady = true;
     : G.putJson("ia/correcoes/" + exame + "/" + id + ".json", { exame, proposta, final, quando: new Date().toISOString() }, null, "IA: correção do Artur").then(() => true, () => false);
   if (typeof applyGenerated === "function") { const antigoGerado = applyGenerated; applyGenerated = (...a) => { const antes = laudoTagged(); const r = antigoGerado(...a); ui.registrarIA(laudoTagged(), antes); return r; }; }
   if (typeof undoAllClaude === "function") { const antigoDesfazer = undoAllClaude; undoAllClaude = (...a) => { ui.registrarIA(null); return antigoDesfazer(...a); }; const b = document.getElementById("undoAllBtn"); if (b) b.onclick = undoAllClaude; }
+  if (typeof undoVersion === "function") { const antigoUndoVer = undoVersion; undoVersion = (...a) => { const r = antigoUndoVer(...a); if (typeof versions !== "undefined" && typeof verPtr !== "undefined" && versions[verPtr]?.label === "Antes da correção") ui.registrarIA(null); return r; }; const ub = document.getElementById("undoBtn"); if (ub) ub.onclick = undoVersion; }
   const antigoClipboard = copyToClipboard;
   copyToClipboard = async (...args) => {
     const caso = ui.activeId(), finalTexto = laudoTagged(), vinculo = T.sync.kvGet("_usg/vinculos").then(v => ({ id: v?.[caso] }), () => ({ erro: true }));
@@ -9851,40 +9956,86 @@ window.tutuSite.appReady = true;
       .replace(/\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/g, "[data]")
       .replace(/\d{6,}/g, "[identificador]").replace(/[ \t]+/g, " ").trim().slice(0, 2000);
   }
-  /* Linhas numeradas COMPLETAS (o pedido pode mexer em frases normais). Devolve { linhas: [{raw, n}], texto }.
-     filtro (opcional): aplicado a cada linha só no `texto` enviado (a numeração e `linhas` ficam do original). */
-  function numerar(rascunho, filtro) {
+  const foldPure = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const stripTagsPure = s => String(s || "")
+    .replace(/^\{\{(?:centro|justificado|esquerda|direita|fonte:[^}\n]+)\}\}/i, "")
+    .replace(/<\/?[a-z][^>]*>/gi, "")
+    .replace(/\{\{\?([^}\n]+?)(?:::[^}\n]*?)?\}\}/g, "$1")
+    .trim();
+  const normSentPure = s => foldPure(stripTagsPure(s)).replace(/^\d+\.\s*/, "").replace(/[\s.;:]+$/g, "").replace(/\s+/g, " ").trim();
+  const splitSentPure = t => String(t || "").split(/(?<=\.)\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ])/);
+  const STOP_PEDIDO = new Set(["para", "pelo", "pela", "pelos", "pelas", "com", "sem", "nao", "uma", "umas", "uns", "dos", "das", "por", "que", "meu", "minha", "seu", "sua", "esse", "essa", "este", "esta", "isso", "isto", "aqui", "ali", "como", "mais", "menos", "lado", "direito", "direita", "esquerdo", "esquerda", "item", "linha", "laudo", "frase", "texto", "muda", "mudar", "troca", "trocar", "tira", "tirar", "apaga", "apagar", "remov", "coloca", "inclui", "altera", "favor"]);
+  /* Indica se o pedido pede para inserir/descrever achado novo (justificando anexar banco de laudos) ou se é apenas ajuste editorial simples. */
+  function precisaBanco(pedido) {
+    const p = foldPure(pedido).replace(/\[[^\]]+\]/g, " ").trim();
+    if (!p) return false;
+    if (/\b(?:descrev\w*|inclu\w*|adicion\w*|coloc\w*|inser\w*|acresc\w*|nov[oa]s?\s+fras\w*|achad\w*|banco)\b/.test(p)) return true;
+    if (/\b(?:lado|direit[oa]s?|esquerd[oa]s?|bilateral|apag\w*|tir\w*|remov\w*|exclu\w*|revis\w*|concord\w*|melhor\w*|conclus[aã]o|normal\b|troc\w*|mud\w*|substit\w*|tamanho|medid[oa]s?|mm|cm)\b/.test(p) && p.length <= 120) {
+      return /\b(?:cist\w*|calcul\w*|esteat\w*|nodul\w*|coleliti\w*|hepatop\w*|esplen\w*|derram\w*|ascit\w*|aterom\w*|plac\w*|estenos\w*|oclus\w*|tromb\w*|reflux\w*|herni\w*|miom\w*|espes\w*|ectasi\w*|dilat\w*|les[aã]o|mass\w*|linfonod\w*|hidronefr\w*|cirros\w*|calcific\w*|polip\w*)\b/.test(p);
+    }
+    return true;
+  }
+  /* Linhas numeradas; quando opts.compacto && opts.normalSet são passados, abrevia frases normais intactas sem relação com o pedido. */
+  function numerar(rascunho, filtro, opts = null) {
     const linhas = [], out = []; let n = 0;
+    const compacto = !!(opts && opts.compacto && opts.normalSet);
+    const pedFold = foldPure(opts?.pedido || "");
+    const globalReq = /\b(?:revis\w*|melhor\w*|reescrev\w*|todo\s+o\s+laudo|tudo|geral|estilo|padroniz\w*|coer[eê]nc\w*|refa[çc]\w*)\b/.test(pedFold);
+    const reqWords = pedFold.split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !STOP_PEDIDO.has(w));
     for (const raw of String(rascunho || "").split("\n")) {
       if (!raw.trim()) { linhas.push({ raw, n: 0 }); continue; }
-      n++; linhas.push({ raw, n }); out.push("L" + n + " " + (filtro ? filtro(raw.trim()) : raw.trim()));
+      n++; linhas.push({ raw, n });
+      const t = raw.trim();
+      let emitido = "";
+      if (compacto && !globalReq) {
+        const plain = stripTagsPure(t);
+        const isNormal = plain.length >= 25 && !/^<b><u>/i.test(t) && !/^\d+\./.test(plain) &&
+          !/\[<>\]|\{\{\?/.test(t) && splitSentPure(plain).every(x => opts.normalSet.has(normSentPure(x)));
+        if (isNormal && !reqWords.some(w => foldPure(plain).includes(w))) {
+          const preview = plain.split(/\s+/).slice(0, 5).join(" ");
+          emitido = "≡ " + (filtro ? filtro(preview) : preview) + " …";
+        }
+      }
+      if (!emitido) emitido = filtro ? filtro(t) : t;
+      out.push("L" + n + " " + emitido);
     }
     return { linhas, texto: out.join("\n") };
   }
   function montarPrompt({ exame = "", regras = "", numerado = "", pedido = "" }) {
-    return `Assistente de laudos de um radiologista brasileiro (português do Brasil). O médico pediu um AJUSTE no laudo abaixo.
+    return `Ajuste o laudo abaixo (PT-BR). "≡" = frase normal da máscara abreviada (mantenha intacta se não envolvida).
 EXAME: ${exame}
-${regras ? `REGRAS DE ESTILO DO MÉDICO PARA ESTE EXAME:
-${regras}
-` : ""}LAUDO (linhas numeradas):
+${regras ? `REGRAS DE ESTILO:\n${regras}\n` : ""}LAUDO (linhas numeradas):
 """
 ${numerado}
 """
-PEDIDO DO MÉDICO (falado ou escrito; pode ter erros do reconhecimento de voz):
+PEDIDO DO MÉDICO:
 """
 ${pedido}
 """
 REGRAS:
-1. Faça só o que o pedido diz; o resto do laudo fica igual. Nunca invente achados, medidas ou lateralidade que o pedido não trouxe.
-2. Mantenha as marcações <b>, <u>, <i>, {{centro}} e os títulos como estão. Texto puro, sem markdown.
-3. Se o pedido mexer em achados, deixe a conclusão coerente com eles.
-4. Se houver dúvida de transcrição, lateralidade ausente/incerta em estrutura par, sexo não informado quando pertinente, concordância incerta ou dado incluído sem ter sido ditado, envolva o trecho com {{?trecho::motivo curto}} (nunca use [?]).
-FORMATO DA RESPOSTA: DIFF, só as linhas que mudam, uma operação por linha, sem comentários:
-Ln: texto novo   (substitui a linha n)
-+Ln: texto       (insere depois da linha n; várias seguidas ficam nessa ordem)
--Ln              (apaga a linha n)
-Linhas não citadas ficam como estão; nunca repita uma linha sem mudança. Se nada mudar, responda só: OK
-MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "da próxima vez", "sempre", "nunca", "prefiro", "gostei", "não gostei"), acrescente no fim UMA linha "REGRA: <regra curta e geral de redação, sem dados deste paciente>". Se for só deste laudo, não escreva REGRA.`;
+1. Aplique só o que foi pedido; nunca invente achados, medidas ou lateralidade. Mantenha <b>, <u>, <i>, {{centro}} e títulos.
+2. Se mexer nos Achados, deixe a Conclusão coerente.
+3. Ponto incerto (dúvida, lateralidade ausente em estrutura par, sexo omitido/conflitante, concordância ou dado não ditado): {{?trecho::motivo curto}} (nunca [?]).
+FORMATO DA RESPOSTA: DIFF só com as linhas alteradas (sem markdown):
+Ln: texto novo | +Ln: inserir após n | -Ln (apagar) | OK (se nada mudar)
+Se valer para próximos laudos ("sempre", "nunca", "da próxima vez"), termine com 1 linha: REGRA: <regra curta, sem dados do paciente>.`;
+  }
+  function aplicarResposta(draft, linhas, resposta, applyDiffFn) {
+    const limpo = String(resposta || "").replace(/\r/g, "").trim().replace(/^```\w*\s*\n|\n\s*```$/g, "").trim();
+    if (!limpo) return null;
+    if (/^\s*ok\.?\s*$/i.test(limpo)) return draft;
+    if (typeof applyDiffFn === "function") {
+      const viaDiff = applyDiffFn(limpo);
+      if (viaDiff !== null) return viaDiff;
+    }
+    const lns = limpo.split("\n").map(l => l.replace(/^L\d+\s*[:.)\]-]?\s+/, ""));
+    const nonEmpty = lns.filter(l => l.trim());
+    const origNonEmpty = String(draft || "").split("\n").filter(l => l.trim()).length;
+    if (nonEmpty.length >= 3 && !lns.some(l => /≡/.test(l)) &&
+        (/\b(?:achados|conclus[aã]o|impress[aã]o)\b/i.test(limpo) || nonEmpty.length >= Math.max(3, Math.floor(origNonEmpty * 0.5)))) {
+      return lns.join("\n");
+    }
+    return null;
   }
   /* ia/regras/<exame>.md: acrescenta a regra na seção (cria a seção/arquivo se faltar); não duplica. */
   function regraMd(atual, regra, data) {
@@ -9900,7 +10051,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
   function tirarRegraMd(atual, regra) {
     return String(atual || "").replace(/\r/g, "").split("\n").filter(l => l.replace(/\s*\(\d{2}\/\d{2}\/\d{4}\)\s*$/, "") !== "- " + regra).join("\n");
   }
-  const api = { extrairRegra, limparPedido, numerar, montarPrompt, regraMd, tirarRegraMd, SECAO };
+  const api = { extrairRegra, limparPedido, precisaBanco, numerar, montarPrompt, aplicarResposta, regraMd, tirarRegraMd, SECAO };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuConversa = api;
 })(globalThis);
@@ -9913,25 +10064,64 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
   const el = ui.el, button = ui.button, ANDROID = /Android/i.test(navigator.userAgent);
   let busy = false, speech = null, ouvindo = false, tela = null, ultimaRegra = null, ctlConversa = null;
 
+  const MODELOS_CONVERSA = [
+    ["gemini-3.5-flash-lite", "3.5 Flash-Lite · econômico"],
+    ["gemini-3.8-flash", "3.8 Flash · equilibrado"],
+    ["gemini-4-hydrogen", "4 Hydrogen · máximo"],
+    ["claude-haiku-5-5", "Claude Haiku 5.5"],
+    ["claude-sonnet-5-5", "Claude Sonnet 5.5"]
+  ];
   const box = el("section", { id: "conversaBox", class: "conversa", "aria-label": "Conversar com a IA", hidden: "" });
-  const texto = el("textarea", { id: "conversaTexto", rows: "3", "aria-label": "Pedido de ajuste para a IA",
-    placeholder: "Fale ou escreva o ajuste: \"o lado é direito\", \"conclusão um item por achado\", \"da próxima vez, fluxo em todas as frases\"." });
+  const modeloSel = el("select", { id: "conversaModelo", "aria-label": "Modelo de IA do Conversar", title: "Modelo usado ao conversar com a IA" });
+  for (const [val, lbl] of MODELOS_CONVERSA) modeloSel.append(el("option", { value: val }, lbl));
+  const syncModeloConversa = () => {
+    const atual = T?.nuvemStatus?.()?.modeloConversa || "gemini-4-hydrogen";
+    if ([...modeloSel.options].some(o => o.value === atual)) modeloSel.value = atual;
+  };
+  syncModeloConversa();
+  modeloSel.onchange = () => {
+    if (typeof T?.salvarModeloConversa === "function") T.salvarModeloConversa(modeloSel.value);
+    else T?.salvarNuvem?.({ modeloConversa: modeloSel.value });
+  };
+  document.addEventListener("tutu-nuvem-mudou", syncModeloConversa);
+
+  const texto = el("textarea", { id: "conversaTexto", rows: "2", "aria-label": "Pedido de ajuste para a IA",
+    placeholder: "Peça um ajuste no laudo… ex.: \"muda para rim direito\", \"inclui esteatose moderada\", \"ajusta conclusão\"." });
   const msg = el("p", { id: "conversaMsg", role: "status", "aria-live": "polite" });
   const mic = button("🎤", () => (ouvindo ? parar() : ouvir()), { id: "conversaMic", "aria-label": "Ditar o pedido", title: "Ditar o pedido (voz)" });
-  const enviar = button("Enviar", () => mandar(), { id: "conversaEnviar", title: "Enviar à IA · Ctrl Enter" });
-  const fechar = button("×", () => abrir(false), { id: "conversaFechar", "aria-label": "Fechar", title: "Fechar" });
-  const aceitar = button("Aceitar tudo", () => { acceptAllEdits(); scheduleCaseSave(); acoes.hidden = true; dizer("Ajustes aceitos."); }, { id: "conversaAceitar" });
-  const desfazer = button("Desfazer", () => { undoAllClaude(); acoes.hidden = true; dizer("Ajuste desfeito."); }, { id: "conversaDesfazer" });
-  const acoes = el("div", { class: "conversa-acoes", hidden: "" }); acoes.append(aceitar, desfazer);
+  const enviar = button("Enviar", () => mandar(), { id: "conversaEnviar", title: "Enviar ajuste · Enter" });
+  const fechar = button("×", () => { abrir(false); if (typeof focusSheet === "function") focusSheet(); }, { id: "conversaFechar", "aria-label": "Fechar", title: "Fechar · Esc" });
   const lembrei = el("p", { id: "conversaLembrei", hidden: "" });
-  const cab = el("div", { class: "conversa-cab" }); cab.append(el("b", {}, "Conversar com a IA"), fechar);
-  const linha = el("div", { class: "conversa-linha" }); linha.append(texto, el("div", { class: "conversa-botoes" }));
-  linha.lastChild.append(mic, enviar);
-  box.append(cab, linha, msg, acoes, lembrei);
-  if (ui.iaSection) { ui.iaSection.hidden = false; box.append(ui.iaSection); }
+
+  const cab = el("div", { class: "conversa-cab" });
+  const cabEsq = el("div", { class: "conversa-cab-esq" });
+  cabEsq.append(el("b", {}, "Conversar com a IA"), el("kbd", { class: "conversa-kbd" }, "F6"));
+  const cabDir = el("div", { class: "conversa-cab-dir" });
+  cabDir.append(modeloSel, fechar);
+  cab.append(cabEsq, cabDir);
+
+  const chipsRow = el("div", { class: "conversa-chips", role: "group", "aria-label": "Atalhos de pedido" });
+  for (const [rot, frase] of [
+    ["Revisar coerência", "Revise coerência entre Achados e Conclusão, lateralidade e medidas."],
+    ["Ajustar conclusão", "Atualize a Conclusão para refletir todos os achados."],
+    ["Melhorar redação", "Melhore a redação no estilo do meu banco, sem inventar achados."]
+  ]) {
+    chipsRow.append(button(rot, () => { texto.value = frase; texto.focus(); texto.select(); }, { class: "conversa-chip" }));
+  }
+
+  const inputWrap = el("div", { class: "conversa-input-wrap" });
+  const bar = el("div", { class: "conversa-bar" });
+  const barEsq = el("div", { class: "conversa-bar-esq" });
+  barEsq.append(mic, el("span", { class: "conversa-dica" }, "Enter envia · Shift+Enter linha · F9 desfaz"));
+  bar.append(barEsq, enviar);
+  inputWrap.append(texto, bar);
+
+  const body = el("div", { class: "conversa-body" });
+  body.append(chipsRow, inputWrap, msg, lembrei);
+  box.append(cab, body);
   document.body.append(box);
-  const abrirBtn = button("Conversar", () => abrir(box.hidden), { id: "conversaAbrir", title: "Conversar com a IA: pedir ajustes no laudo (voz ou texto)" });
-  ui.actionIcon(abrirBtn, "Conversar com a IA", "M12 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM3 21v-3a6 6 0 0 1 12 0v3M16 5a5 5 0 0 1 0 8M19 2a9 9 0 0 1 0 14");
+  const abrirBtn = button("Conversar", () => abrir(box.hidden), { id: "conversaAbrir", title: "Conversar com a IA · F6 ou Alt+C" });
+  ui.actionIcon(abrirBtn, "Conversar com a IA · F6 ou Alt+C", "M12 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM3 21v-3a6 6 0 0 1 12 0v3M16 5a5 5 0 0 1 0 8M19 2a9 9 0 0 1 0 14");
   const copiar = document.getElementById("copiar");
   if (copiar && copiar.parentNode === ui.footerActions) copiar.after(abrirBtn); else ui.footerActions.append(abrirBtn);
   /* Áudio (celular): depois de abrir um laudo pronto, o botão fecha o Áudio e abre a conversa sobre a folha. */
@@ -9948,13 +10138,12 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
   function temLaudo() { try { return !!laudoTagged().trim(); } catch (_) { return false; } }
   function abrir(on) {
     box.hidden = !on; abrirBtn.setAttribute("aria-pressed", String(!!on));
-    if (on) { dizer(temLaudo() ? "" : "Abra ou escreva um laudo na folha primeiro."); texto.focus(); }
+    if (on) { syncModeloConversa(); dizer(temLaudo() ? "" : "Abra ou escreva um laudo na folha primeiro."); texto.focus(); }
     else parar();
   }
   texto.addEventListener("keydown", e => {
-    // stopPropagation: Ctrl+Enter no documento é o Gerar (31-chat-ensinar.js); Esc fecha só esta caixa
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); mandar(); }
-    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); abrir(false); }
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); mandar(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); abrir(false); if (typeof focusSheet === "function") focusSheet(); }
   });
 
   /* ---------- voz: mesmo motor do site (Web Speech + usgVoice + fixFala); Android: speechDelta e Wake Lock ---------- */
@@ -10044,6 +10233,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
   /* Com a ponte ou nuvem: local/nuvem, sem GitHub. Sem ponte (ou sem sample): fila. */
   async function pedirIA(prompt, signal, montarAnonimo, delta, pedidoSalvo, reprocessando = false) {
     const nuvemAtiva = !!T?.nuvemStatus?.()?.configurada;
+    const modeloEscolhido = pedidoSalvo?.modelo || modeloSel.value || T?.nuvemStatus?.()?.modeloConversa;
     if (nuvemAtiva && pedidoSalvo?.rota !== "fila") {
       if (typeof sample !== "function") {
         if (reprocessando) throw Error("Ponte indisponível para reprocessar.");
@@ -10059,10 +10249,10 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
         const frasesBanco = pedidoSalvo?.frasesBanco || "";
         try {
           if (laudoDelta) {
-            try { return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", anonimizado: true, modo: "delta", laudo: laudoDelta, laudoAnonimizado: true, frasesBanco }); }
+            try { return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, anonimizado: true, modo: "delta", laudo: laudoDelta, laudoAnonimizado: true, frasesBanco }); }
             catch (e) { if (signal.aborted || e?.name === "AbortError" || e?.code === "ponte_indisponivel" || e?.code === "limite_uso" || e?.code === "bloqueado" || /^bloqueado/i.test(e?.message || "")) throw e; if (pedidoSalvo) pedidoSalvo.delta = false; }
           }
-          return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", anonimizado: true, frasesBanco });
+          return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, anonimizado: true, frasesBanco });
         } catch (e) {
           if (e?.code !== "ponte_indisponivel" || reprocessando) throw e;
         }
@@ -10072,15 +10262,15 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     }
     if (reprocessando && pedidoSalvo?.rota !== "fila") {
       if (typeof sample !== "function") throw Error("Ponte indisponível para reprocessar.");
-      return sample(prompt, { signal, cache: false, modelTier: "balanced", ...(delta ? { modo: "delta", laudo: delta } : {}) });
+      return sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, ...(delta ? { modo: "delta", laudo: delta } : {}) });
     }
     if (pedidoSalvo?.rota !== "fila" && typeof sample === "function" && sample) {
       try {
         if (delta) {
-          try { return await sample(prompt, { signal, cache: false, modelTier: "balanced", modo: "delta", laudo: delta }); }
+          try { return await sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, modo: "delta", laudo: delta }); }
           catch (e) { if (signal.aborted || e?.name === "AbortError") throw e; if (pedidoSalvo) pedidoSalvo.delta = false; }
         }
-        return await sample(prompt, { signal, cache: false, modelTier: "balanced" });
+        return await sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido });
       }
       catch (e) { if (e?.code !== "ponte_indisponivel") throw e; }
     }
@@ -10089,6 +10279,10 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
   }
 
   /* ---------- envio: laudo numerado + pedido -> DIFF (+ REGRA opcional) ---------- */
+  const fmtCusto = usd => {
+    const n = Number(usd || 0);
+    return n > 0 ? " · $" + n.toFixed(n < 0.01 ? 4 : 3).replace(".", ",") : "";
+  };
   async function mandar(repetir) {
     repetir = repetir?.prompt ? repetir : null;
     if (busy) return;
@@ -10096,52 +10290,72 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     const pedido = repetir?.pedido ?? C.limparPedido(texto.value);
     if (!pedido) { dizer("Fale ou escreva o que ajustar."); texto.focus(); return; }
     if (typeof genBusy !== "undefined" && genBusy) { dizer("Aguarde o Gerar terminar."); return; }
+    if (!repetir && sheet.querySelector("del.rm, .chg, p.rmline")) acceptAllEdits();
     const draft = laudoTagged();
     if (repetir && (draft !== repetir.draft || repetir.caso !== ui.activeId())) { dizer("Volte ao laudo do pedido que falhou para reprocessar."); return; }
     if (!draft.trim()) { dizer("A folha está vazia: abra ou escreva um laudo primeiro."); return; }
-    const num = C.numerar(draft);
+    const normSet = typeof normalSetAll === "function" ? normalSetAll() : null;
+    const numOpts = { compacto: true, normalSet: normSet, pedido };
+    const num = C.numerar(draft, null, numOpts);
     genLines = num.linhas;   // applyDiff (30-claude-gerar.js) lê estas linhas
     const exame = nameAll(), regras = rulesBlock();
-    const frasesBanco = window.TutuBancoBusca?.pickBankForAI?.(typeof current !== "undefined" ? current : null, pedido, 6, 2200) || "";
+    const frasesBanco = C.precisaBanco(pedido)
+      ? (window.TutuBancoBusca?.pickBankForAI?.(typeof current !== "undefined" ? current : null, pedido, 4, 1400) || "")
+      : "";
     const prompt = repetir?.prompt ?? C.montarPrompt({ exame, regras, numerado: num.texto, pedido });
     const D = window.TutuDelta;
     const baseDelta = D?.habilitar(draft, pedido) ? D.capturar(sheet, draft, serEditable) : null;
-    const pedidoIA = repetir || { prompt, pedido, draft, exame, regras, frasesBanco, delta: !!baseDelta, caso: ui.activeId() };
-    busy = true; enviar.disabled = true; acoes.hidden = true; lockSheet(true); ctlConversa = new AbortController();
+    const pedidoIA = repetir || { prompt, pedido, draft, exame, regras, frasesBanco, modelo: modeloSel.value, delta: !!baseDelta, caso: ui.activeId() };
+    busy = true; enviar.disabled = true; modeloSel.disabled = true; lockSheet(true); ctlConversa = new AbortController();
     dizer("Enviando à IA…");
     const t0 = performance.now();
     try {
-      const anonimo = () => pedidoIA.anonimo ?? (pedidoIA.anonimo = C.montarPrompt({ exame: pedidoIA.exame, regras: pedidoIA.regras, numerado: C.numerar(draft, anon).texto, pedido: anon(pedido) }));
+      const anonimo = () => pedidoIA.anonimo ?? (pedidoIA.anonimo = C.montarPrompt({
+        exame: pedidoIA.exame,
+        regras: pedidoIA.regras,
+        numerado: C.numerar(draft, anon, numOpts).texto,
+        pedido: anon(pedido)
+      }));
       let r = await pedirIA(prompt, ctlConversa.signal, anonimo, pedidoIA.delta ? draft : null, pedidoIA, !!repetir);
       let patch = r?.modo === "delta" && baseDelta ? D.aplicar(draft, r.text) : null;
       if (repetir && r?.modo === "delta" && !patch) throw Error("A resposta delta veio fora do formato; o laudo ficou como estava.");
       if (r?.modo === "delta" && !patch) { pedidoIA.delta = false; r = await pedirIA(prompt, ctlConversa.signal, anonimo, null, pedidoIA); }
-      const motor = r?.motor === "nuvem" ? (r?.modelo || "IA nuvem") : r?.motor === "antigravity" ? "Antigravity" : "Claude", secs = ((performance.now() - t0) / 1000).toFixed(0);
+      const motor = r?.motor === "nuvem" ? (r?.modelo || modeloSel.value || "IA nuvem") : r?.motor === "antigravity" ? "Antigravity" : "Claude";
+      const secs = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
       const { regra, resto } = C.extrairRegra(r?.text || "");
       lockSheet(false);
       if (laudoTagged() !== draft) { dizer("A folha mudou enquanto a IA respondia: nada foi aplicado. Envie de novo."); return; }
       genLines = num.linhas;
-      const novo = patch ? patch.texto : /^\s*ok\.?\s*$/i.test(resto.trim()) ? draft : applyDiff(resto);
+      const novo = patch ? patch.texto : C.aplicarResposta(draft, num.linhas, resto, applyDiff);
       if (novo === null || r?.truncated) throw Error(`A resposta (${motor}) veio incompleta ou fora do formato; o laudo ficou como estava.`);
       if (novo !== draft) {
-        pushVersion("Antes da correção");   // "Desfazer IA" (undoAllClaude) volta até aqui
-        if (patch) { if (!D.aplicarDOM(baseDelta, patch)) return; }
-        else sheet.innerHTML = diffLaudoHtml(draft, novo);
+        pushVersion("Antes da correção");
+        let changed = [];
+        if (patch) {
+          if (!D.aplicarDOM(baseDelta, patch)) return;
+          changed = [...new Set([...sheet.querySelectorAll(".chg, del.rm:not(.rmline > del.rm)")].map(el => el.closest("p,div")).filter(Boolean))];
+          acceptAllEdits();
+        } else {
+          sheet.innerHTML = diffLaudoHtml(draft, novo);
+          changed = [...new Set([...sheet.querySelectorAll(".chg, del.rm:not(.rmline > del.rm)")].map(el => el.closest("p,div")).filter(Boolean))];
+          acceptAllEdits();
+        }
+        changed.forEach(p => { if (p.isConnected) p.classList.add("conversa-flash"); });
+        if (changed.length) setTimeout(() => changed.forEach(p => p.classList.remove("conversa-flash")), 2400);
         ui.duvidas?.aposIA?.({ autoFocar: false });
         pushVersion("Ajustado na conversa (" + motor + ")");
         ui.registrarIA?.(laudoTagged(), draft);   // última versão da IA: ao copiar vira ia/correcoes e regra automática de voz (114)
         renderAlerts(); updateCount(); scheduleCaseSave();
-        acoes.hidden = false;
       }
       texto.value = "";
       window.TutuReprocessar?.sucesso("conversa", pedidoIA);
-      dizer((novo === draft ? "Nada a mudar no laudo" : "Ajustado: verde = novo, vermelho = apagado") + ` · ${motor}, ${secs} s` + (r?.aviso ? " · " + r.aviso : "") + ".");
+      dizer((novo === draft ? "Nada a mudar no laudo" : "Ajustado: laudo atualizado") + ` · ${motor} · ${secs} s` + fmtCusto(r?.custoUsd) + (r?.aviso ? " · " + r.aviso : "") + (novo === draft ? "." : " (F9 desfaz)"));
       if (regra) await lembrar(regra);
     } catch (e) {
       lockSheet(false);
       dizer(e?.name === "AbortError" ? "Pedido cancelado." : /^bloqueado/i.test(e?.message || "") ? "Bloqueado pelo filtro de privacidade: nada foi enviado ao GitHub. " + e.message : (e?.message || "Falha ao falar com a IA."));
       if (e?.name !== "AbortError" && !/^bloqueado/i.test(e?.message || "")) window.TutuReprocessar?.falhou("conversa", pedidoIA, "#conversaMsg");
-    } finally { busy = false; enviar.disabled = false; lockSheet(false); }
+    } finally { busy = false; enviar.disabled = false; modeloSel.disabled = false; lockSheet(false); }
   }
 
   /* ---------- memória: regra do exame (coleção regras) + ia/regras/<exame>.md no repo de dados ---------- */
@@ -12522,7 +12736,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   if (typeof window === "undefined") return;
   window.leoradEstruturados = api;
-  let dialog, titleEl, backBtn, outputEl, search, listing, workspace, form, preview, status, insert, copy, closeBtn, current, state, result, request = 0, savedRange;
+  let dialog, titleEl, backBtn, outputEl, searchWrap, search, listing, workspace, form, preview, status, insert, copy, closeBtn, current, state, result, request = 0, savedRange;
   const node = (tag, text = "") => { const el = document.createElement(tag); el.textContent = text; return el; };
   const button = (text, fn, cls = "") => { const b = node("button", text); b.type = "button"; if (cls) b.className = cls; b.onclick = fn; return b; };
   const fold = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -12573,6 +12787,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     dialog.dataset.view = view;
     const emFicha = view === "ficha";
     if (backBtn) backBtn.hidden = !emFicha;
+    if (searchWrap) searchWrap.hidden = emFicha;
     if (search) search.hidden = emFicha;
     if (listing) listing.hidden = emFicha;
     if (workspace) workspace.hidden = !emFicha;
@@ -12842,9 +13057,11 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     headRight.append(outputEl, closeBtn);
     head.append(headLeft, headRight);
 
+    searchWrap = node("div"); searchWrap.className = "leorad-search-wrap";
     search = node("input"); search.type = "search"; search.id = "leoradSearch";
     search.placeholder = "Buscar ferramenta (ex.: TI-RADS, Carótidas, BI-RADS)…";
     search.setAttribute("aria-label", "Buscar ferramenta");
+    searchWrap.append(search);
     listing = node("div"); listing.className = "leorad-list";
 
     workspace = node("div"); workspace.className = "leorad-grid"; workspace.hidden = true;
@@ -12916,7 +13133,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       }
     });
 
-    dialog.append(head, search, listing, workspace);
+    dialog.append(head, searchWrap, listing, workspace);
     dialog.addEventListener("cancel", () => { request++; });
     document.addEventListener("keydown", e => {
       if (e.key !== "Escape" || !dialog.open) return;
@@ -12983,12 +13200,18 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         for (const item of index.filter(i => fold([i.titulo, i.modalidade, i.grupo].join(" ")).includes(fold(search.value)))) {
           const card = node("div"); card.className = "leorad-item-card";
           const btn = button(item.titulo, () => openFicha(item), "leorad-item-btn");
+          card.onclick = e => { if (e.target !== btn) btn.click(); };
           card.append(btn);
-          const metaTxt = [item.modalidade, item.grupo].filter(Boolean).join(" · ");
-          if (metaTxt) {
-            const meta = node("span", metaTxt); meta.className = "leorad-item-meta";
-            card.append(meta);
+          const metaRow = node("div"); metaRow.className = "leorad-item-meta";
+          if (item.modalidade) {
+            const badge = node("span", item.modalidade); badge.className = "leorad-badge";
+            metaRow.append(badge);
           }
+          if (item.grupo) {
+            const grp = node("span", item.grupo); grp.className = "leorad-item-grupo";
+            metaRow.append(grp);
+          }
+          if (metaRow.childElementCount) card.append(metaRow);
           listing.append(card);
         }
         if (!listing.childElementCount) listing.append(node("p", "Nenhuma ferramenta encontrada."));
@@ -15575,13 +15798,14 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const el = ui.el, button = ui.button;
 
   const MODELO_OPCOES = [
-    ["gemini-4-hydrogen", "Gemini 4 Hydrogen (padrão)"],
-    ["gemini-3.8-flash", "Gemini 3.8 Flash"],
-    ["gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite (ultra rápido)"],
+    ["gemini-4-hydrogen", "Gemini 4 Hydrogen (máxima precisão)"],
+    ["gemini-3.8-flash", "Gemini 3.8 Flash (equilibrado · 2× mais barato)"],
+    ["gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite (econômico · até 8× mais barato)"],
     ["claude-haiku-5-5", "Claude Haiku 5.5 (chave Anthropic)"],
     ["claude-sonnet-5-5", "Claude Sonnet 5.5 (chave Anthropic)"]
   ];
   const THINKING_OPCOES = [
+    ["minimal", "Mínimo (mais econômico — Flash-Lite)"],
     ["low", "Baixo (rápido — padrão)"],
     ["medium", "Médio (casos complexos)"]
   ];
@@ -15906,10 +16130,23 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     }
   }
 
+  let usoDesatualizado = false;
+  let usoRefreshTimer = null;
   document.addEventListener("tutu-nuvem-mudou", () => { sincronizarUI(); carregarUso(false); });
-  document.getElementById("setTab-ia")?.addEventListener("click", () => carregarUso(false));
+  document.addEventListener("tutu-uso-atualizado", () => {
+    usoDesatualizado = true;
+    const modal = document.getElementById("setModal");
+    if (modal && !modal.hidden) {
+      clearTimeout(usoRefreshTimer);
+      usoRefreshTimer = setTimeout(() => { usoDesatualizado = false; carregarUso(false); }, 1200);
+    }
+  });
+  document.getElementById("setTab-ia")?.addEventListener("click", () => { usoDesatualizado = false; carregarUso(false); });
   document.getElementById("settingsTop")?.addEventListener("click", () => {
-    if (document.getElementById("setTab-ia")?.getAttribute("aria-selected") === "true") carregarUso(false);
+    if (document.getElementById("setTab-ia")?.getAttribute("aria-selected") === "true" || usoDesatualizado) {
+      usoDesatualizado = false;
+      carregarUso(false);
+    }
   });
   sincronizarUI();
   carregarUso(false);

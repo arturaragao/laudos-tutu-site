@@ -184,14 +184,16 @@
         }
         let nuvemErr = null;
         try{
+          const modeloEfetivo = options.modelo || nuvem.modeloConversa;
+          const thinkingEfetivo = options.thinking || (modeloEfetivo === "gemini-3.5-flash-lite" && nuvem.thinking !== "medium" ? "minimal" : nuvem.thinking);
           const resp = await fetch(nuvem.url + "/ia2", {
             method: "POST",
             headers: { "Content-Type": "application/json", "X-Tutu-Token": nuvem.token },
             body: JSON.stringify({
               texto: textoNuvem,
               modelTier: options.modelTier || "balanced",
-              modelo: options.modelo || nuvem.modeloConversa,
-              thinking: options.thinking || nuvem.thinking,
+              modelo: modeloEfetivo,
+              thinking: thinkingEfetivo,
               ...(typeof options.frasesBanco === "string" && options.frasesBanco.trim()
                 ? { frasesBanco: options.frasesBanco.trim().slice(0, 3500) }
                 : {}),
@@ -228,8 +230,10 @@
           }
           options.onText?.({ text });
           const motor = result.motor || "nuvem";
-          sample.ultimo = { motor, modelo: result.modelo || "", aviso: result.aviso || "" };
-          return { text, modo: result.modo, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "" };
+          const custoUsd = Number(result.custoUsd) || 0;
+          sample.ultimo = { motor, modelo: result.modelo || "", aviso: result.aviso || "", custoUsd };
+          try{ document.dispatchEvent(new CustomEvent("tutu-uso-atualizado", { detail: { modelo: result.modelo || modeloEfetivo, custoUsd } })); }catch(_){}
+          return { text, modo: result.modo, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "", custoUsd };
         }catch(err){
           if (options.signal?.aborted || timedOut || err?.authNuvem) throw err;
           nuvemErr = err;
@@ -276,9 +280,16 @@
   const NUVEM_MODELO_CONVERSA_KEY = "tutu_nuvem_modelo_conversa";
   const NUVEM_THINKING_KEY = "tutu_nuvem_thinking";
   const NUVEM_MODELOS = ["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite", "claude-haiku-5-5", "claude-sonnet-5-5"];
-  const NUVEM_THINKINGS = ["low", "medium"];
+  const NUVEM_THINKINGS = ["minimal", "low", "medium"];
   const normModeloNuvem = (m, def = "gemini-4-hydrogen") => NUVEM_MODELOS.includes(m) ? m : def;
   const normThinkingNuvem = t => NUVEM_THINKINGS.includes(t) ? t : "low";
+  function salvarModeloConversa(modelo){
+    const m = normModeloNuvem(modelo, "");
+    if (!m) return false;
+    try{ localStorage.setItem(NUVEM_MODELO_CONVERSA_KEY, m); }catch(_){ return false; }
+    document.dispatchEvent(new CustomEvent("tutu-nuvem-mudou"));
+    return true;
+  }
   function validarNuvemUrl(raw, restritoPareamento = false){
     try{
       const u = new URL(String(raw || "").trim());
@@ -579,9 +590,13 @@
           laudo: typeof payload?.laudo === "string" ? payload.laudo : acum,
           motor: payload?.motor || "",
           modelo: payload?.modelo || "",
+          custoUsd: Number(payload?.custoUsd) || 0,
           filaSalva: !!payload?.filaSalva,
           filaId: typeof payload?.filaId === "string" ? payload.filaId : ""
         };
+        if (finalizado.motor === "nuvem" || finalizado.custoUsd > 0){
+          try{ document.dispatchEvent(new CustomEvent("tutu-uso-atualizado", { detail: { modelo: finalizado.modelo, custoUsd: finalizado.custoUsd } })); }catch(_){}
+        }
         return;
       }
       if (typeof payload?.delta === "string" && payload.delta){
@@ -970,7 +985,7 @@
   }
   window.tutuSite = { ready, db, importBackup, exportBackup, mergeBank, saveBankNT, sync, gh, setToken, pedirChave,
     onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream,
-    nuvemStatus, salvarNuvem, limparNuvem, testarNuvem, nuvemLinkPareamento,
+    nuvemStatus, salvarNuvem, salvarModeloConversa, limparNuvem, testarNuvem, nuvemLinkPareamento,
     filaUsgListar, filaUsgSalvar, filaUsgApagar, nuvemUso, salvarNuvemUso,
     ponteStatus: () => { const p = lerPonte(); return { pareada: !!p, url: p?.url || "" }; }, desparearPonte };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
@@ -1002,7 +1017,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=0a9a843"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=22c451c"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();
