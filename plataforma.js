@@ -122,6 +122,39 @@
       };
     }
   };
+  async function chamarPonteLocal(texto, options, controller){
+    // /ia2: Antigravity (Gemini) com o Claude de reserva; ponte antiga (sem /ia2, 404) cai na /ia (só Claude).
+    const pedir = rota => fetch("http://127.0.0.1:47831/" + rota, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texto, modelTier: options.modelTier || "balanced",
+        ...(rota === "ia2" && options.modo === "delta" ? { modo: "delta", laudo: options.laudo } : {}) }), signal: controller.signal
+    });
+    let response = await pedir("ia2");
+    if (response.status === 404) response = await pedir("ia");
+    if (!response.ok){
+      let detalhe = "";
+      try{
+        const errJson = await response.json();
+        if (errJson && typeof errJson.erro === "string") detalhe = errJson.erro.trim();
+      }catch(_){}
+      const err = new Error(detalhe || `A ponte local respondeu com erro (HTTP ${response.status}).`);
+      err.code = response.status === 504 ? "ia_timeout" : "ia_erro";
+      err.tempo = response.status === 504;
+      err.status = response.status;
+      throw err;
+    }
+    const result = await response.json();
+    const text = typeof result === "string" ? result : (result.text ?? result.texto);
+    if (typeof text !== "string" || !text.trim()){
+      const err = new Error("Resposta vazia da ponte local.");
+      err.code = "empty_completion";
+      throw err;
+    }
+    options.onText?.({ text });
+    const motor = result.motor || "claude";
+    sample.ultimo = { motor, modelo: result.modelo || "", aviso: result.aviso || "" };
+    return { text, modo: result.modo, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "" };
+  }
   async function sample(input, options = {}){
     const texto = typeof input === "string" ? input : input.map(m => `${m.role}: ${m.content}`).join("\n\n");
     const controller = new AbortController();
@@ -133,37 +166,74 @@
     const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 95000;
     const timeout = setTimeout(onTimeout, timeoutMs);
     try{
-      // /ia2: Antigravity (Gemini) com o Claude de reserva; ponte antiga (sem /ia2, 404) cai na /ia (só Claude).
-      const pedir = rota => fetch("http://127.0.0.1:47831/" + rota, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ texto, modelTier: options.modelTier || "balanced",
-          ...(rota === "ia2" && options.modo === "delta" ? { modo: "delta", laudo: options.laudo } : {}) }), signal: controller.signal
-      });
-      let response = await pedir("ia2");
-      if (response.status === 404) response = await pedir("ia");
-      if (!response.ok){
-        let detalhe = "";
+      const nuvem = !options.apenasLocal ? lerNuvem() : null;
+      if (nuvem){
+        let textoNuvem = texto, modoNuvem = options.modo, laudoNuvem = options.laudo;
+        if (!options.anonimizado){
+          const anonFn = typeof window !== "undefined" ? window.tutuV2?.anonimizar : null;
+          if (typeof anonFn !== "function"){
+            const err = new Error("bloqueado: filtro de privacidade indisponível");
+            err.code = "bloqueado";
+            throw err;
+          }
+          textoNuvem = anonFn(texto);
+          if (modoNuvem === "delta" && typeof laudoNuvem === "string" && !options.laudoAnonimizado){
+            const orig = laudoNuvem.split("\n"), anons = orig.map(l => l.trim() ? anonFn(l) : "");
+            if (anons.some((l, i) => l !== orig[i])){ modoNuvem = undefined; laudoNuvem = undefined; }
+          }
+        }
+        let nuvemErr = null;
         try{
-          const errJson = await response.json();
-          if (errJson && typeof errJson.erro === "string") detalhe = errJson.erro.trim();
-        }catch(_){}
-        const err = new Error(detalhe || `A ponte local respondeu com erro (HTTP ${response.status}).`);
-        err.code = response.status === 504 ? "ia_timeout" : "ia_erro";
-        err.tempo = response.status === 504;
-        err.status = response.status;
-        throw err;
+          const resp = await fetch(nuvem.url + "/ia2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Tutu-Token": nuvem.token },
+            body: JSON.stringify({
+              texto: textoNuvem,
+              modelTier: options.modelTier || "balanced",
+              modelo: options.modelo || nuvem.modeloConversa,
+              thinking: options.thinking || nuvem.thinking,
+              ...(modoNuvem === "delta" && laudoNuvem ? { modo: "delta", laudo: laudoNuvem } : {})
+            }),
+            signal: controller.signal
+          });
+          if (resp.status === 401){
+            const err = new Error("Token da IA na nuvem recusado — confira em Configurações › IA.");
+            err.code = "ia_erro"; err.status = 401; err.authNuvem = true;
+            throw err;
+          }
+          if (!resp.ok){
+            let detalhe = "";
+            try{ const j = await resp.json(); if (typeof j?.erro === "string") detalhe = j.erro.trim(); }catch(_){}
+            const err = new Error(detalhe || `A IA na nuvem respondeu com erro (HTTP ${resp.status}).`);
+            err.code = resp.status === 504 ? "ia_timeout" : "ia_erro";
+            err.tempo = resp.status === 504; err.status = resp.status;
+            throw err;
+          }
+          const result = await resp.json();
+          const text = typeof result === "string" ? result : (result.text ?? result.texto);
+          if (typeof text !== "string" || !text.trim()){
+            const err = new Error("Resposta vazia da IA na nuvem.");
+            err.code = "empty_completion";
+            throw err;
+          }
+          options.onText?.({ text });
+          const motor = result.motor || "nuvem";
+          sample.ultimo = { motor, modelo: result.modelo || "", aviso: result.aviso || "" };
+          return { text, modo: result.modo, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "" };
+        }catch(err){
+          if (options.signal?.aborted || timedOut || err?.authNuvem) throw err;
+          nuvemErr = err;
+        }
+        try{
+          return await chamarPonteLocal(texto, options, controller);
+        }catch(_){
+          if (nuvemErr && (nuvemErr.code === "ia_timeout" || nuvemErr.code === "ia_erro" || nuvemErr.code === "empty_completion")) throw nuvemErr;
+          const error = new Error("IA na nuvem e ponte local indisponíveis.");
+          error.code = "ponte_indisponivel";
+          throw error;
+        }
       }
-      const result = await response.json();
-      const text = typeof result === "string" ? result : (result.text ?? result.texto);
-      if (typeof text !== "string" || !text.trim()){
-        const err = new Error("Resposta vazia da ponte local.");
-        err.code = "empty_completion";
-        throw err;
-      }
-      options.onText?.({ text });
-      const motor = result.motor || "claude";
-      sample.ultimo = { motor, modelo: result.modelo || "", aviso: result.aviso || "" };
-      return { text, modo: result.modo, truncated: Boolean(result.truncated), motor, modelo: result.modelo || "", aviso: result.aviso || "" };
+      return await chamarPonteLocal(texto, options, controller);
     }catch(e){
       if (options.signal?.aborted){
         const err = new Error("Pedido cancelado.");
@@ -177,7 +247,7 @@
         err.tempo = true;
         throw err;
       }
-      if (e && (e.code === "ia_timeout" || e.code === "ia_erro" || e.code === "empty_completion")) throw e;
+      if (e && (e.code === "bloqueado" || /^bloqueado/i.test(e.message || "") || e.code === "ponte_indisponivel" || e.code === "ia_timeout" || e.code === "ia_erro" || e.code === "empty_completion")) throw e;
       const error = new Error("Ponte local indisponível. Abra a ponte em 127.0.0.1:47831 para usar IA. As funções locais continuam disponíveis.");
       error.code = "ponte_indisponivel"; throw error;
     }finally{ clearTimeout(timeout); options.signal?.removeEventListener("abort", abort); }
@@ -190,6 +260,116 @@
   const PONTE_TOKEN_KEY = "tutu_ponte_token";
   const PONTE_URL_KEY = "tutu_ponte_url";
   const PONTE_ORIGEM_AUTORIZADA = "https://desktop-7q8eafr.tail37a2ed.ts.net";
+  const NUVEM_URL_KEY = "tutu_nuvem_url";
+  const NUVEM_TOKEN_KEY = "tutu_nuvem_token";
+  const NUVEM_MODELO_AUDIO_KEY = "tutu_nuvem_modelo_audio";
+  const NUVEM_MODELO_CONVERSA_KEY = "tutu_nuvem_modelo_conversa";
+  const NUVEM_THINKING_KEY = "tutu_nuvem_thinking";
+  const NUVEM_MODELOS = ["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite", "claude-haiku-5-5", "claude-sonnet-5-5"];
+  const NUVEM_THINKINGS = ["low", "medium"];
+  const normModeloNuvem = (m, def = "gemini-4-hydrogen") => NUVEM_MODELOS.includes(m) ? m : def;
+  const normThinkingNuvem = t => NUVEM_THINKINGS.includes(t) ? t : "low";
+  function validarNuvemUrl(raw, restritoPareamento = false){
+    try{
+      const u = new URL(String(raw || "").trim());
+      if (u.username || u.password || u.search || u.hash || u.pathname !== "/") return "";
+      if (u.protocol === "https:"){
+        if (restritoPareamento && !u.hostname.endsWith(".workers.dev")) return "";
+        return u.hostname.includes(".") ? u.origin : "";
+      }
+      if (u.protocol === "http:"){
+        const localPage = typeof location !== "undefined" && (location.hostname === "127.0.0.1" || location.hostname === "localhost");
+        if (localPage && (u.hostname === "127.0.0.1" || u.hostname === "localhost")) return u.origin;
+      }
+      return "";
+    }catch(_){ return ""; }
+  }
+  function lerNuvem(){
+    try{
+      const url = validarNuvemUrl(localStorage.getItem(NUVEM_URL_KEY) || "");
+      const token = (localStorage.getItem(NUVEM_TOKEN_KEY) || "").trim();
+      if (!url || !token) return null;
+      return {
+        url,
+        token,
+        modeloAudio: normModeloNuvem(localStorage.getItem(NUVEM_MODELO_AUDIO_KEY) || ""),
+        modeloConversa: normModeloNuvem(localStorage.getItem(NUVEM_MODELO_CONVERSA_KEY) || ""),
+        thinking: normThinkingNuvem(localStorage.getItem(NUVEM_THINKING_KEY) || "")
+      };
+    }catch(_){ return null; }
+  }
+  function salvarNuvem({ url, token, modeloAudio, modeloConversa, thinking } = {}){
+    const prev = lerNuvem();
+    const urlOk = validarNuvemUrl(url !== undefined ? url : (prev?.url || ""));
+    const tokRaw = token !== undefined ? String(token || "").trim() : "";
+    const tokOk = tokRaw || (urlOk && prev && urlOk === prev.url ? prev.token : "");
+    if (!urlOk || !tokOk) return false;
+    const ma = normModeloNuvem(modeloAudio !== undefined ? modeloAudio : (prev?.modeloAudio || ""));
+    const mc = normModeloNuvem(modeloConversa !== undefined ? modeloConversa : (prev?.modeloConversa || ""));
+    const th = normThinkingNuvem(thinking !== undefined ? thinking : (prev?.thinking || ""));
+    try{
+      localStorage.setItem(NUVEM_URL_KEY, urlOk);
+      localStorage.setItem(NUVEM_TOKEN_KEY, tokOk);
+      localStorage.setItem(NUVEM_MODELO_AUDIO_KEY, ma);
+      localStorage.setItem(NUVEM_MODELO_CONVERSA_KEY, mc);
+      localStorage.setItem(NUVEM_THINKING_KEY, th);
+    }catch(_){ return false; }
+    document.dispatchEvent(new CustomEvent("tutu-nuvem-mudou"));
+    return true;
+  }
+  function limparNuvem(){
+    try{
+      localStorage.removeItem(NUVEM_URL_KEY);
+      localStorage.removeItem(NUVEM_TOKEN_KEY);
+    }catch(_){}
+    document.dispatchEvent(new CustomEvent("tutu-nuvem-mudou"));
+  }
+  function nuvemStatus(){
+    const n = lerNuvem();
+    if (n) return { configurada: true, ...n };
+    try{
+      return {
+        configurada: false,
+        url: validarNuvemUrl(localStorage.getItem(NUVEM_URL_KEY) || ""),
+        modeloAudio: normModeloNuvem(localStorage.getItem(NUVEM_MODELO_AUDIO_KEY) || ""),
+        modeloConversa: normModeloNuvem(localStorage.getItem(NUVEM_MODELO_CONVERSA_KEY) || ""),
+        thinking: normThinkingNuvem(localStorage.getItem(NUVEM_THINKING_KEY) || "")
+      };
+    }catch(_){
+      return { configurada: false, url: "", modeloAudio: "gemini-4-hydrogen", modeloConversa: "gemini-4-hydrogen", thinking: "low" };
+    }
+  }
+  function nuvemLinkPareamento(){
+    const n = lerNuvem();
+    if (!n || !validarNuvemUrl(n.url, true)) return "";
+    const base = typeof location !== "undefined" && (location.hostname === "127.0.0.1" || location.hostname === "localhost")
+      ? (location.origin + location.pathname)
+      : "https://arturaragao.github.io/laudos-tutu-site/";
+    return `${base}#nuvem=${encodeURIComponent(n.token)}&nuvemUrl=${encodeURIComponent(n.url)}&ma=${encodeURIComponent(n.modeloAudio)}&mc=${encodeURIComponent(n.modeloConversa)}&th=${encodeURIComponent(n.thinking)}`;
+  }
+  async function testarNuvem(){
+    const n = lerNuvem();
+    if (!n) return { ok: false, erro: "IA na nuvem não configurada." };
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    const t0 = Date.now();
+    try{
+      const r = await fetch(n.url + "/health", {
+        method: "GET",
+        headers: { "X-Tutu-Token": n.token },
+        cache: "no-store",
+        signal: ctl.signal
+      });
+      const ms = Date.now() - t0;
+      const dados = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, ms, status: r.status, erro: dados?.erro || (r.status === 401 ? "Token recusado pelo Worker." : `HTTP ${r.status}`) };
+      return { ok: true, ms, dados };
+    }catch(e){
+      return { ok: false, ms: Date.now() - t0, erro: e?.name === "AbortError" ? "Tempo esgotado (8 s)." : "Não foi possível alcançar a URL do Worker." };
+    }finally{
+      clearTimeout(timer);
+    }
+  }
   function validarPonteUrl(raw){
     try{
       const u = new URL(String(raw || "").trim());
@@ -229,6 +409,27 @@
       const h = location.hash || "";
       if (!h || h.length < 2) return;
       const params = new URLSearchParams(h.slice(1));
+      if (params.has("nuvem") && params.has("nuvemUrl")){
+        const tok = String(params.get("nuvem") || "").trim();
+        const urlOk = validarNuvemUrl(params.get("nuvemUrl"), true);
+        if (!tok || !urlOk) return;
+        if (typeof confirm === "function" && !confirm("Conectar este aparelho à IA na nuvem?")) {
+          try{ history.replaceState(null, "", location.pathname + location.search); }catch(_){}
+          return;
+        }
+        if (!salvarNuvem({
+          url: urlOk,
+          token: tok,
+          modeloAudio: params.get("ma") || undefined,
+          modeloConversa: params.get("mc") || undefined,
+          thinking: params.get("th") || undefined
+        })) return;
+        try{ history.replaceState(null, "", location.pathname + location.search); }catch(_){}
+        pontePareadaMsg = "IA na nuvem conectada ✓";
+        const st = document.getElementById("status");
+        if (st) st.textContent = pontePareadaMsg;
+        return;
+      }
       if (!params.has("ponte") || !params.has("ponteUrl")) return;
       const tok = String(params.get("ponte") || "").trim();
       const urlOk = validarPonteUrl(params.get("ponteUrl"));
@@ -360,7 +561,39 @@
       options.signal?.removeEventListener("abort", abort);
     }
   }
-  async function directStream({ exame, mascara, texto } = {}, onDelta, options = {}){
+  async function directStream({ exame, mascara, texto, leve, salvarFila, nome } = {}, onDelta, options = {}){
+    const nuvem = !options.apenasLocal ? lerNuvem() : null;
+    if (nuvem){
+      const nuvemMs = Number(options.nuvemTimeoutMs) > 0 ? Number(options.nuvemTimeoutMs) : 6000;
+      const bodyNuvem = JSON.stringify({
+        exame: exame || "",
+        mascara: mascara || "",
+        texto: texto || "",
+        leve: !!leve,
+        modelo: options.modelo || nuvem.modeloAudio,
+        thinking: options.thinking || nuvem.thinking,
+        salvarFila: !!salvarFila,
+        nome: nome || ""
+      });
+      try{
+        return await tentarDirectEndpoint(
+          nuvem.url + "/direct",
+          { "Content-Type": "application/json", "X-Tutu-Token": nuvem.token },
+          nuvemMs,
+          bodyNuvem,
+          onDelta,
+          options
+        );
+      }catch(e){
+        if (e?.code === "cancelled") throw e;
+        if (e?.status === 401){
+          const err = new Error("Token da IA na nuvem recusado — confira em Configurações › IA.");
+          err.code = "nuvem_nao_autorizada";
+          err.status = 401;
+          throw err;
+        }
+      }
+    }
     const bodyStr = JSON.stringify({ exame: exame || "", mascara: mascara || "", texto: texto || "" });
     const localMs = Number(options.connectTimeoutMs) > 0 ? Number(options.connectTimeoutMs) : 1500;
     const remoteMs = Number(options.remoteConnectTimeoutMs) > 0 ? Number(options.remoteConnectTimeoutMs) : 2500;
@@ -676,6 +909,7 @@
   }
   window.tutuSite = { ready, db, importBackup, exportBackup, mergeBank, saveBankNT, sync, gh, setToken, pedirChave,
     onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream,
+    nuvemStatus, salvarNuvem, limparNuvem, testarNuvem, nuvemLinkPareamento,
     ponteStatus: () => { const p = lerPonte(); return { pareada: !!p, url: p?.url || "" }; }, desparearPonte };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
   // Fonte: repo de dados (cache local) > bancos/*.js (reserva, só no PC) + o que foi importado/guardado no IndexedDB.
@@ -706,7 +940,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=0afc6c0"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=e6b7220"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();

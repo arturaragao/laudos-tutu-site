@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "0afc6c0 · 22/11 19:32";
+window.__SITE_VERSION__ = "e6b7220 · 23/11 21:34";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -8892,7 +8892,9 @@ window.tutuSite.appReady = true;
       const fresh = filtrar(texto.value, ex); if (!fresh) throw Error("Dite ou digite os achados.");
       const nPalavras = (fresh.trim().match(/\S+/g) || []).length;
       const desktop = !ui.isMobile();
-      const usarDirect = desktop || modoIA === "direct" || (modoIA === "auto" && nPalavras <= 80);
+      const nuvemAtiva = !!T.nuvemStatus?.()?.configurada;
+      const usarDirect = desktop || nuvemAtiva || modoIA === "direct" || (modoIA === "auto" && nPalavras <= 80);
+      const usarLeve = modoIA === "direct" && nPalavras <= 80;
       let avisoPonte = "";
       if (desktop) {
         const indicador = el("p", { id: "audioMontando", class: "audio-montando", role: "status" }, "IA montando o laudo…");
@@ -8902,7 +8904,10 @@ window.tutuSite.appReady = true;
           if (!ui.initialized || genBusy || corrBusy || typeof T.directStream !== "function") throw Error("Ponte ocupada ou indisponível.");
           const mascara = current.id === ex.id && modelIntact() ? maskOf(current) : maskOf(ex);
           let acumulado = "";
-          const res = await T.directStream({ exame: ex.id, mascara, texto: fresh, modo: "completo" }, (_delta, acum) => { acumulado = acum; });
+          const res = await T.directStream({ exame: ex.id, mascara, texto: fresh, modo: "completo", leve: usarLeve }, (_delta, acum) => {
+            acumulado = acum;
+            if (acum && indicador.textContent === "IA montando o laudo…") indicador.textContent = "IA montando o laudo… (escrevendo)";
+          });
           const final = (res?.laudo || acumulado || "").trim();
           if (!final) throw Error("Resposta vazia do Direct.");
           if (!ui.audioTarget(ex)) throw Error("A folha está ocupada.");
@@ -8911,17 +8916,18 @@ window.tutuSite.appReady = true;
           ui.registrarIA?.(laudoTagged(), fresh, { direct: true });
           await ui.flush();
           texto.value = ""; enviado = true; atualizarUI();
-          setStatus("Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
+          setStatus(res?.motor === "nuvem" ? `Laudo organizado pela IA (${res.modelo || "nuvem"}). Confira os trechos marcados [?] e copie.` : "Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
           dizer("Laudo pronto ✓");
           return;
         } catch (err) {
-          avisoPonte = err?.code === "ponte_nao_autorizada" ? "Token da ponte inválido — parear de novo." : "Direct indisponível ou tempo esgotado.";
+          avisoPonte = err?.code === "nuvem_nao_autorizada" ? "Token da IA na nuvem recusado — confira em Configurações › IA."
+            : err?.code === "ponte_nao_autorizada" ? "Token da ponte inválido — parear de novo." : "Direct indisponível ou tempo esgotado.";
           dizer(avisoPonte + " Enviando para a fila; texto preservado.");
           if (!dialog.open) dialog.showModal();
         } finally { indicador.remove(); }
       }
       if (!desktop && usarDirect && typeof T.directStream === "function" && ui.initialized && !genBusy && !corrBusy) {
-        dizer("Gerando laudo na ponte…");
+        dizer(nuvemAtiva ? "Gerando laudo na nuvem…" : "Gerando laudo na ponte…");
         let casoCriado = false, abaCriadaId = null, ultimoTexto = "", renderTimer = 0;
         const aplicarFolha = txt => {
           if (!casoCriado) {
@@ -8935,7 +8941,7 @@ window.tutuSite.appReady = true;
         };
         try {
           const res = await T.directStream(
-            { exame: ex.id, mascara: maskOf(ex), texto: fresh },
+            { exame: ex.id, mascara: maskOf(ex), texto: fresh, leve: usarLeve, salvarFila: nuvemAtiva && (modoIA === "completo" || (modoIA === "auto" && nPalavras > 80)), nome: ex.name },
             (_delta, acum) => {
               ultimoTexto = acum;
               if (!casoCriado) {
@@ -8957,7 +8963,7 @@ window.tutuSite.appReady = true;
           renderAlerts();
           ui.registrarIA?.(laudoTagged(), fresh, { direct: true });
           await ui.flush();
-          setStatus("Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
+          setStatus(res?.motor === "nuvem" ? `Laudo organizado pela IA (${res.modelo || "nuvem"}). Confira os trechos marcados [?] e copie.` : "Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
           texto.value = ""; enviado = true; atualizarUI(); dizer("Laudo pronto ✓");
           return;
         } catch (err) {
@@ -8967,12 +8973,16 @@ window.tutuSite.appReady = true;
             else ui.closeCurrent?.();
             if (!dialog.open) dialog.showModal();
           }
-          if (err?.code === "ponte_nao_autorizada") {
+          if (err?.code === "nuvem_nao_autorizada") {
+            avisoPonte = "Token da IA na nuvem recusado — confira em Configurações › IA.";
+            setStatus?.("Token da IA na nuvem recusado — confira em Configurações › IA.", "err");
+            dizer(avisoPonte + " Enviando para a fila…");
+          } else if (err?.code === "ponte_nao_autorizada") {
             avisoPonte = "Token da ponte inválido — parear de novo.";
             setStatus?.("Ponte não autorizada — parear de novo.", "err");
             dizer("Ponte não autorizada (parear de novo) — enviando para a fila…");
           } else {
-            dizer("Ponte indisponível — enviando para a fila…");
+            dizer((nuvemAtiva ? "IA na nuvem" : "Ponte") + " indisponível — enviando para a fila…");
           }
         }
       }
@@ -9736,6 +9746,13 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     const prompt = montarAnonimo();   // lança "bloqueado" antes de qualquer envio
     const caminho = "fila-conversa/" + crypto.randomUUID() + ".json";
     await G.putJson(caminho, { prompt, modelTier: "balanced", ia: "pendente", criado: new Date().toISOString() }, null, "Conversar: pedido anônimo");
+    const dispatchTimer = setTimeout(() => {
+      fetch("https://api.github.com/repos/arturaragao/fila-ia/actions/workflows/fila.yml/dispatches", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + G.token, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: "main" })
+      }).catch(() => {});
+    }, 130000);
     dizer("Sem a ponte do PC: enviado pela fila (até ~3 min)…");
     const fim = Date.now() + fila.limite;
     try {
@@ -9747,10 +9764,36 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
         if (typeof d?.resposta === "string" && d.resposta.trim()) return { text: d.resposta, motor: d.motor || "claude", aviso: "pela fila" };
       }
       throw Error("A IA não respondeu em 6 min pela fila; o laudo ficou como estava. Tente de novo.");
-    } finally { await apagarFila(caminho); }
+    } finally { clearTimeout(dispatchTimer); await apagarFila(caminho); }
   }
-  /* Com a ponte: nada muda (local, sem GitHub). Sem ponte (ou sem sample): fila. */
+  /* Com a ponte ou nuvem: local/nuvem, sem GitHub. Sem ponte (ou sem sample): fila. */
   async function pedirIA(prompt, signal, montarAnonimo, delta, pedidoSalvo, reprocessando = false) {
+    const nuvemAtiva = !!T?.nuvemStatus?.()?.configurada;
+    if (nuvemAtiva && pedidoSalvo?.rota !== "fila") {
+      if (typeof sample !== "function") {
+        if (reprocessando) throw Error("Ponte indisponível para reprocessar.");
+      } else {
+        const promptAnon = montarAnonimo();
+        let laudoDelta = null;
+        if (delta) {
+          const orig = String(delta).split("\n");
+          const anons = orig.map(l => l.trim() ? anon(l) : "");
+          if (!anons.some((l, i) => l !== orig[i])) laudoDelta = delta;
+          else if (pedidoSalvo) pedidoSalvo.delta = false;
+        }
+        try {
+          if (laudoDelta) {
+            try { return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", anonimizado: true, modo: "delta", laudo: laudoDelta, laudoAnonimizado: true }); }
+            catch (e) { if (signal.aborted || e?.name === "AbortError" || e?.code === "ponte_indisponivel" || e?.code === "bloqueado" || /^bloqueado/i.test(e?.message || "")) throw e; if (pedidoSalvo) pedidoSalvo.delta = false; }
+          }
+          return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", anonimizado: true });
+        } catch (e) {
+          if (e?.code !== "ponte_indisponivel" || reprocessando) throw e;
+        }
+      }
+      if (pedidoSalvo) pedidoSalvo.rota = "fila";
+      return viaFila(montarAnonimo, signal);
+    }
     if (reprocessando && pedidoSalvo?.rota !== "fila") {
       if (typeof sample !== "function") throw Error("Ponte indisponível para reprocessar.");
       return sample(prompt, { signal, cache: false, modelTier: "balanced", ...(delta ? { modo: "delta", laudo: delta } : {}) });
@@ -9796,7 +9839,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
       let patch = r?.modo === "delta" && baseDelta ? D.aplicar(draft, r.text) : null;
       if (repetir && r?.modo === "delta" && !patch) throw Error("A resposta delta veio fora do formato; o laudo ficou como estava.");
       if (r?.modo === "delta" && !patch) { pedidoIA.delta = false; r = await pedirIA(prompt, ctlConversa.signal, anonimo, null, pedidoIA); }
-      const motor = r?.motor === "antigravity" ? "Antigravity" : "Claude", secs = ((performance.now() - t0) / 1000).toFixed(0);
+      const motor = r?.motor === "nuvem" ? (r?.modelo || "IA nuvem") : r?.motor === "antigravity" ? "Antigravity" : "Claude", secs = ((performance.now() - t0) / 1000).toFixed(0);
       const { regra, resto } = C.extrairRegra(r?.text || "");
       lockSheet(false);
       if (laudoTagged() !== draft) { dizer("A folha mudou enquanto a IA respondia: nada foi aplicado. Envie de novo."); return; }
@@ -14103,3 +14146,181 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuConceitos = api;
 })(globalThis);
+
+/* Configurações › IA: conexão com Cloudflare Worker + Gemini API (24/7, sem PC ligado). */
+(() => {
+  "use strict";
+  if (typeof document === "undefined") return;
+  const ui = window.tutuV2, T = window.tutuSite;
+  if (!ui || !T?.nuvemStatus) return;
+  const el = ui.el, button = ui.button;
+
+  const MODELO_OPCOES = [
+    ["gemini-4-hydrogen", "Gemini 4 Hydrogen (padrão)"],
+    ["gemini-3.8-flash", "Gemini 3.8 Flash"],
+    ["gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite (ultra rápido)"],
+    ["claude-haiku-5-5", "Claude Haiku 5.5 (chave Anthropic)"],
+    ["claude-sonnet-5-5", "Claude Sonnet 5.5 (chave Anthropic)"]
+  ];
+  const THINKING_OPCOES = [
+    ["low", "Baixo (rápido — padrão)"],
+    ["medium", "Médio (casos complexos)"]
+  ];
+
+  const preencherSelect = (sel, opcoes) => {
+    for (const [val, label] of opcoes) sel.append(el("option", { value: val }, label));
+    return sel;
+  };
+  const campo = (rotulo, ctrl) => {
+    const lbl = el("label", {}, el("span", {}, rotulo));
+    lbl.append(ctrl);
+    return lbl;
+  };
+
+  const sec = el("section", { id: "nuvemSec", class: "v2-set-card", "data-aba": "ia" });
+  const statusEl = el("p", { id: "nuvemStatus", class: "nuvem-status", role: "status", "aria-live": "polite" });
+  const urlInput = el("input", {
+    id: "nuvemUrl",
+    type: "url",
+    class: "field",
+    autocomplete: "off",
+    spellcheck: "false",
+    placeholder: "https://laudos-ia.seu-subdominio.workers.dev",
+    "aria-label": "URL do Worker"
+  });
+  const tokenInput = el("input", {
+    id: "nuvemToken",
+    type: "password",
+    class: "field",
+    autocomplete: "off",
+    spellcheck: "false",
+    placeholder: "Cole o token secreto do Worker",
+    "aria-label": "Token de acesso"
+  });
+  const modeloAudioSel = preencherSelect(el("select", { id: "nuvemModeloAudio", class: "field", "aria-label": "Modelo para Áudio" }), MODELO_OPCOES);
+  const modeloConversaSel = preencherSelect(el("select", { id: "nuvemModeloConversa", class: "field", "aria-label": "Modelo para Conversar" }), MODELO_OPCOES);
+  const thinkingSel = preencherSelect(el("select", { id: "nuvemThinking", class: "field", "aria-label": "Raciocínio Gemini" }), THINKING_OPCOES);
+
+  const grid = el("div", { class: "form-grid nuvem-grid" });
+  grid.append(
+    campo("URL do Worker", urlInput),
+    campo("Token de acesso (APP_TOKEN)", tokenInput),
+    campo("Modelo para Áudio", modeloAudioSel),
+    campo("Modelo para Conversar", modeloConversaSel),
+    campo("Raciocínio Gemini", thinkingSel)
+  );
+
+  const msgEl = el("p", { id: "nuvemMsg", class: "voz-msg", role: "status", "aria-live": "polite" });
+  const dizer = (t, err = false) => {
+    msgEl.textContent = t;
+    msgEl.style.color = err ? "var(--crit)" : "";
+  };
+
+  function sincronizarUI() {
+    const st = T.nuvemStatus();
+    urlInput.value = st.url || "";
+    tokenInput.placeholder = st.configurada ? "Token salvo (cole apenas para trocar)" : "Cole o token secreto do Worker";
+    modeloAudioSel.value = st.modeloAudio || "gemini-4-hydrogen";
+    modeloConversaSel.value = st.modeloConversa || "gemini-4-hydrogen";
+    thinkingSel.value = st.thinking || "low";
+    statusEl.dataset.ativo = st.configurada ? "1" : "0";
+    statusEl.textContent = st.configurada
+      ? `Conectada · ${st.url} · Áudio: ${st.modeloAudio}`
+      : "Não configurada (usando ponte local ou fila do GitHub).";
+    linkBtn.disabled = !st.configurada;
+    limparBtn.disabled = !st.configurada;
+  }
+
+  function salvarAtual() {
+    const ok = T.salvarNuvem({
+      url: urlInput.value,
+      token: tokenInput.value,
+      modeloAudio: modeloAudioSel.value,
+      modeloConversa: modeloConversaSel.value,
+      thinking: thinkingSel.value
+    });
+    if (!ok) {
+      dizer("Informe uma URL https:// válida e o token de acesso.", true);
+      return false;
+    }
+    tokenInput.value = "";
+    sincronizarUI();
+    return true;
+  }
+
+  const salvarBtn = button("Salvar", () => {
+    if (salvarAtual()) dizer("IA na nuvem salva ✓");
+  }, { id: "nuvemSalvar" });
+
+  const testarBtn = button("Testar conexão", async () => {
+    const st = T.nuvemStatus();
+    if (!st.configurada || tokenInput.value.trim() || (urlInput.value.trim() && urlInput.value.trim() !== st.url)) {
+      if (!salvarAtual()) return;
+    }
+    testarBtn.disabled = true;
+    dizer("Testando conexão…");
+    try {
+      const res = await T.testarNuvem();
+      if (!res.ok) {
+        dizer(res.erro || "Falha ao conectar ao Worker.", true);
+        return;
+      }
+      const provs = res.dados?.provedores || {};
+      const ativos = Object.entries(provs).filter(([, on]) => !!on).map(([k]) => k);
+      dizer(`Conectado em ${res.ms} ms` + (ativos.length ? ` · provedores: ${ativos.join(", ")}` : "") + " ✓");
+    } finally {
+      testarBtn.disabled = false;
+    }
+  }, { id: "nuvemTestar" });
+
+  const linkBtn = button("Copiar link p/ celular/PC", async () => {
+    const link = T.nuvemLinkPareamento?.();
+    if (!link) {
+      dizer("Link de pareamento é gerado para URL *.workers.dev salva.", true);
+      return;
+    }
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+        dizer("Link copiado! Abra no celular ou outro PC para conectar com 1 toque.");
+        return;
+      }
+    } catch (_) {}
+    if (typeof prompt === "function") prompt("Copie o link para abrir no celular ou outro PC:", link);
+    dizer("Use o link exibido para conectar outro aparelho.");
+  }, { id: "nuvemCopiarLink" });
+
+  const limparBtn = button("Desconectar", () => {
+    T.limparNuvem();
+    urlInput.value = "";
+    tokenInput.value = "";
+    sincronizarUI();
+    dizer("IA na nuvem desconectada neste navegador.");
+  }, { id: "nuvemLimpar" });
+
+  const actions = el("div", { class: "v2-set-actions" });
+  actions.append(salvarBtn, testarBtn, linkBtn, limparBtn);
+
+  sec.append(
+    el("h2", {}, "IA na nuvem (24/7, sem PC ligado)"),
+    el("p", { class: "meta" }, "Conecta o Áudio e o Conversar diretamente ao seu Cloudflare Worker com Gemini API, em segundos, em qualquer computador ou celular."),
+    statusEl,
+    grid,
+    actions,
+    msgEl
+  );
+
+  const paneIa = document.getElementById("setPane-ia");
+  if (paneIa) {
+    const head = paneIa.querySelector(".v2-set-pane-head");
+    if (head) head.after(sec);
+    else paneIa.prepend(sec);
+  } else {
+    const extras = document.querySelector(".v2-settings-extras");
+    if (extras) extras.append(sec);
+    ui.addSetting?.(sec, "ia");
+  }
+
+  document.addEventListener("tutu-nuvem-mudou", sincronizarUI);
+  sincronizarUI();
+})();

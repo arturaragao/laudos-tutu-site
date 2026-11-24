@@ -1036,3 +1036,7 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
 #leoradDialog .leorad-list, #leoradDialog .leorad-actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
 #leoradPreview { white-space:pre-wrap; overflow-wrap:anywhere; border:1px dashed var(--border, #d0d7de); border-radius:8px; padding:14px; font:inherit; }
 #leoradDialog output { display:block; font-weight:600; }
+/* IA na nuvem (Configurações › IA · 129-v2-ia-nuvem.js). */
+#nuvemSec .nuvem-status { margin:0; padding:7px 11px; border-radius:9px; font-size:12.5px; line-height:1.4; background:var(--panel); border:1px solid var(--line); color:var(--muted); }
+#nuvemSec .nuvem-status[data-ativo="1"] { background:var(--p-green); border-color:color-mix(in srgb, var(--changed) 30%, var(--line)); color:var(--text); font-weight:500; }
+#nuvemSec .voz-msg { margin:0; font-size:12.5px; color:var(--muted); min-height:1.2em; }
