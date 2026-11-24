@@ -1023,23 +1023,219 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
 .audio-montando { padding: .65rem 1rem; color: var(--accent, #2563eb); animation: audio-montando 1.6s ease-in-out infinite; }
 @keyframes audio-montando { 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { .audio-montando { animation: none; } }
-/* Fichas privadas LeoRad. */
-#leoradDialog { position:fixed; inset:5vh 0 auto; z-index:10000; width:min(820px, calc(100vw - 24px)); max-height:85dvh; overflow:auto; padding:20px; border:1px solid var(--border, #d0d7de); border-radius:10px; background:var(--bg, #fff); color:var(--text, #1f2328); box-shadow:0 10px 40px #0004; }
-#leoradDialog::backdrop { background:#0005; }
-#leoradDialog h2 { margin-top:0; }
-#leoradDialog fieldset { min-width:0; border:1px solid var(--border, #d0d7de); border-radius:8px; margin:12px 0; padding:14px; }
-#leoradDialog [data-field] { margin:10px 0; }
-#leoradDialog label { display:block; margin-bottom:4px; }
-#leoradDialog input:not([type=checkbox]), #leoradDialog select { width:100%; padding:8px; font:inherit; }
-#leoradDialog button { padding:8px 12px; cursor:pointer; }
-#leoradDialog button:disabled { cursor:default; opacity:.5; }
-#leoradDialog .leorad-list, #leoradDialog .leorad-actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
-#leoradPreview { white-space:pre-wrap; overflow-wrap:anywhere; border:1px dashed var(--border, #d0d7de); border-radius:8px; padding:14px; font:inherit; }
-#leoradDialog output { display:block; font-weight:600; }
-/* IA na nuvem (Configurações › IA · 129-v2-ia-nuvem.js). */
+/* Fichas privadas LeoRad (120-v2-estruturados.js) */
+#leoradDialog {
+  position:fixed; inset:0; margin:auto; z-index:10000;
+  width:min(1060px, calc(100vw - 24px)); max-height:90dvh;
+  padding:0; border:1px solid var(--line, #d0d7de); border-radius:16px;
+  background:var(--paper, #fff); color:var(--text, #1f2328);
+  box-shadow:0 22px 60px rgba(0, 0, 0, .32), 0 0 0 100vmax rgba(15, 18, 24, .38);
+  overflow:hidden;
+}
+#leoradDialog[open] { display:flex; flex-direction:column; }
+#leoradDialog[data-view="lista"] { width:min(760px, calc(100vw - 24px)); max-height:82dvh; }
+#leoradDialog::backdrop { background:rgba(15, 18, 24, .52); backdrop-filter:blur(3px); }
+#leoradDialog .leorad-head {
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:14px 18px; border-bottom:1px solid var(--line, #d0d7de);
+  background:var(--panel, #f6f4ef);
+}
+#leoradDialog .leorad-head-left, #leoradDialog .leorad-head-right { display:flex; align-items:center; gap:10px; min-width:0; }
+#leoradDialog h2 { margin:0; font-size:17px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#leoradDialog output {
+  display:inline-flex; align-items:center; padding:4px 10px; border-radius:999px;
+  background:var(--p-blue, #e8f0fb); color:var(--accent, #2563eb);
+  border:1px solid color-mix(in srgb, var(--accent, #2563eb) 35%, transparent);
+  font-size:13px; font-weight:700; white-space:nowrap;
+}
+#leoradDialog output[hidden], #leoradDialog [hidden] { display:none !important; }
+#leoradSearch {
+  margin:14px 18px 8px; padding:10px 14px; border-radius:10px;
+  border:1px solid var(--line, #d0d7de); background:var(--ground, #fff);
+  color:inherit; font:inherit; font-size:14.5px; box-sizing:border-box; width:calc(100% - 36px);
+}
+#leoradDialog .leorad-list {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
+  gap:10px; padding:8px 18px 18px; overflow-y:auto; margin:0;
+}
+#leoradDialog .leorad-item-card {
+  display:flex; flex-direction:column; gap:3px; padding:10px 12px;
+  border:1px solid var(--line, #d0d7de); border-radius:11px;
+  background:var(--panel, #faf8f4); transition:border-color .12s, transform .08s, box-shadow .12s;
+}
+#leoradDialog .leorad-item-card:hover, #leoradDialog .leorad-item-card:focus-within {
+  border-color:var(--accent, #8a5a2b); box-shadow:0 4px 12px rgba(0, 0, 0, .08);
+}
+#leoradDialog .leorad-item-btn {
+  text-align:left; background:transparent; border:0; padding:0; font:inherit; font-weight:600; font-size:14px; color:inherit; cursor:pointer;
+}
+#leoradDialog .leorad-item-btn:focus { outline:none; }
+#leoradDialog .leorad-item-meta { font-size:11.5px; color:var(--muted, #666); }
+#leoradDialog .leorad-grid {
+  display:grid; grid-template-columns:minmax(0, 1.15fr) minmax(300px, .85fr);
+  gap:0; min-height:0; flex:1 1 auto; overflow:hidden;
+}
+#leoradDialog .leorad-form-col { padding:14px 18px; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
+#leoradDialog .leorad-prev-col {
+  padding:14px 18px; border-left:1px solid var(--line, #d0d7de);
+  background:var(--panel, #faf8f4); display:flex; flex-direction:column; gap:10px; min-height:0; overflow-y:auto;
+}
+#leoradDialog .leorad-prev-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+#leoradDialog fieldset { min-width:0; border:1px solid var(--line, #d0d7de); border-radius:11px; margin:0 0 10px; padding:12px 14px; background:color-mix(in srgb, var(--panel, #f8f6f2) 45%, transparent); }
+#leoradDialog fieldset > legend { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--accent, #8a5a2b); padding:0 6px; }
+#leoradDialog .leorad-field { position:relative; margin:8px 0; }
+#leoradDialog .leorad-field:first-of-type { margin-top:2px; }
+#leoradDialog label { display:block; margin-bottom:5px; font-size:12.5px; font-weight:600; color:var(--text); }
+#leoradDialog input:not([type=checkbox]), #leoradDialog select {
+  box-sizing:border-box; width:100%; padding:7px 10px; font:inherit; font-size:13.5px;
+  border:1px solid var(--line, #d0d7de); border-radius:8px; background:var(--paper, #fff); color:inherit;
+}
+#leoradDialog .leorad-sr-select {
+  position:absolute !important; right:2px; top:2px; width:16px !important; height:16px !important;
+  opacity:0.01 !important; pointer-events:none; padding:0 !important; margin:0 !important; border:0 !important;
+}
+#leoradDialog .leorad-chips { display:flex; flex-wrap:wrap; gap:6px; }
+#leoradDialog .leorad-chip {
+  display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:8px;
+  border:1px solid var(--line, #d0d7de); background:var(--paper, #fff); color:var(--text);
+  font:inherit; font-size:12.5px; cursor:pointer; transition:all .1s;
+}
+#leoradDialog .leorad-chip:hover { border-color:var(--accent, #8a5a2b); }
+#leoradDialog .leorad-chip:focus-visible { outline:2px solid var(--accent, #8a5a2b); outline-offset:1px; }
+#leoradDialog .leorad-chip.selected {
+  background:var(--accent, #8a5a2b); color:var(--accent-ink, #fff);
+  border-color:var(--accent, #8a5a2b); font-weight:600;
+}
+#leoradDialog .leorad-chip-pts { font-size:10.5px; opacity:.82; padding:0 4px; border-radius:999px; background:rgba(0,0,0,.1); }
+#leoradDialog .leorad-chip.selected .leorad-chip-pts { background:rgba(255,255,255,.22); }
+#leoradDialog .leorad-dim-row {
+  display:flex; flex-wrap:wrap; align-items:flex-end; gap:6px; margin:8px 0;
+  padding:8px 10px; border:1px dashed var(--line, #d0d7de); border-radius:9px; background:var(--paper, #fff);
+}
+#leoradDialog .leorad-field-dim { flex:1 1 78px; min-width:74px; margin:0 !important; }
+#leoradDialog .leorad-field-dim label { font-size:11.5px; margin-bottom:3px; color:var(--muted); }
+#leoradDialog .leorad-input-wrap { display:flex; align-items:center; gap:5px; }
+#leoradDialog .leorad-field-dim input { padding:5px 7px; text-align:center; font-weight:600; }
+#leoradDialog .leorad-unit { font-size:11.5px; color:var(--muted); white-space:nowrap; }
+#leoradDialog .leorad-dim-sep { padding-bottom:6px; color:var(--muted); font-weight:700; }
+#leoradDialog .leorad-check-row { display:flex; align-items:center; gap:8px; padding:4px 0; }
+#leoradDialog .leorad-check-row label { margin:0; cursor:pointer; font-weight:500; }
+#leoradDialog .leorad-check-row input[type=checkbox] { width:16px; height:16px; accent-color:var(--accent, #8a5a2b); cursor:pointer; }
+#leoradDialog .leorad-btn-pri, #leoradDialog .leorad-btn-sec {
+  padding:8px 14px; border-radius:9px; font:inherit; font-size:13.5px; font-weight:600; cursor:pointer;
+}
+#leoradDialog .leorad-btn-pri { background:var(--accent, #8a5a2b); color:var(--accent-ink, #fff); border:1px solid transparent; }
+#leoradDialog .leorad-btn-sec { background:var(--paper, #fff); color:var(--text); border:1px solid var(--line, #d0d7de); }
+#leoradDialog .leorad-btn-sm { padding:5px 10px; font-size:12px; margin-top:4px; }
+#leoradDialog button:disabled { cursor:default; opacity:.45; }
+#leoradDialog .leorad-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; padding-top:8px; }
+#leoradDialog .leorad-actions .leorad-btn-pri { flex:1 1 auto; }
+#leoradPreview {
+  white-space:pre-wrap; overflow-wrap:anywhere; border:1px solid var(--line, #d0d7de); border-radius:10px;
+  padding:14px; background:var(--paper, #fff); font-family:Arial,Helvetica,sans-serif; font-size:13px; line-height:1.4;
+  min-height:140px; flex:1 1 auto; overflow-y:auto;
+}
+#leoradDialog .leorad-status { margin:0; font-size:12px; color:var(--changed, #1b6b2a); min-height:1.1em; }
+#leoradDialog .leorad-kbd-hint { margin:2px 0 0; font-size:11.5px; color:var(--muted); }
+@media (max-width:780px) {
+  #leoradDialog .leorad-grid { grid-template-columns:1fr; overflow-y:auto; }
+  #leoradDialog .leorad-form-col, #leoradDialog .leorad-prev-col { overflow:visible; }
+  #leoradDialog .leorad-prev-col { border-left:0; border-top:1px solid var(--line, #d0d7de); }
+}
+
+/* IA na nuvem e monitor de uso (Configurações › IA · 129-v2-ia-nuvem.js). */
 #nuvemSec .nuvem-status { margin:0; padding:7px 11px; border-radius:9px; font-size:12.5px; line-height:1.4; background:var(--panel); border:1px solid var(--line); color:var(--muted); }
 #nuvemSec .nuvem-status[data-ativo="1"] { background:var(--p-green); border-color:color-mix(in srgb, var(--changed) 30%, var(--line)); color:var(--text); font-weight:500; }
-#nuvemSec .voz-msg { margin:0; font-size:12.5px; color:var(--muted); min-height:1.2em; }
+#nuvemSec .voz-msg, #nuvemUsoSec .voz-msg { margin:0; font-size:12.5px; color:var(--muted); min-height:1.2em; }
+#nuvemUsoSec .uso-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+#nuvemUsoSec .uso-head h2 { margin:0; }
+#nuvemUsoSec .uso-barra-wrap { height:10px; border-radius:999px; background:var(--panel); border:1px solid var(--line); overflow:hidden; margin:4px 0; }
+#nuvemUsoSec .uso-barra-fill { height:100%; width:0; background:var(--changed, #2e7d32); transition:width .25s ease; }
+#nuvemUsoSec .uso-barra-wrap[data-alerta="alto"] .uso-barra-fill { background:#d99b00; }
+#nuvemUsoSec .uso-barra-wrap[data-alerta="bloqueado"] .uso-barra-fill { background:var(--crit, #c62828); }
+#nuvemUsoSec .uso-resumo { margin:2px 0 4px; font-size:13px; font-weight:600; }
+#nuvemUsoSec .uso-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:8px; }
+#nuvemUsoSec .uso-card { display:flex; flex-direction:column; gap:2px; padding:9px 11px; border-radius:10px; background:var(--panel); border:1px solid var(--line); }
+#nuvemUsoSec .uso-card-lbl { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+#nuvemUsoSec .uso-card strong { font-size:15px; }
+#nuvemUsoSec .uso-card small { font-size:11.5px; color:var(--muted); }
+#nuvemUsoSec .uso-det { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:7px 10px; }
+#nuvemUsoSec .uso-det summary { cursor:pointer; font-size:12.5px; font-weight:600; }
+#nuvemUsoSec .uso-det-body { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:8px; margin-top:8px; font-size:12px; }
+#nuvemUsoSec .uso-det-grp { display:flex; flex-direction:column; gap:2px; }
+#nuvemUsoSec .uso-chk { display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer; }
+#nuvemUsoSec .uso-spend-link { font-size:12.5px; color:var(--accent); align-self:center; margin-left:auto; }
+
+/* Campos obrigatórios [<>] em destaque forte (122-v2-marcador.js) */
+::highlight(tutu-obrigatorio) {
+  background:#ff5722;
+  color:#ffffff;
+  text-decoration:wavy underline #7f0000;
+}
+body.tutu-v2.sepia-night ::highlight(tutu-obrigatorio) {
+  background:#e65100;
+  color:#fff8e1;
+  text-decoration:wavy underline #ffcc80;
+}
+.v2-obrig-pill {
+  display:inline-flex; align-items:center; gap:4px;
+  border:1px solid #d84315 !important;
+  background:#ffebe5 !important;
+  color:#9f2400 !important;
+  border-radius:999px !important;
+  padding:2px 9px !important;
+  font-size:12px !important;
+  font-weight:700 !important;
+  margin-left:6px;
+  cursor:pointer;
+}
+body.tutu-v2.sepia-night .v2-obrig-pill {
+  background:#5c200b !important;
+  color:#ffd6c4 !important;
+  border-color:#ff7043 !important;
+}
+.v2-obrig-pill[hidden] { display:none !important; }
+
+/* Textos padrão por máscara (130-v2-padroes.js) */
+.v2-padroes-btn {
+  display:inline-flex; align-items:center; gap:4px;
+  border:1px solid color-mix(in srgb, var(--accent, #8a5a2b) 45%, var(--line)) !important;
+  background:var(--p-blue, #e8f0fb) !important;
+  color:var(--accent, #2563eb) !important;
+  border-radius:999px !important;
+  padding:2px 10px !important;
+  font-size:12px !important;
+  font-weight:600 !important;
+  margin-left:6px;
+}
+.v2-padroes-btn[hidden] { display:none !important; }
+#v2PadroesPop {
+  position:fixed; z-index:9500;
+  width:min(520px, calc(100vw - 24px)); max-height:62dvh;
+  display:flex; flex-direction:column; gap:8px; padding:12px;
+  border:1px solid var(--line); border-radius:12px;
+  background:var(--paper); color:var(--text);
+  box-shadow:0 14px 36px rgba(0, 0, 0, .24);
+}
+#v2PadroesPop[hidden] { display:none !important; }
+#v2PadroesPop .v2-padroes-head { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; }
+#v2PadroesPop .v2-padroes-close { padding:2px 8px; border-radius:6px; border:1px solid var(--line); background:transparent; color:inherit; cursor:pointer; }
+#v2PadroesPop #v2PadroesFiltro { padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:inherit; font:inherit; font-size:13px; }
+#v2PadroesPop .v2-padroes-lista { overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
+#v2PadroesPop .v2-padroes-item { display:flex; gap:8px; align-items:flex-start; padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--panel); }
+#v2PadroesPop .v2-padroes-tx { flex:1; text-align:left; background:transparent; border:0; padding:0; font:inherit; font-size:12.5px; line-height:1.35; color:inherit; cursor:pointer; }
+#v2PadroesPop .v2-padroes-tx:hover { text-decoration:underline; }
+#v2PadroesPop .v2-padroes-act { display:flex; flex-direction:column; gap:4px; flex:0 0 auto; }
+#v2PadroesPop .v2-padroes-act button { padding:3px 8px; font-size:11.5px; border-radius:6px; border:1px solid var(--line); background:var(--paper); color:inherit; cursor:pointer; }
+#v2PadroesAba { margin-bottom:6px; border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:6px 8px; }
+#v2PadroesAba[hidden] { display:none !important; }
+#v2PadroesAba summary { cursor:pointer; font-size:12px; font-weight:600; color:var(--accent); }
+#v2PadroesAba .v2-padroes-aba-lista { display:flex; flex-direction:column; gap:4px; margin-top:6px; max-height:180px; overflow-y:auto; }
+#v2PadroesAba .v2-padroes-chip {
+  text-align:left; width:100%; padding:5px 7px; border-radius:7px; font:inherit; font-size:12px; line-height:1.3;
+  border:1px solid var(--line); background:var(--paper); color:var(--text); cursor:pointer;
+}
+#v2PadroesAba .v2-padroes-chip:hover { border-color:var(--accent); }
 
 /* Revisor interativo de dúvidas (sublinhado amarelo · 122-v2-marcador.js) */
 .tutu-v2 #laudo .v2-duvida {

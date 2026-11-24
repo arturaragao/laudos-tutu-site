@@ -192,6 +192,9 @@
               modelTier: options.modelTier || "balanced",
               modelo: options.modelo || nuvem.modeloConversa,
               thinking: options.thinking || nuvem.thinking,
+              ...(typeof options.frasesBanco === "string" && options.frasesBanco.trim()
+                ? { frasesBanco: options.frasesBanco.trim().slice(0, 3500) }
+                : {}),
               ...(modoNuvem === "delta" && laudoNuvem ? { modo: "delta", laudo: laudoNuvem } : {})
             }),
             signal: controller.signal
@@ -199,6 +202,13 @@
           if (resp.status === 401){
             const err = new Error("Token da IA na nuvem recusado — confira em Configurações › IA.");
             err.code = "ia_erro"; err.status = 401; err.authNuvem = true;
+            throw err;
+          }
+          if (resp.status === 402){
+            let detalhe = "Limite mensal de créditos atingido. Ajuste em Configurações › IA.";
+            try{ const j = await resp.json(); if (typeof j?.erro === "string" && j.erro.trim()) detalhe = j.erro.trim(); }catch(_){}
+            const err = new Error(detalhe);
+            err.code = "limite_uso"; err.status = 402; err.authNuvem = true;
             throw err;
           }
           if (!resp.ok){
@@ -247,7 +257,7 @@
         err.tempo = true;
         throw err;
       }
-      if (e && (e.code === "bloqueado" || /^bloqueado/i.test(e.message || "") || e.code === "ponte_indisponivel" || e.code === "ia_timeout" || e.code === "ia_erro" || e.code === "empty_completion")) throw e;
+      if (e && (e.code === "bloqueado" || /^bloqueado/i.test(e.message || "") || e.code === "limite_uso" || e.code === "ponte_indisponivel" || e.code === "ia_timeout" || e.code === "ia_erro" || e.code === "empty_completion")) throw e;
       const error = new Error("Ponte local indisponível. Abra a ponte em 127.0.0.1:47831 para usar IA. As funções locais continuam disponíveis.");
       error.code = "ponte_indisponivel"; throw error;
     }finally{ clearTimeout(timeout); options.signal?.removeEventListener("abort", abort); }
@@ -401,6 +411,8 @@
     const q = sha ? `?sha=${encodeURIComponent(sha)}` : "";
     return nuvemFetchJson(`/fila-usg/${encodeURIComponent(id)}${q}`, { method: "DELETE" });
   };
+  const nuvemUso = () => nuvemFetchJson("/uso");
+  const salvarNuvemUso = cfg => nuvemFetchJson("/uso/config", { method: "POST", body: cfg });
   function validarPonteUrl(raw){
     try{
       const u = new URL(String(raw || "").trim());
@@ -525,6 +537,14 @@
     clearTimeout(timer);
     const ct = (response.headers.get("content-type") || "").toLowerCase();
     if (response.status !== 200 || !ct.includes("text/event-stream") || !response.body){
+      let detalhe = "";
+      if (response.status === 402){
+        try{ const j = await response.json(); if (typeof j?.erro === "string") detalhe = j.erro.trim(); }catch(_){}
+        options.signal?.removeEventListener("abort", abort);
+        const err = new Error(detalhe || "Limite mensal de créditos atingido. Ajuste em Configurações › IA.");
+        err.code = "limite_uso"; err.status = 402; err.fase = "conexao";
+        throw err;
+      }
       try{ await response.body?.cancel(); }catch(_){}
       options.signal?.removeEventListener("abort", abort);
       const err = new Error(response.status === 401 ? "Token da ponte recusado — parear de novo." : "Ponte indisponível para Direct.");
@@ -600,7 +620,7 @@
       options.signal?.removeEventListener("abort", abort);
     }
   }
-  async function directStream({ exame, mascara, texto, leve, salvarFila, nome } = {}, onDelta, options = {}){
+  async function directStream({ exame, mascara, texto, leve, salvarFila, nome, frasesBanco, padroesMascara } = {}, onDelta, options = {}){
     const nuvem = !options.apenasLocal ? lerNuvem() : null;
     if (nuvem){
       const nuvemMs = Number(options.nuvemTimeoutMs) > 0 ? Number(options.nuvemTimeoutMs) : 6000;
@@ -612,7 +632,9 @@
         modelo: options.modelo || nuvem.modeloAudio,
         thinking: options.thinking || nuvem.thinking,
         salvarFila: !!salvarFila,
-        nome: nome || ""
+        nome: nome || "",
+        ...(typeof frasesBanco === "string" && frasesBanco.trim() ? { frasesBanco: frasesBanco.trim().slice(0, 4500) } : {}),
+        ...(typeof padroesMascara === "string" && padroesMascara.trim() ? { padroesMascara: padroesMascara.trim().slice(0, 2000) } : {})
       });
       try{
         return await tentarDirectEndpoint(
@@ -624,7 +646,7 @@
           options
         );
       }catch(e){
-        if (e?.code === "cancelled") throw e;
+        if (e?.code === "cancelled" || e?.code === "limite_uso") throw e;
         if (e?.status === 401){
           const err = new Error("Token da IA na nuvem recusado — confira em Configurações › IA.");
           err.code = "nuvem_nao_autorizada";
@@ -949,7 +971,7 @@
   window.tutuSite = { ready, db, importBackup, exportBackup, mergeBank, saveBankNT, sync, gh, setToken, pedirChave,
     onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream,
     nuvemStatus, salvarNuvem, limparNuvem, testarNuvem, nuvemLinkPareamento,
-    filaUsgListar, filaUsgSalvar, filaUsgApagar,
+    filaUsgListar, filaUsgSalvar, filaUsgApagar, nuvemUso, salvarNuvemUso,
     ponteStatus: () => { const p = lerPonte(); return { pareada: !!p, url: p?.url || "" }; }, desparearPonte };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
   // Fonte: repo de dados (cache local) > bancos/*.js (reserva, só no PC) + o que foi importado/guardado no IndexedDB.
@@ -980,7 +1002,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=88d8735"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=0a9a843"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();

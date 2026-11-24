@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "88d8735 · 24/11 09:15";
+window.__SITE_VERSION__ = "0a9a843 · 24/11 10:06";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -247,7 +247,7 @@ const fold = s => s.normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase();
 /* ---------- banco: busca dos trechos relevantes ---------- */
 const STOP = new Set("para pela pelo com sem uma umas uns sobre entre como mais menos cerca medindo mede aspecto sinais sinal area areas regiao terco direito direita esquerdo esquerda bilateral pequena pequeno leve leves discreto discreta moderada moderado acentuada acentuado exame normal normais restante demais ausencia presenca nota notase observase".split(" "));
 // sinônimos por radical (5 letras, sem acento): cada palavra do grupo também busca as outras
-const SYN = (() => { const m = {}; for (const g of ["figad hepat", "renal rins", "vesic bilia", "encef cereb", "cisto cisti", "calcu litia", "linfo linfa", "derra efusa", "hipod hipoa", "dilat ectas", "estea gordu", "baco esple", "tromb embol"]){ const w = g.split(" "); for (const a of w) m[a] = w.filter(b => b !== a); } return m; })();
+const SYN = (() => { const m = {}; for (const g of ["figad hepat cirro", "renal rins nefro uroli hidro", "vesic bilia colel colec", "encef cereb", "cisto cisti", "calcu litia colel colec nefro", "linfo linfa adeno", "derra efusa ascit", "hipod hipoa", "dilat ectas", "estea gordu depos", "baco esple", "tromb embol", "atero esten oclus placa carot", "utero mioma endom ovari anexi", "tendi tendo bursi rotur ruptu"]){ const w = g.split(" ").map(x => x.slice(0, 5)); for (const a of w) m[a] = w.filter(b => b !== a); } return m; })();
 const BIDX = BANK.map(e => ({ key: fold(e[0]+" "+e[1]+" "+e[2]), body: fold(e[3]) }));
 function terms(t, semSinonimo){
   const out = new Set();
@@ -329,7 +329,56 @@ function pickPhrases(fresh, max = 16){
 function bankBlock(idx){
   return idx.map(i => { const e = BANK[i]; return `### ${e[0]} › ${e[1]}${e[2] ? " › " + e[2] : ""}\n${e[3]}`; }).join("\n\n");
 }
-if (typeof globalThis !== "undefined") globalThis.TutuBancoBusca = { STOP, SYN, terms, pickBank, pickPhrases };
+function inferModForAI(ex){
+  const probe = fold([ex?.id, ex?.name, ex?.code, String(ex?.mask || "").split("\n")[0]].join(" "));
+  if (/\b(?:us|usg|ultrass\w*|ecograf\w*|doppler|paaf|biopsia)\b/.test(probe) || /^usg-/.test(fold(ex?.id || ""))) return "US";
+  if (/\b(?:rm|ressonancia|angio-?rm|colangio-?rm)\b/.test(probe) || /^rm-/.test(fold(ex?.id || ""))) return "RM";
+  if (/\b(?:rx|radiograf\w*|raio-?x)\b/.test(probe) || /^rx-/.test(fold(ex?.id || ""))) return "RX";
+  return "TC";
+}
+function pickBankForAI(ex, text, maxItens = 10, maxChars = 3500){
+  const cleanText = String(text || "").replace(/\[(?:identidade|identificador|data|assinatura|removido)\]/g, " ");
+  const ts = terms(cleanText), strict = new Set(terms(cleanText, true)), tFold = fold(cleanText);
+  if (!ts.length || !Array.isArray(BANK) || !BANK.length) return "";
+  const mod = inferModForAI(ex), gs = (ex?.groups || []).map(g => fold(g));
+  const examProbe = fold(`${ex?.id || ""} ${ex?.name || ""}`);
+  const scored = [];
+  for (let i = 0; i < BANK.length; i++){
+    const e = BANK[i];
+    const corpo = String(e[3] || "").trim();
+    if (corpo.length < 15) continue;
+    const key = BIDX[i].key, body = BIDX[i].body;
+    const eMod = e[5] ? String(e[5]).toUpperCase() : "";
+    let sc = 0, strictHits = 0, titleHit = false;
+    const subs = fold(`${e[2] || ""};${e[1] || ""}`).split(/[+/|;,()>-]/).map(s => s.trim()).filter(s => s.length >= 5);
+    for (const s of subs){ if (tFold.includes(s)){ sc += 16; titleHit = true; break; } }
+    for (const t of ts){
+      const k = key.includes(t), b = body.includes(t);
+      if (k) sc += 6;
+      if (b) sc += Math.min(3, body.split(t).length - 1) * 2;
+      if ((k || b) && strict.has(t)) strictHits++;
+    }
+    if (!titleHit && strictHits < 1) continue;
+    if (sc < 5) continue;
+    if (eMod) sc *= (eMod === mod ? 1.65 : 0.2);
+    const gFold = fold(e[0] || "");
+    if (gs.length && gs.includes(gFold)) sc *= 1.45;
+    else if ((/\babdom/.test(examProbe) && /\babdom/.test(gFold)) || (/\btireo/.test(examProbe) && /\btireo/.test(gFold)) || (/\bcarot/.test(examProbe) && /\bcarot/.test(gFold)) || (/\bmama/.test(examProbe) && /\bmama/.test(gFold))) sc *= 1.35;
+    scored.push([sc, i]);
+  }
+  scored.sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  const out = [], seen = new Set(); let used = 0;
+  for (const [, i] of scored){
+    if (out.length >= maxItens) break;
+    const e = BANK[i], body = String(e[3] || "").trim(), nk = fold(body).replace(/\s+/g, " ");
+    if (seen.has(nk)) continue; seen.add(nk);
+    const bloco = `- [${e[0]} › ${e[1]}${e[2] ? " › " + e[2] : ""}]\n  ${body.slice(0, 650).replace(/\r\n?/g, "\n  ")}`;
+    if (used + bloco.length + 2 > maxChars && out.length) continue;
+    out.push(bloco); used += bloco.length + 2;
+  }
+  return out.join("\n\n");
+}
+if (typeof globalThis !== "undefined") globalThis.TutuBancoBusca = { STOP, SYN, terms, pickBank, pickPhrases, pickBankForAI };
 
 
 
@@ -422,7 +471,7 @@ function findSpokenMask(text){
   if (!scores.length || (scores[1] && scores[1].distance - scores[0].distance < 2)) return null;
   return scores[0].ex;
 }
-function maskAll(){ return [current, ...extras].map(maskOf).join("\n\n"); }
+function maskAll(){ return [current, ...extras].map(maskBodyOf).join("\n\n"); }
 function nameAll(){ return [current, ...extras].map(e => e.name).join(" + "); }
 function selectExam(id, focus, add){
   const ex = EXAMS.find(e => e.id === id); if (!ex) return;
@@ -446,6 +495,7 @@ function updMaskChip(){
   $("maskChipTx").textContent = [current, ...extras].map(fullName).join(" + ") + (current.mine ? "" : " (provisória)");
   c.title = "Máscara selecionada: " + fullName(current); c.classList.toggle("par", current.tipo === "parecer");
   try{ publishVoice(); }catch(e){}   // vocabulário do exame aberto para o reconhecimento de voz (no carregamento ainda não existe)
+  try{ window.tutuV2?.padroes?.atualizar?.(); }catch(e){}
 }
 function fmt(html, f){ if (f.underline) html = `<u>${html}</u>`; if (f.bold) html = `<b>${html}</b>`; return html; }
 let PSTYLE = `margin:0;font-family:${FORMAT.font},Helvetica,sans-serif;font-size:${FORMAT.size};line-height:normal`;
@@ -480,6 +530,17 @@ const stripMarks = t => stripTags(splitAlign(t).t);
 const isHeading = t => HSET.has(norm(stripMarks(t)));
 const todayBR = () => { const d = new Date(); return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear(); };
 const maskOf = ex => String(ex.mask).replace(/\{data\}/gi, todayBR());
+const PADROES_HEAD_RE = /^(?:\{\{[^}]+\}\})*(?:<\/?(?:b|u|i|strong|em)>|\s)*(?:textos?|frases?)\s+padr(?:ão|ões|ao|oes)\s*:?(?:<\/?(?:b|u|i|strong|em)>|\s)*$/i;
+function splitMaskPadroes(raw){
+  const lines = String(raw || "").replace(/\r\n?/g, "\n").split("\n");
+  const idx = lines.findIndex(l => PADROES_HEAD_RE.test(l.trim()));
+  if (idx < 0) return { corpo: String(raw || ""), padroes: [] };
+  const corpo = lines.slice(0, idx).join("\n").replace(/\n+$/, "");
+  const padroes = lines.slice(idx + 1).map(l => l.trim()).filter(Boolean);
+  return { corpo, padroes };
+}
+const maskBodyOf = ex => splitMaskPadroes(maskOf(ex)).corpo;
+const maskPadroesOf = ex => splitMaskPadroes(maskOf(ex)).padroes;
 /* serializa um bloco editável (contenteditable) em linhas com <b>, <u>, <i>, {{alinhamento}} e listas */
 function serEditable(root){
   const lines = []; let cur = "", curAl = "";
@@ -550,7 +611,8 @@ function focusSheet(clinic){
 }
 /* linhas da máscara; as vazias viram parágrafo vazio (menos no início e no fim) */
 function maskLines(ex){
-  const lines = maskOf(ex).split("\n").map(l => l.trim());
+  const body = typeof maskBodyOf === "function" ? maskBodyOf(ex) : maskOf(ex);
+  const lines = body.split("\n").map(l => l.trim());
   while (lines.length && !lines[0]) lines.shift();
   while (lines.length && !lines[lines.length - 1]) lines.pop();
   return lines;
@@ -1938,12 +2000,13 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && $("examCol
 
 /* ================= Campos [x] e listas {a|b} no texto dos achados ================= */
 const FIELD_RE = /\[[^\[\]<>\n]{1,40}\]|\{[^{}\n]*\|[^{}\n]*\}/g;
+const ANY_FIELD_RE = /\[<>\]|\[[^\[\]<>\n]{1,40}\]|\{[^{}\n]*\|[^{}\n]*\}/g;
 function nextField(){
   const nodes = sheetTextNodes(sheet), t = nodes.map(n => n.nodeValue).join("");
   const sel = getSelection(), rg = sel.rangeCount && sheet.contains(sel.anchorNode) ? sel.getRangeAt(0) : sheetRange;
   const from = rg && sheet.contains(rg.endContainer) ? offsetOf(sheet, rg.endContainer, rg.endOffset) : 0;
-  FIELD_RE.lastIndex = 0; let m, first = null, hit = null;
-  while ((m = FIELD_RE.exec(t))){ if (!first) first = m; if (m.index >= from){ hit = m; break; } }
+  ANY_FIELD_RE.lastIndex = 0; let m, first = null, hit = null;
+  while ((m = ANY_FIELD_RE.exec(t))){ if (!first) first = m; if (m.index >= from){ hit = m; break; } }
   hit = hit || first;
   if (!hit) return false;
   const r = rangeFromOffsets(sheet, hit.index, hit.index + hit[0].length); if (!r) return false;
@@ -1951,7 +2014,7 @@ function nextField(){
   return true;
 }
 sheet.addEventListener("keydown", e => {
-  if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey){ FIELD_RE.lastIndex = 0; if (FIELD_RE.test(sheetTextNodes(sheet).map(n => n.nodeValue).join(""))){ e.preventDefault(); nextField(); } }
+  if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.altKey){ ANY_FIELD_RE.lastIndex = 0; if (ANY_FIELD_RE.test(sheetTextNodes(sheet).map(n => n.nodeValue).join(""))){ e.preventDefault(); nextField(); } }
 });
 
 /* ================= Navegação por voz na folha ================= */
@@ -2059,6 +2122,8 @@ function computeAlerts(){
     const v = num(m[1]);
     if ((m[2] === "cm" && v > 30) || (m[2] === "mm" && v > 300)) al.push(["Medida", `"${m[0]}" parece grande demais. Confira a unidade.`]);
   }
+  const obrig = text.match(/\[<>\]/g);
+  if (obrig) al.push(["Obrigatório", `${obrig.length} ${obrig.length === 1 ? "campo obrigatório [<>] sem preencher" : "campos obrigatórios [<>] sem preencher"}.`]);
   FIELD_RE.lastIndex = 0;
   const fl = text.match(FIELD_RE); if (fl) al.push(["Campo", `Campo não preenchido: ${fl.slice(0,3).join(", ")}`]);
   return al;
@@ -2456,7 +2521,7 @@ function replaceInSheet(de, para, mark){
   }
   return false;
 }
-const confSec = it => { const x = fold(it.tipo || ""); if (/sugest|melhoria|recomenda/.test(x)) return "sug"; if (/incons|lateral|medida|sexo|faltante|duvida|negac|campo/.test(x)) return "att"; return "alt"; };
+const confSec = it => { const x = fold(it.tipo || ""); if (/sugest|melhoria|recomenda/.test(x)) return "sug"; if (/incons|lateral|medida|sexo|faltante|duvida|negac|campo|obrigat/.test(x)) return "att"; return "alt"; };
 const CONF_TITLES = { att: "Atenção", alt: "Alterações adicionais possíveis", sug: "Sugestões de melhoria" };
 function applyConfItem(it){
   if (it.done) return false;
@@ -2487,7 +2552,7 @@ function renderConf(){
     const h = document.createElement("div"); h.className = "rv-sec"; h.textContent = CONF_TITLES[k]; body.append(h);
     for (const it of list){
       const card = document.createElement("div");
-      const crit = /incons|lateral|medida|sexo/.test(fold(it.tipo || ""));
+      const crit = /incons|lateral|medida|sexo|obrigat/.test(fold(it.tipo || ""));
       card.className = "rv-card " + (k === "att" ? (crit ? "crit" : "warn") : k === "sug" ? "ok" : "") + (it.done ? " done" : "");
       const left = document.createElement("div");
       const top = document.createElement("div"); top.className = "rv-top";
@@ -8681,15 +8746,56 @@ window.tutuSite.appReady = true;
 (function (root) {
   "use strict";
   const palavras = t => String(t).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().match(/[a-z]+/g) || [];
+  const vocabBaseOrig = "informações clínicas técnica de exame achados conclusão fígado sem alterações fluxo trifásico estenose de vps cm s cisto medindo artéria femoral superficial direita esquerda com placa anos idade a da do dos das e";
+  const vocabRadiologia = [
+    vocabBaseOrig,
+    "informações clínicas técnica de exame achados conclusão impressao diagnóstico",
+    "paciente sexo masculino feminino homem mulher gestante adulto idoso criança",
+    "ultrassonografia ultrassom doppler ecografia tomografia ressonância radiografia",
+    "abdome total superior inferior pelve pélvica tórax crânio pescoço cervical mamas",
+    "tireoide bolsa testicular próstata transvaginal parede abdominal região inguinal",
+    "carótidas vertebrais membros inferiores superiores arterial venoso aorta ilíacas",
+    "fígado hepático hepática hepatopatia esteatose cirrose crônica parênquima lobo",
+    "vesícula biliar vias biliares colédoco colelitíase cálculo cálculos colesterolose",
+    "pâncreas baço esplenomegalia esplênico adrenal adrenais linfonodo linfonodos",
+    "rim rins renal renais cisto cistos nefrolitíase hidronefrose pielocalicinal",
+    "bexiga útero mioma endométrio ovário ovários anexos próstata veia porta cava",
+    "ascite líquido livre derrame pleural pericárdico hérnia diástase ateromatose",
+    "nódulo nódulos lesão massa placa espessamento ectasia dilatação oclusão estenose",
+    "fluxo trifásico bifásico monofásico pérvio pérvia trombose refluxo safena vps vdf cm mm ml s",
+    "ecogenicidade hiperecogenicidade hipoecogênico hiperecogênico isoecogênico anecoico",
+    "heterogêneo heterogênea homogêneo homogênea contornos serrilhados regulares irregulares",
+    "bordos rombos superfície nodular sombra acústica posterior reforço acústico",
+    "dimensões volume calibre espessura aumento aumentado aumentada reduzido reduzida",
+    "normal normais preservado preservada preservados alterações sinais aspecto compatível",
+    "provável sugestivo discreto discreta leve moderado moderada acentuado acentuada grau",
+    "bilateral direita esquerda direito esquerdo medial lateral anterior posterior",
+    "colecistectomia colecistectomizado colecistectomizada histerectomia histerectomizada",
+    "nefrectomia esplenectomia mastectomia apendicectomia transplante",
+    "medindo anos idade com sem em no na nos nas por para apresentando apresenta refere",
+    "relata história antecedente dor abdominal cólica febre icterícia controle seguimento",
+    "a o as os e de da do dos das"
+  ].join(" ");
+  const CLINICO_POS_PACIENTE = /^(?:d[eoa]s?\s+(?:sexo|idade)\b|do\s+sexo\b|sexo\b|com\b|sem\b|em\b|que\b|refere\b|relata\b|referindo\b|relatando\b|apresenta\w*\b|submetid[oa]s?\b|previamente\b|operad[oa]s?\b|colecistectomizad[oa]s?\b|histerectomizad[oa]s?\b|nefrectomizad[oa]s?\b|esplenectomizad[oa]s?\b|mastectomizad[oa]s?\b|prostatectomizad[oa]s?\b|tireoidectomizad[oa]s?\b|apendicectomizad[oa]s?\b|transplantad[oa]s?\b|diab[eé]tic[oa]s?\b|hipertens[oa]s?\b|gestante\b|gr[aá]vida\b|pu[eé]rpera\b|idos[oa]s?\b|jovem\b|adult[oa]s?\b|crian[cç]a\b|pedi[aá]tric[oa]s?\b|masculin[oa]\b|feminin[oa]\b|homem\b|mulher\b|obes[oa]s?\b|emagrecid[oa]s?\b|sintom[aá]tic[oa]s?\b|assintom[aá]tic[oa]s?\b|portador[ae]?s?\b|hist[oó]ri[ac]s?\b|antecedentes?\b|quadro\b|queixa\b|suspeita\b|investig\w*\b|acompanhamento\b|seguimento\b|controle\b|p[oó]s[- ]?operat[oó]ri[oa]\b|internad[oa]s?\b|hospitalizad[oa]s?\b|icter[ií]c[oa]s?\b|febril\b|afebril\b|est[aá]vel\b|est[aá]\b|teve\b|fez\b|faz\b|usa\b|tem\b|tinha\b|foi\b|era\b|[eé]\b|n[aã]o\b|j[aá]\b|realizou\b|evolu\w*\b|cursando\b|mantendo\b|negando\b|nega\b|\d{1,3}\s*anos?\b)/i;
+  const PRIMEIRA_LETRA_CLINICA_RE = /^[a-záéíóúâêîôûãõç]/;
   function anonimizar(texto, cfg = {}) {
     if (typeof texto !== "string" || texto.length > 80000) throw Error("bloqueado: possível dado de paciente");
-    const vocab = new Set(palavras(["informações clínicas técnica de exame achados conclusão fígado sem alterações fluxo trifásico estenose de vps cm s cisto medindo artéria femoral superficial direita esquerda com placa anos idade a da do dos das e", ...(cfg.vocab || []), ...(cfg.vocabExame || []), cfg.mask || "", ...(cfg.banco || [])].join(" ")));
+    const vocab = new Set(palavras([vocabRadiologia, ...(cfg.vocab || []), ...(cfg.vocabExame || []), cfg.mask || "", ...(cfg.banco || [])].join(" ")));
     const mes = "(?:janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)";
     const numero = "(?:um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|catorze|quatorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa)";
     const dia = "(?:\\d{1,2}|primeiro|" + numero + "(?:\\s+e\\s+" + numero + ")?)";
     const ano = "(?:\\d{4}|(?:dois\\s+mil|mil\\s+novecentos)(?:\\s+(?:e\\s+)?" + numero + ")*)";
     let t = texto.replace(/\0/g, "")
-      .replace(/\b(?:paciente|sr|sra|senhor|senhora)\b(?:\(a\))?\.?\s*[:=-]?\s*[^\n;.!?]+/gi, "[identidade]")
+      .replace(/\b(?:sr|sra|senhor|senhora)\b(?:\(a\))?\.?\s*[:=-]?\s*[^\n;.!?]+/gi, "[identidade]")
+      .replace(/\bpaciente(?:\(a\))?\s*[:=-]\s*[^\n;.!?]+/gi, "[identidade]")
+      .replace(/\bpaciente(?:\(a\))?\.?\s+([^\n;.!?]+)/gi, (full, resto) => {
+        const clean = String(resto || "").trim();
+        if (CLINICO_POS_PACIENTE.test(clean)) return full;
+        const prim = palavras(clean)[0] || "";
+        const doisCaps = /^[A-ZÀ-Ý][a-zà-ÿ]+\s+(?:(?:da|de|do|dos|das|e)\s+)?[A-ZÀ-Ý][a-zà-ÿ]+/.test(clean);
+        if (!doisCaps && PRIMEIRA_LETRA_CLINICA_RE.test(clean) && prim && vocab.has(prim)) return full;
+        return "[identidade]";
+      })
       .replace(/^\s*(?:dr(?:\(a\)|a)?\.?|médico|solicitante|assinatura|crm)\s*:?.*$/gim, "[assinatura]")
       .replace(/\b\d{4}-\d{2}-\d{2}(?:T[\d:.Z+-]+)?\b|\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/g, "[data]")
       .replace(new RegExp("\\b" + dia + "\\s+de\\s+" + mes + "(?:\\s+(?:de\\s+)?" + ano + ")?\\b", "gi"), "[data]");
@@ -8949,11 +9055,16 @@ window.tutuSite.appReady = true;
       if (!ex) throw Error("Não reconheci o exame. Diga no começo do áudio (ex.: \"doppler arterial de membro inferior\", \"parecer de TC de abdome total\") ou escolha no menu.");
       if (!exame.value) dizer("Exame reconhecido no áudio: " + ex.name);
       const fresh = filtrar(texto.value, ex); if (!fresh) throw Error("Dite ou digite os achados.");
+      const freshUtil = fresh.replace(/\[(?:identidade|identificador|data|assinatura|removido)\]/g, "").trim();
+      if (!freshUtil) throw Error("O filtro de privacidade removeu todo o texto ditado (ex.: nome ou identificação). Revise o texto e envie só os achados.");
       const nPalavras = (fresh.trim().match(/\S+/g) || []).length;
       const desktop = !ui.isMobile();
       const nuvemAtiva = !!T.nuvemStatus?.()?.configurada;
       const usarDirect = desktop || nuvemAtiva || modoIA === "direct" || (modoIA === "auto" && nPalavras <= 80);
       const usarLeve = modoIA === "direct" && nPalavras <= 80;
+      const exMaskLimpa = typeof maskBodyOf === "function" ? maskBodyOf(ex) : maskOf(ex);
+      const padroesMascara = typeof maskPadroesOf === "function" ? maskPadroesOf(ex).join("\n") : "";
+      const frasesBanco = window.TutuBancoBusca?.pickBankForAI?.(ex, freshUtil, 10, 3500) || "";
       let avisoPonte = "";
       if (desktop) {
         const indicador = el("p", { id: "audioMontando", class: "audio-montando", role: "status" }, "IA montando o laudo…");
@@ -8961,9 +9072,19 @@ window.tutuSite.appReady = true;
         if (dialog.open) dialog.close();
         try {
           if (!ui.initialized || genBusy || corrBusy || typeof T.directStream !== "function") throw Error("Ponte ocupada ou indisponível.");
-          const mascara = current.id === ex.id && modelIntact() ? maskOf(current) : maskOf(ex);
+          const mascara = current.id === ex.id && modelIntact() ? (typeof maskBodyOf === "function" ? maskBodyOf(current) : maskOf(current)) : exMaskLimpa;
           let acumulado = "";
-          const res = await T.directStream({ exame: ex.id, mascara, texto: fresh, modo: "completo", leve: usarLeve, salvarFila: nuvemAtiva, nome: ex.name }, (_delta, acum) => {
+          const res = await T.directStream({
+            exame: ex.id,
+            mascara,
+            texto: fresh,
+            modo: "completo",
+            leve: usarLeve,
+            salvarFila: nuvemAtiva,
+            nome: ex.name,
+            frasesBanco,
+            padroesMascara
+          }, (_delta, acum) => {
             acumulado = acum;
             if (acum && indicador.textContent === "IA montando o laudo…") indicador.textContent = "IA montando o laudo… (escrevendo)";
           });
@@ -8988,6 +9109,10 @@ window.tutuSite.appReady = true;
           dizer(filaId ? "Laudo pronto e sincronizado ✓" : "Laudo pronto ✓");
           return;
         } catch (err) {
+          if (err?.code === "limite_uso") {
+            if (!dialog.open) dialog.showModal();
+            throw err;
+          }
           avisoPonte = err?.code === "nuvem_nao_autorizada" ? "Token da IA na nuvem recusado — confira em Configurações › IA."
             : err?.code === "ponte_nao_autorizada" ? "Token da ponte inválido — parear de novo." : "Direct indisponível ou tempo esgotado.";
           dizer(avisoPonte + " Enviando para a fila; texto preservado.");
@@ -9009,7 +9134,16 @@ window.tutuSite.appReady = true;
         };
         try {
           const res = await T.directStream(
-            { exame: ex.id, mascara: maskOf(ex), texto: fresh, leve: usarLeve, salvarFila: nuvemAtiva, nome: ex.name },
+            {
+              exame: ex.id,
+              mascara: exMaskLimpa,
+              texto: fresh,
+              leve: usarLeve,
+              salvarFila: nuvemAtiva,
+              nome: ex.name,
+              frasesBanco,
+              padroesMascara
+            },
             (_delta, acum) => {
               ultimoTexto = acum;
               if (!casoCriado) {
@@ -9037,7 +9171,7 @@ window.tutuSite.appReady = true;
           const casoAtual = ui.activeId?.() || "";
           let filaId = "";
           if (nuvemAtiva || res?.motor === "nuvem") {
-            filaId = await garantirNaFila({ ex, mascara: maskOf(ex), texto: fresh, laudo: laudoFinal, modelo: res?.modelo, res });
+            filaId = await garantirNaFila({ ex, mascara: exMaskLimpa, texto: fresh, laudo: laudoFinal, modelo: res?.modelo, res });
             if (filaId && casoAtual) await mudarVinculos(v => { v[casoAtual] = filaId; });
           }
           await ui.flush();
@@ -9052,6 +9186,7 @@ window.tutuSite.appReady = true;
             else ui.closeCurrent?.();
             if (!dialog.open) dialog.showModal();
           }
+          if (err?.code === "limite_uso") throw err;
           if (err?.code === "nuvem_nao_autorizada") {
             avisoPonte = "Token da IA na nuvem recusado — confira em Configurações › IA.";
             setStatus?.("Token da IA na nuvem recusado — confira em Configurações › IA.", "err");
@@ -9921,12 +10056,13 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
           if (!anons.some((l, i) => l !== orig[i])) laudoDelta = delta;
           else if (pedidoSalvo) pedidoSalvo.delta = false;
         }
+        const frasesBanco = pedidoSalvo?.frasesBanco || "";
         try {
           if (laudoDelta) {
-            try { return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", anonimizado: true, modo: "delta", laudo: laudoDelta, laudoAnonimizado: true }); }
-            catch (e) { if (signal.aborted || e?.name === "AbortError" || e?.code === "ponte_indisponivel" || e?.code === "bloqueado" || /^bloqueado/i.test(e?.message || "")) throw e; if (pedidoSalvo) pedidoSalvo.delta = false; }
+            try { return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", anonimizado: true, modo: "delta", laudo: laudoDelta, laudoAnonimizado: true, frasesBanco }); }
+            catch (e) { if (signal.aborted || e?.name === "AbortError" || e?.code === "ponte_indisponivel" || e?.code === "limite_uso" || e?.code === "bloqueado" || /^bloqueado/i.test(e?.message || "")) throw e; if (pedidoSalvo) pedidoSalvo.delta = false; }
           }
-          return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", anonimizado: true });
+          return await sample(promptAnon, { signal, cache: false, modelTier: "balanced", anonimizado: true, frasesBanco });
         } catch (e) {
           if (e?.code !== "ponte_indisponivel" || reprocessando) throw e;
         }
@@ -9966,10 +10102,11 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
     const num = C.numerar(draft);
     genLines = num.linhas;   // applyDiff (30-claude-gerar.js) lê estas linhas
     const exame = nameAll(), regras = rulesBlock();
+    const frasesBanco = window.TutuBancoBusca?.pickBankForAI?.(typeof current !== "undefined" ? current : null, pedido, 6, 2200) || "";
     const prompt = repetir?.prompt ?? C.montarPrompt({ exame, regras, numerado: num.texto, pedido });
     const D = window.TutuDelta;
     const baseDelta = D?.habilitar(draft, pedido) ? D.capturar(sheet, draft, serEditable) : null;
-    const pedidoIA = repetir || { prompt, pedido, draft, exame, regras, delta: !!baseDelta, caso: ui.activeId() };
+    const pedidoIA = repetir || { prompt, pedido, draft, exame, regras, frasesBanco, delta: !!baseDelta, caso: ui.activeId() };
     busy = true; enviar.disabled = true; acoes.hidden = true; lockSheet(true); ctlConversa = new AbortController();
     dizer("Enviando à IA…");
     const t0 = performance.now();
@@ -12385,10 +12522,11 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   if (typeof window === "undefined") return;
   window.leoradEstruturados = api;
-  let dialog, search, listing, form, preview, status, insert, copy, current, state, result, request = 0, savedRange;
+  let dialog, titleEl, backBtn, outputEl, search, listing, workspace, form, preview, status, insert, copy, closeBtn, current, state, result, request = 0, savedRange;
   const node = (tag, text = "") => { const el = document.createElement(tag); el.textContent = text; return el; };
-  const button = (text, fn) => { const b = node("button", text); b.type = "button"; b.onclick = fn; return b; };
+  const button = (text, fn, cls = "") => { const b = node("button", text); b.type = "button"; if (cls) b.className = cls; b.onclick = fn; return b; };
   const fold = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const isCondutaCheck = f => f.tipo === "check" && /condut|recomend/i.test(`${f.id} ${f.rotulo || ""}`);
   function resultHtml(text = result.text) {
     // O caminho das máscaras escapa o texto; retire só essa camada extra das entidades dos valores.
     return modelSheetHtml({ mask: text, tipo: "parecer" })
@@ -12430,104 +12568,355 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     }
     return true;
   }
+  function setView(view) {
+    if (!dialog) return;
+    dialog.dataset.view = view;
+    const emFicha = view === "ficha";
+    if (backBtn) backBtn.hidden = !emFicha;
+    if (search) search.hidden = emFicha;
+    if (listing) listing.hidden = emFicha;
+    if (workspace) workspace.hidden = !emFicha;
+    if (!emFicha && outputEl) outputEl.hidden = true;
+    if (!emFicha && titleEl) titleEl.textContent = "Ferramentas LeoRad";
+  }
   function refresh() {
     result = evaluate(current, state);
-    form.querySelectorAll("[data-field]").forEach(w => { w.hidden = !matches(w._field.mostrarSe, { ...result.values, ...w._context() }); });
+    form.querySelectorAll("[data-field]").forEach(w => {
+      w.hidden = !matches(w._field.mostrarSe, { ...result.values, ...w._context() });
+    });
+    form.querySelectorAll(".leorad-dim-row").forEach(row => {
+      row.hidden = ![...row.querySelectorAll("[data-field]")].some(w => !w.hidden);
+    });
     form.querySelectorAll("[data-section]").forEach(box => {
-      box.hidden = ![...box.children].some(w => w.hasAttribute("data-field") && !w.hidden);
+      box.hidden = ![...box.querySelectorAll("[data-field]")].some(w => !w.hidden);
     });
     const fullReport = (current.frases || []).some(t => (t.modelo || "").includes("{{centro}}"));
     preview.innerHTML = fullReport ? resultHtml() : resultHtml(result.frases) + (result.conclusao ?
       resultHtml("<b><u>Conclusão</u></b>") + resultHtml(result.conclusao) : "");
     status.textContent = result.errors.join("\n");
     insert.disabled = copy.disabled = !!result.errors.length || !result.text.trim();
-    const output = form.querySelector("output");
-    output.textContent = calculationResults(current, result.values);
-    output.hidden = !output.textContent;
+    const out = outputEl || dialog.querySelector("output");
+    if (out) {
+      out.textContent = calculationResults(current, result.values);
+      out.hidden = !out.textContent;
+    }
+  }
+  const shouldGroupDims = (a, b) => a && b && a.tipo === "numero" && b.tipo === "numero" && !a.mostrarSe && !b.mostrarSe &&
+    ((a.unidade || "") === (b.unidade || ""));
+  function renderFieldNode(f, data, path, context, compact = false) {
+    const w = node("div");
+    w.className = "leorad-field" + (compact ? " leorad-field-dim" : "") + (f.tipo === "check" ? " leorad-field-check" : "");
+    w.dataset.field = path + f.id; w._field = f; w._context = context;
+    if (f.tipo === "grupo-repetivel") {
+      w.classList.add("leorad-field-group");
+      const label = node("label", f.rotulo || f.id); w.append(label);
+      const rows = node("div"); rows.className = "leorad-rep-rows"; w.append(rows);
+      function draw() {
+        rows.replaceChildren();
+        data[f.id].forEach((row, i) => {
+          const box = node("fieldset"), legend = node("legend", `${f.rotulo || f.id} ${i + 1}`);
+          box.className = "leorad-rep-box";
+          box.append(legend); rows.append(box);
+          renderFields(f.campos || [], row, box, () => active(f.campos || [], row, context()), path + f.id + "." + i + ".");
+          box.append(button("− Remover", () => { data[f.id].splice(i, 1); draw(); refresh(); }, "leorad-btn-sec leorad-btn-sm"));
+        });
+      }
+      w.append(button("+ Adicionar", () => { data[f.id].push(defaults(f.campos || [])); draw(); refresh(); }, "leorad-btn-sec leorad-btn-sm"));
+      draw();
+      return w;
+    }
+    const label = node("label", f.rotulo || f.id);
+    const input = node(f.tipo === "select" || f.tipo === "multi" ? "select" : "input");
+    input.id = "leorad-" + path + f.id; label.htmlFor = input.id;
+    const syncCallbacks = [];
+    if (f.tipo === "select" || f.tipo === "multi") {
+      input.multiple = f.tipo === "multi";
+      const opcoes = f.opcoes || [];
+      for (const [i, o] of opcoes.entries()) {
+        const option = node("option", o.rotulo ?? String(o.valor)); option.value = String(i);
+        option.selected = input.multiple ? data[f.id].includes(o.valor) : data[f.id] === o.valor;
+        input.append(option);
+      }
+      const useChips = opcoes.length > 0 && opcoes.length <= 8;
+      w.append(label, input);
+      if (useChips) {
+        input.classList.add("leorad-sr-select");
+        input.tabIndex = -1;
+        const chipsWrap = node("div");
+        chipsWrap.className = "leorad-chips";
+        chipsWrap.setAttribute("role", input.multiple ? "group" : "radiogroup");
+        chipsWrap.setAttribute("aria-label", "Opções de " + (f.rotulo || f.id));
+        const chipBtns = opcoes.map((o, idx) => {
+          const b = node("button"); b.type = "button"; b.className = "leorad-chip";
+          b.dataset.idx = String(idx);
+          b.setAttribute("role", input.multiple ? "button" : "radio");
+          const tx = node("span", o.rotulo ?? String(o.valor));
+          b.append(tx);
+          if (typeof o.pontos === "number" && o.pontos > 0) {
+            const pts = node("small", `+${o.pontos}`); pts.className = "leorad-chip-pts";
+            b.append(pts);
+          }
+          b.onclick = () => {
+            if (input.multiple) {
+              input.options[idx].selected = !input.options[idx].selected;
+            } else {
+              input.value = String(idx);
+            }
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          };
+          chipsWrap.append(b);
+          return b;
+        });
+        const syncChips = () => {
+          let activeIdx = 0;
+          chipBtns.forEach((b, idx) => {
+            const on = input.multiple ? input.options[idx].selected : Number(input.value) === idx;
+            if (on && !input.multiple) activeIdx = idx;
+            b.classList.toggle("selected", on);
+            b.setAttribute(input.multiple ? "aria-pressed" : "aria-checked", String(on));
+          });
+          if (input.multiple) {
+            const firstOn = chipBtns.findIndex((_, idx) => input.options[idx].selected);
+            activeIdx = firstOn >= 0 ? firstOn : 0;
+          }
+          chipBtns.forEach((b, idx) => { b.tabIndex = idx === activeIdx ? 0 : -1; });
+        };
+        syncCallbacks.push(syncChips);
+        syncChips();
+        w.append(chipsWrap);
+      }
+    } else if (f.tipo === "check") {
+      input.type = "checkbox";
+      input.checked = !!data[f.id];
+      const checkRow = node("div"); checkRow.className = "leorad-check-row";
+      checkRow.append(input, label);
+      w.append(checkRow);
+    } else {
+      input.type = f.tipo === "numero" ? "number" : "text";
+      if (input.type === "number") {
+        input.step = "any";
+        input.inputMode = "decimal";
+        input.placeholder = "0";
+        input.addEventListener("focus", () => { try { input.select(); } catch (_) {} });
+      }
+      input.value = data[f.id];
+      const inpRow = node("div"); inpRow.className = "leorad-input-wrap";
+      inpRow.append(input);
+      if (f.unidade) { const u = node("small", f.unidade); u.className = "leorad-unit"; inpRow.append(u); }
+      w.append(label, inpRow);
+    }
+    const change = () => {
+      data[f.id] = f.tipo === "multi" ? [...input.selectedOptions].map(o => f.opcoes[Number(o.value)].valor) :
+        f.tipo === "select" ? f.opcoes[Number(input.value)]?.valor : f.tipo === "check" ? input.checked :
+        f.tipo === "numero" && input.value !== "" ? Number(input.value) : input.value;
+      for (const fn of syncCallbacks) fn();
+      refresh();
+    };
+    input.oninput = input.onchange = change;
+    return w;
   }
   function renderFields(list, data, parent, context, path = "") {
-    for (const f of list) {
-      const w = node("div"); w.dataset.field = path + f.id; w._field = f; w._context = context;
-      const label = node("label", f.rotulo || f.id); w.append(label); parent.append(w);
-      if (f.tipo === "grupo-repetivel") {
-        const rows = node("div"); w.append(rows);
-        function draw() {
-          rows.replaceChildren();
-          data[f.id].forEach((row, i) => {
-            const box = node("fieldset"), legend = node("legend", `${f.rotulo || f.id} ${i + 1}`);
-            box.append(legend); rows.append(box);
-            renderFields(f.campos || [], row, box, () => active(f.campos || [], row, context()), path + f.id + "." + i + ".");
-            box.append(button("− Remover", () => { data[f.id].splice(i, 1); draw(); refresh(); }));
-          });
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      if (f.tipo === "numero" && !f.mostrarSe && i + 1 < list.length && shouldGroupDims(f, list[i + 1])) {
+        const group = [f];
+        while (group.length < 3 && i + 1 < list.length && shouldGroupDims(group[group.length - 1], list[i + 1])) {
+          group.push(list[++i]);
         }
-        w.append(button("+ Adicionar", () => { data[f.id].push(defaults(f.campos || [])); draw(); refresh(); })); draw(); continue;
+        const row = node("div"); row.className = "leorad-dim-row";
+        row.style.setProperty("--dim-cols", String(group.length));
+        group.forEach((gf, gi) => {
+          row.append(renderFieldNode(gf, data, path, context, true));
+          if (gi < group.length - 1 && /^(?:ap|ll|cc|hem_[a-c])$/i.test(gf.id)) {
+            const sep = node("span", "×"); sep.className = "leorad-dim-sep"; sep.setAttribute("aria-hidden", "true");
+            row.append(sep);
+          }
+        });
+        parent.append(row);
+        continue;
       }
-      const input = node(f.tipo === "select" || f.tipo === "multi" ? "select" : "input");
-      input.id = "leorad-" + path + f.id; label.htmlFor = input.id;
-      if (f.tipo === "select" || f.tipo === "multi") {
-        input.multiple = f.tipo === "multi";
-        for (const [i, o] of (f.opcoes || []).entries()) {
-          const option = node("option", o.rotulo ?? String(o.valor)); option.value = String(i);
-          option.selected = input.multiple ? data[f.id].includes(o.valor) : data[f.id] === o.valor;
-          input.append(option);
-        }
-      } else {
-        input.type = f.tipo === "numero" ? "number" : f.tipo === "check" ? "checkbox" : "text";
-        if (input.type === "number") input.step = "any";
-        if (input.type === "checkbox") input.checked = !!data[f.id]; else input.value = data[f.id];
+      parent.append(renderFieldNode(f, data, path, context, false));
+    }
+  }
+  function getFormFocusTargets() {
+    if (!form) return [];
+    const seenGroups = new Set();
+    const out = [];
+    for (const field of form.querySelectorAll("[data-field]")) {
+      if (field.hidden || field.closest("[hidden]")) continue;
+      const chips = field.querySelector(".leorad-chips");
+      if (chips && !seenGroups.has(chips)) {
+        seenGroups.add(chips);
+        const btn = chips.querySelector('.leorad-chip[tabindex="0"]') || chips.querySelector(".leorad-chip");
+        if (btn) out.push(btn);
+        continue;
       }
-      const change = () => {
-        data[f.id] = f.tipo === "multi" ? [...input.selectedOptions].map(o => f.opcoes[Number(o.value)].valor) :
-          f.tipo === "select" ? f.opcoes[Number(input.value)]?.valor : f.tipo === "check" ? input.checked :
-          f.tipo === "numero" && input.value !== "" ? Number(input.value) : input.value;
-        refresh();
-      };
-      input.oninput = input.onchange = change; w.append(input);
-      if (f.unidade) w.append(node("small", f.unidade));
+      const ctrl = field.querySelector("input, select:not(.leorad-sr-select), textarea");
+      if (ctrl && !ctrl.disabled) out.push(ctrl);
+    }
+    return out;
+  }
+  function moveFocusInForm(curEl, delta) {
+    const targets = getFormFocusTargets();
+    if (!targets.length) return;
+    const curField = curEl.closest("[data-field]");
+    let idx = targets.findIndex(t => t === curEl || (curField && t.closest("[data-field]") === curField));
+    if (idx < 0) idx = 0;
+    const nextIdx = idx + delta;
+    if (nextIdx >= targets.length) {
+      if (insert && !insert.disabled) insert.focus();
+      return;
+    }
+    const clamped = Math.max(0, nextIdx);
+    targets[clamped].focus();
+  }
+  function handleFormKeydown(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault(); e.stopPropagation();
+      insert?.click();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tgt = e.target;
+    const chips = tgt?.closest?.(".leorad-chips");
+    if (chips && tgt.classList?.contains("leorad-chip")) {
+      const all = [...chips.querySelectorAll(".leorad-chip")];
+      const i = all.indexOf(tgt);
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        e.preventDefault(); e.stopPropagation();
+        const ni = (i + (e.key === "ArrowRight" ? 1 : -1) + all.length) % all.length;
+        all.forEach((b, bi) => { b.tabIndex = bi === ni ? 0 : -1; });
+        all[ni].focus();
+        if (chips.getAttribute("role") === "radiogroup") all[ni].click();
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault(); e.stopPropagation();
+        moveFocusInForm(tgt, e.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault(); e.stopPropagation();
+        if (chips.getAttribute("role") === "radiogroup" && !tgt.classList.contains("selected")) tgt.click();
+        else if (chips.getAttribute("role") === "group") { /* Enter confirma o campo multi e avança */ }
+        moveFocusInForm(tgt, 1);
+        return;
+      }
+      return;
+    }
+    if (tgt && tgt.matches("input, textarea")) {
+      if (tgt.type === "checkbox" && e.key === "Enter") {
+        e.preventDefault(); e.stopPropagation();
+        tgt.click();
+        moveFocusInForm(tgt, 1);
+        return;
+      }
+      if (tgt.closest(".leorad-dim-row") && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+        e.preventDefault(); e.stopPropagation();
+        moveFocusInForm(tgt, e.key === "ArrowRight" ? 1 : -1);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault(); e.stopPropagation();
+        moveFocusInForm(tgt, e.key === "ArrowUp" ? -1 : 1);
+        return;
+      }
     }
   }
   function init() {
     dialog = node("dialog"); dialog.id = "leoradDialog"; dialog.setAttribute("aria-labelledby", "leoradTitle");
-    const heading = node("h2", "Ferramentas LeoRad"); heading.id = "leoradTitle";
-    search = node("input"); search.type = "search"; search.placeholder = "Buscar ferramenta"; search.setAttribute("aria-label", "Buscar ferramenta");
+    const head = node("div"); head.className = "leorad-head";
+    const headLeft = node("div"); headLeft.className = "leorad-head-left";
+    backBtn = button("← Ferramentas", () => {
+      current = null; result = null;
+      setView("lista");
+      search?.focus();
+    }, "leorad-btn-sec leorad-back");
+    backBtn.hidden = true;
+    titleEl = node("h2", "Ferramentas LeoRad"); titleEl.id = "leoradTitle";
+    headLeft.append(backBtn, titleEl);
+    const headRight = node("div"); headRight.className = "leorad-head-right";
+    outputEl = node("output"); outputEl.hidden = true;
+    const closeDialog = () => { request++; dialog.close(); };
+    closeBtn = button("Fechar", closeDialog, "leorad-btn-sec");
+    headRight.append(outputEl, closeBtn);
+    head.append(headLeft, headRight);
+
+    search = node("input"); search.type = "search"; search.id = "leoradSearch";
+    search.placeholder = "Buscar ferramenta (ex.: TI-RADS, Carótidas, BI-RADS)…";
+    search.setAttribute("aria-label", "Buscar ferramenta");
     listing = node("div"); listing.className = "leorad-list";
-    form = node("div"); preview = node("div"); preview.id = "leoradPreview"; preview.setAttribute("aria-live", "polite");
-    status = node("p"); status.setAttribute("role", "status");
+
+    workspace = node("div"); workspace.className = "leorad-grid"; workspace.hidden = true;
+    const formCol = node("div"); formCol.className = "leorad-form-col";
+    form = node("div"); form.className = "leorad-form";
+    form.addEventListener("keydown", handleFormKeydown);
+    const kbdHint = node("p", "Atalhos: ↑ ↓ ou Enter avança campo · ← → muda opção/eixo · Espaço marca · Ctrl+Enter insere");
+    kbdHint.className = "leorad-kbd-hint";
+    formCol.append(form, kbdHint);
+
+    const prevCol = node("div"); prevCol.className = "leorad-prev-col";
+    const prevLabel = node("div", "Prévia do laudo"); prevLabel.className = "leorad-prev-label";
+    preview = node("div"); preview.id = "leoradPreview"; preview.setAttribute("aria-live", "polite");
+    status = node("p"); status.className = "leorad-status"; status.setAttribute("role", "status");
     insert = button("Inserir no laudo", () => {
       if (!result || insert.disabled) return;
       try {
         const inSections = insertInSections();
         if (!inSections) {
-        if (savedRange && sheet.contains(savedRange.commonAncestorContainer)) {
-          sheetRange = savedRange.cloneRange();
-          sheet.focus(); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(savedRange);
-        }
-        focusSheet();
-        // As bordas recebem a fusão com o texto junto ao cursor, preservando os parágrafos da máscara.
-        const border = P('<span data-leorad-border="">&#8203;</span>');
-        document.execCommand("insertHTML", false, border + resultHtml() + border);
-        sheet.querySelectorAll("[data-leorad-border]").forEach(marker => {
-          const block = marker.closest("p,div"); marker.remove();
-          if (block && block !== sheet && !block.textContent.trim() && !block.querySelector("img")) block.remove();
-        });
+          if (savedRange && sheet.contains(savedRange.commonAncestorContainer)) {
+            sheetRange = savedRange.cloneRange();
+            sheet.focus(); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(savedRange);
+          }
+          focusSheet();
+          // As bordas recebem a fusão com o texto junto ao cursor, preservando os parágrafos da máscara.
+          const border = P('<span data-leorad-border="">&#8203;</span>');
+          document.execCommand("insertHTML", false, border + resultHtml() + border);
+          sheet.querySelectorAll("[data-leorad-border]").forEach(marker => {
+            const block = marker.closest("p,div"); marker.remove();
+            if (block && block !== sheet && !block.textContent.trim() && !block.querySelector("img")) block.remove();
+          });
         }
         scheduleEditVersion();
         updateCount(); updVolHint();
+        window.tutuV2?.duvidas?.atualizarObrigatorios?.();
         const sel = getSelection(); if (sel.rangeCount) savedRange = sel.getRangeAt(0).cloneRange();
         status.textContent = inSections ? "Inserido nos Achados e na Conclusão do laudo." : "Inserido no laudo, onde está o cursor.";
       } catch (_) { status.textContent = "Não foi possível inserir no laudo."; }
-    });
+    }, "leorad-btn-pri");
     copy = button("Copiar", async () => {
       try {
         if (!await copyToClipboard(preview.innerText, preview.innerHTML)) throw Error("Falha ao copiar");
         status.textContent = "Copiado.";
-      }
-      catch (_) { status.textContent = "Não foi possível copiar. Selecione a prévia e copie."; }
-    });
+      } catch (_) { status.textContent = "Não foi possível copiar. Selecione a prévia e copie."; }
+    }, "leorad-btn-sec");
     insert.disabled = copy.disabled = true;
     const actions = node("div"); actions.className = "leorad-actions"; actions.append(insert, copy);
-    const closeDialog = () => { request++; dialog.close(); };
-    dialog.append(heading, button("Fechar", closeDialog), search, listing, form, preview, actions, status);
+    prevCol.append(prevLabel, preview, status, actions);
+    workspace.append(formCol, prevCol);
+
+    search.addEventListener("keydown", e => {
+      if (e.key === "ArrowDown" || e.key === "Enter") {
+        const btns = [...listing.querySelectorAll(".leorad-item-btn")];
+        if (!btns.length) return;
+        e.preventDefault();
+        if (e.key === "Enter" && btns.length === 1) btns[0].click();
+        else btns[0].focus();
+      }
+    });
+    listing.addEventListener("keydown", e => {
+      const btns = [...listing.querySelectorAll(".leorad-item-btn")];
+      const i = btns.indexOf(document.activeElement);
+      if (i < 0) return;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); btns[(i + 1) % btns.length].focus(); }
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (i === 0) search.focus();
+        else btns[i - 1].focus();
+      }
+    });
+
+    dialog.append(head, search, listing, workspace);
     dialog.addEventListener("cancel", () => { request++; });
     document.addEventListener("keydown", e => {
       if (e.key !== "Escape" || !dialog.open) return;
@@ -12535,51 +12924,77 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     }, true);
     (window.tutuV2?.bindBackdropClose || window.bindBackdropClose)?.(dialog, closeDialog);
     document.body.append(dialog);
+    setView("lista");
   }
   api.open = async () => {
     const sel = getSelection();
     savedRange = sel.rangeCount && sheet.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.getRangeAt(0).cloneRange() : null;
     if (!dialog) init();
-    if (!dialog.open) dialog.show();
+    setView("lista");
+    if (!dialog.open) {
+      dialog.show();
+    }
     const seq = ++request, G = window.tutuSite?.gh;
     current = null; result = null; form.replaceChildren(); preview.textContent = ""; listing.replaceChildren();
     insert.disabled = copy.disabled = true;
-    status.textContent = "Carregando ferramentas…";
-    if (!G?.token) { status.textContent = "Configure a sincronização para acessar as ferramentas LeoRad."; return; }
+    status.textContent = "";
+    const loadingMsg = node("p", "Carregando ferramentas…"); loadingMsg.setAttribute("role", "status");
+    listing.append(loadingMsg);
+    if (!G?.token) { loadingMsg.textContent = "Configure a sincronização para acessar as ferramentas LeoRad."; return; }
     try {
       const response = await G.getJson("leorad/estruturados/indice.json");
       if (seq !== request) return;
       const index = response?.json ?? response;
       if (!Array.isArray(index)) throw Error("Índice de ferramentas ausente ou inválido.");
-      status.textContent = "";
+      async function openFicha(item) {
+        const load = ++request;
+        form.replaceChildren(); preview.textContent = ""; insert.disabled = copy.disabled = true;
+        status.textContent = "Carregando ficha…";
+        try {
+          if (!/^[a-zA-Z0-9_-]+$/.test(item.id)) throw Error("Identificador de ficha inválido.");
+          const r = await G.getJson(`leorad/estruturados/${item.id}.json`);
+          if (load !== request) return;
+          const ficha = r?.json ?? r;
+          if (!ficha || !Array.isArray(ficha.secoes)) throw Error("Ficha ausente ou inválida.");
+          current = ficha;
+          const allFields = fields(current);
+          state = defaults(allFields);
+          for (const f of allFields) {
+            if (isCondutaCheck(f)) state[f.id] = false;
+          }
+          titleEl.textContent = current.titulo;
+          setView("ficha");
+          for (const section of current.secoes) {
+            const box = node("fieldset"); box.dataset.section = section.id || "";
+            box.append(node("legend", section.titulo || "")); form.append(box);
+            renderFields(section.campos || [], state, box, () => active(allFields, state));
+          }
+          refresh();
+          const firstTarget = getFormFocusTargets()[0];
+          firstTarget?.focus();
+        } catch (e) {
+          if (load === request) {
+            listing.replaceChildren(node("p", e.message));
+          }
+        }
+      }
       function list() {
         listing.replaceChildren();
         for (const item of index.filter(i => fold([i.titulo, i.modalidade, i.grupo].join(" ")).includes(fold(search.value)))) {
-          listing.append(button(item.titulo, async () => {
-            const load = ++request;
-            form.replaceChildren(); preview.textContent = ""; insert.disabled = copy.disabled = true;
-            status.textContent = "Carregando ficha…";
-            try {
-              if (!/^[a-zA-Z0-9_-]+$/.test(item.id)) throw Error("Identificador de ficha inválido.");
-              const r = await G.getJson(`leorad/estruturados/${item.id}.json`);
-              if (load !== request) return;
-              const ficha = r?.json ?? r;
-              if (!ficha || !Array.isArray(ficha.secoes)) throw Error("Ficha ausente ou inválida.");
-              current = ficha; state = defaults(fields(current));
-              form.append(node("h3", current.titulo));
-              for (const section of current.secoes) {
-                const box = node("fieldset"); box.dataset.section = section.id || "";
-                box.append(node("legend", section.titulo || "")); form.append(box);
-                renderFields(section.campos || [], state, box, () => active(fields(current), state));
-              }
-              form.append(node("output")); refresh();
-            } catch (e) { if (load === request) status.textContent = e.message; }
-          }));
+          const card = node("div"); card.className = "leorad-item-card";
+          const btn = button(item.titulo, () => openFicha(item), "leorad-item-btn");
+          card.append(btn);
+          const metaTxt = [item.modalidade, item.grupo].filter(Boolean).join(" · ");
+          if (metaTxt) {
+            const meta = node("span", metaTxt); meta.className = "leorad-item-meta";
+            card.append(meta);
+          }
+          listing.append(card);
         }
         if (!listing.childElementCount) listing.append(node("p", "Nenhuma ferramenta encontrada."));
       }
-      search.oninput = list; list(); search.focus();
-    } catch (e) { if (seq === request) status.textContent = e.message; }
+      search.oninput = list; search.value = ""; list(); search.focus();
+    } catch (e) { if (seq === request) listing.replaceChildren(node("p", e.message)); }
   };
 })();
 
@@ -12748,10 +13163,18 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
 
   const uncertainties = text => parseDuvidas(text).map(d => ({ start: d.start, end: d.end, text: d.raw, motivo: d.motivo }));
+  const countObrigatorios = text => (String(text || "").match(/\[<>\]/g) || []).length;
 
-  const copyWarning = countOrText => {
-    const n = typeof countOrText === "number" ? countOrText : uncertainties(countOrText).length;
-    return n ? `Ainda há ${n} ${n === 1 ? "ponto de dúvida" : "pontos de dúvida"} no laudo` : "";
+  const copyWarning = (countOrText, obrigCount = 0) => {
+    const nDuv = typeof countOrText === "number" ? countOrText : uncertainties(countOrText).length;
+    const nObrig = typeof countOrText === "number" ? (Number(obrigCount) || 0) : countObrigatorios(countOrText);
+    if (nObrig && nDuv) {
+      return `Ainda há ${nObrig} ${nObrig === 1 ? "campo obrigatório" : "campos obrigatórios"} [<>] e ${nDuv} ${nDuv === 1 ? "ponto de dúvida" : "pontos de dúvida"} no laudo`;
+    }
+    if (nObrig) {
+      return `Ainda há ${nObrig} ${nObrig === 1 ? "campo obrigatório" : "campos obrigatórios"} [<>] sem preencher no laudo`;
+    }
+    return nDuv ? `Ainda há ${nDuv} ${nDuv === 1 ? "ponto de dúvida" : "pontos de dúvida"} no laudo` : "";
   };
 
   /* ---------- detector determinístico local (sem tokens) ---------- */
@@ -13004,7 +13427,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { findMarkers, nextIndex, parseDuvidas, uncertainties, copyWarning, detectarProblemasLocais };
+    module.exports = { findMarkers, nextIndex, parseDuvidas, uncertainties, countObrigatorios, copyWarning, detectarProblemasLocais };
     return;
   }
 
@@ -13421,7 +13844,60 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     if (tmpEl) scrollIntoViewNice(tmpEl);
   };
 
+  /* ---------- destaque visual dos [<>] obrigatórios e pílulas na barra ---------- */
+  function atualizarObrigatorios() {
+    if (typeof sheet === "undefined" || !sheet) return 0;
+    const ranges = [];
+    for (const n of sheetTextNodes(sheet)) {
+      const v = n.nodeValue || "";
+      if (!v.includes("[<>]")) continue;
+      for (const m of v.matchAll(/\[<>\]/g)) {
+        try {
+          const r = document.createRange();
+          r.setStart(n, m.index);
+          r.setEnd(n, m.index + 4);
+          ranges.push(r);
+        } catch (_) {}
+      }
+    }
+    try {
+      if (typeof CSS !== "undefined" && CSS.highlights && typeof Highlight !== "undefined") {
+        if (ranges.length) CSS.highlights.set("tutu-obrigatorio", new Highlight(...ranges));
+        else CSS.highlights.delete("tutu-obrigatorio");
+      }
+    } catch (_) {}
+    return ranges.length;
+  }
+
+  function irParaProximoObrigatorio(fromOverride = null) {
+    const matches = Array.from(sheetText().matchAll(/\[<>\]/g), m => ({ start: m.index, end: m.index + 4, text: "[<>]" }));
+    if (!matches.length) return false;
+    sair();
+    const from = typeof fromOverride === "number" ? fromOverride : position(1);
+    const idx = nextIndex(matches, from, 1);
+    const hit = matches[idx];
+    if (!hit) return false;
+    const r = rangeFromOffsets(sheet, hit.start, hit.end);
+    if (!r) return false;
+    sheet.focus({ preventScroll: true });
+    const s = getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+    sheetRange = r.cloneRange();
+    const tmpEl = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+    if (tmpEl) scrollIntoViewNice(tmpEl);
+    return true;
+  }
+
   /* ---------- pílula flutuante na barra ---------- */
+  const fmtBar = document.querySelector(".fmt-bar");
+  const obrigPill = ui.button("", () => irParaProximoObrigatorio(), {
+    id: "v2ObrigPill",
+    class: "v2-obrig-pill",
+    title: "Campos obrigatórios [<>] sem preencher — clique ou aperte Tab/F2 para preencher",
+    hidden: ""
+  });
+  obrigPill.addEventListener("mousedown", e => e.preventDefault());
   const pill = ui.el("span", { id: "v2Marcador", role: "group", "aria-label": "Dúvidas para conferir" });
   const label = ui.el("span", { class: "v2-duvida-lbl", "aria-live": "polite" });
   const motivoEl = ui.el("span", { class: "v2-duvida-motivo" });
@@ -13435,11 +13911,14 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     ui.button("✕", () => apagar(ativa || listar()[0]), { "aria-label": "Apagar dúvida", title: "Apagar dúvida (Delete)" })
   );
   pill.addEventListener("mousedown", e => e.preventDefault());
-  document.querySelector(".fmt-bar").append(pill);
+  fmtBar.append(obrigPill, pill);
 
   function refresh() {
     if (ativa && !ativa.isConnected) ativa = null;
     if (editando && !editando.isConnected) editando = null;
+    const nObrig = atualizarObrigatorios();
+    obrigPill.hidden = !nObrig;
+    if (nObrig) obrigPill.textContent = `⚠ ${nObrig} [<>] ${nObrig === 1 ? "obrigatório" : "obrigatórios"}`;
     const lista = listar();
     pill.hidden = !lista.length;
     if (!lista.length) return;
@@ -13534,13 +14013,14 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     refresh();
   }).observe(sheet, { childList: true, subtree: true, characterData: true });
 
-  /* ---------- aviso ao copiar com dúvidas abertas ---------- */
+  /* ---------- aviso ao copiar com [<>] ou dúvidas abertas ---------- */
   const originalCopy = doCopy;
   const dialog = ui.el("dialog", { id: "v2MarcadorAviso", "aria-labelledby": "v2MarcadorAvisoTexto" });
   dialog.style.cssText = "border:1px solid #8886;border-radius:12px;padding:20px;background:var(--bg,#fff);color:var(--text,#222);max-width:90vw";
   const message = ui.el("p", { id: "v2MarcadorAvisoTexto" });
   const first = ui.button("Ir para o primeiro", () => {
     dialog.close();
+    if (irParaProximoObrigatorio(0)) return;
     const primeiro = listar()[0];
     if (primeiro) selecionar(primeiro, { editar: false, focar: true });
   });
@@ -13555,13 +14035,18 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
 
   doCopy = () => {
     const lista = listar();
-    const warning = copyWarning(lista.length);
+    const nObrig = countObrigatorios(sheetText());
+    const warning = copyWarning(lista.length, nObrig);
     if (!warning) return originalCopy();
     message.textContent = warning;
     if (!dialog.open) dialog.showModal();
   };
 
-  ui.duvidas = { hidratar, analisar, aposIA, listar, selecionar, navegar, confirmar, apagar, entrarEdicao, sair, ativa: () => ativa, editando: () => editando };
+  ui.duvidas = {
+    hidratar, analisar, aposIA, listar, selecionar, navegar, confirmar, apagar,
+    entrarEdicao, sair, atualizarObrigatorios, irParaProximoObrigatorio,
+    ativa: () => ativa, editando: () => editando
+  };
   hidratar();
   refresh();
 })();
@@ -15255,6 +15740,388 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     ui.addSetting?.(sec, "ia");
   }
 
-  document.addEventListener("tutu-nuvem-mudou", sincronizarUI);
+  /* ---------- Monitor de consumo e limite da API Google ---------- */
+  const usoSec = el("section", { id: "nuvemUsoSec", class: "v2-set-card", "data-aba": "ia" });
+  const usoHead = el("div", { class: "uso-head" });
+  const usoBtnAtu = button("Atualizar", () => carregarUso(true), { id: "nuvemUsoAtualizar", class: "btn small" });
+  usoHead.append(el("h2", {}, "Consumo e créditos da API Google"), usoBtnAtu);
+  const usoDesde = el("p", { id: "nuvemUsoDesde", class: "meta" }, "Conecte o Worker para acompanhar o gasto estimado.");
+  const usoBarraWrap = el("div", { class: "uso-barra-wrap", hidden: "" });
+  const usoBarraFill = el("div", { id: "nuvemUsoFill", class: "uso-barra-fill" });
+  usoBarraWrap.append(usoBarraFill);
+  const usoResumo = el("p", { id: "nuvemUsoResumo", class: "uso-resumo", role: "status", "aria-live": "polite" });
+  const usoCards = el("div", { id: "nuvemUsoCards", class: "uso-cards", hidden: "" });
+  const cardMes = el("div", { class: "uso-card" });
+  const cardMesVal = el("strong", { id: "nuvemUsoMesVal" }, "—");
+  const cardMesSub = el("small", { id: "nuvemUsoMesSub" }, "Mês atual");
+  cardMes.append(el("span", { class: "uso-card-lbl" }, "Neste mês"), cardMesVal, cardMesSub);
+  const cardSem = el("div", { class: "uso-card" });
+  const cardSemVal = el("strong", { id: "nuvemUsoSemVal" }, "—");
+  const cardSemSub = el("small", { id: "nuvemUsoSemSub" }, "Últimos 7 dias");
+  cardSem.append(el("span", { class: "uso-card-lbl" }, "Esta semana (7d)"), cardSemVal, cardSemSub);
+  usoCards.append(cardMes, cardSem);
+
+  const usoDet = el("details", { id: "nuvemUsoDet", class: "uso-det", hidden: "" });
+  usoDet.append(el("summary", {}, "Detalhamento por semana, mês e modelo"));
+  const usoDetBody = el("div", { id: "nuvemUsoDetBody", class: "uso-det-body" });
+  usoDet.append(usoDetBody);
+
+  const limiteInp = el("input", {
+    id: "nuvemUsoLimite",
+    type: "number",
+    step: "0.5",
+    min: "0.5",
+    max: "500",
+    class: "field",
+    value: "10",
+    "aria-label": "Limite mensal (USD)"
+  });
+  const ajusteInp = el("input", {
+    id: "nuvemUsoAjuste",
+    type: "number",
+    step: "0.01",
+    min: "0",
+    max: "500",
+    class: "field",
+    value: "0",
+    "aria-label": "Já gasto no mês antes do medidor (USD)"
+  });
+  const bloquearChk = el("input", { id: "nuvemUsoBloquear", type: "checkbox", checked: "" });
+  const bloquearLbl = el("label", { class: "uso-chk" });
+  bloquearLbl.append(bloquearChk, el("span", {}, "Bloquear chamadas automaticamente ao atingir 100% do limite"));
+  const usoCfgGrid = el("div", { class: "form-grid uso-cfg-grid" });
+  usoCfgGrid.append(
+    campo("Crédito / limite mensal (US$)", limiteInp),
+    campo("Já gasto antes do medidor (US$)", ajusteInp)
+  );
+  const usoCfgMsg = el("p", { id: "nuvemUsoMsg", class: "voz-msg", role: "status", "aria-live": "polite" });
+  const usoSalvarBtn = button("Salvar limite", async () => {
+    usoSalvarBtn.disabled = true;
+    usoCfgMsg.textContent = "Salvando limite…";
+    usoCfgMsg.style.color = "";
+    try {
+      const r = await T.salvarNuvemUso?.({
+        limiteMensalUsd: Number(limiteInp.value),
+        ajusteMesUsd: Number(ajusteInp.value || 0),
+        bloquearNoLimite: bloquearChk.checked
+      });
+      if (!r?.ok) {
+        usoCfgMsg.textContent = r?.erro || "Não foi possível salvar o limite.";
+        usoCfgMsg.style.color = "var(--crit)";
+        return;
+      }
+      renderUso(r);
+      usoCfgMsg.textContent = "Limite de proteção salvo ✓";
+    } finally {
+      usoSalvarBtn.disabled = false;
+    }
+  }, { id: "nuvemUsoSalvar" });
+  const spendLink = el("a", {
+    href: "https://aistudio.google.com/spend",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    class: "uso-spend-link"
+  }, "Conferir fatura oficial no Google AI Studio ↗");
+  const usoActions = el("div", { class: "v2-set-actions" });
+  usoActions.append(usoSalvarBtn, spendLink);
+
+  usoSec.append(usoHead, usoDesde, usoBarraWrap, usoResumo, usoCards, usoDet, usoCfgGrid, bloquearLbl, usoActions, usoCfgMsg);
+  sec.after(usoSec);
+
+  const fmtUsd = v => "$" + Number(v || 0).toFixed(2).replace(".", ",");
+  const fmtUsdPrec = v => {
+    const n = Number(v || 0);
+    return "$" + n.toFixed(n > 0 && n < 0.05 ? 4 : 2).replace(".", ",");
+  };
+  const fmtDataBR = iso => (/^(\d{4})-(\d{2})-(\d{2})$/.test(iso || "") ? `${RegExp.$3}/${RegExp.$2}/${RegExp.$1}` : String(iso || "—"));
+  const fmtTok = n => {
+    const v = Number(n || 0);
+    return v >= 1_000_000 ? (v / 1_000_000).toFixed(2).replace(".", ",") + "M"
+      : v >= 1000 ? (v / 1000).toFixed(1).replace(".", ",") + "k" : String(v);
+  };
+
+  function renderUso(u) {
+    if (!u || !u.mesAtual) return;
+    usoDesde.textContent = `Contabilizando desde ${fmtDataBR(u.desde)} · valores calculados pelos tokens reais de cada chamada.`;
+    const pct = Math.max(0, Number(u.mesAtual.pct) || 0);
+    usoBarraWrap.hidden = false;
+    usoBarraFill.style.width = Math.min(100, pct) + "%";
+    usoBarraWrap.dataset.alerta = u.alerta || "ok";
+    usoResumo.textContent = `${fmtUsdPrec(u.mesAtual.usd)} de ${fmtUsd(u.limiteMensalUsd)} (${pct.toFixed(1).replace(".", ",")}%) · Restante: ${fmtUsd(u.mesAtual.restanteUsd)}`;
+    usoCards.hidden = false;
+    cardMesVal.textContent = `${fmtUsdPrec(u.mesAtual.usd)} (${pct.toFixed(1).replace(".", ",")}%)`;
+    cardMesSub.textContent = `${u.mesAtual.reqs} ${u.mesAtual.reqs === 1 ? "laudo" : "laudos"} · ${fmtTok((u.mesAtual.inTok || 0) + (u.mesAtual.outTok || 0) + (u.mesAtual.thinkTok || 0))} tokens`;
+    const semPct = Number(u.semanaAtual?.pct || 0);
+    cardSemVal.textContent = `${fmtUsdPrec(u.semanaAtual?.usd || 0)} (${semPct.toFixed(1).replace(".", ",")}%)`;
+    cardSemSub.textContent = `${u.semanaAtual?.reqs || 0} ${(u.semanaAtual?.reqs || 0) === 1 ? "laudo" : "laudos"} · ${fmtDataBR(u.semanaAtual?.inicio).slice(0, 5)} a ${fmtDataBR(u.semanaAtual?.fim).slice(0, 5)}`;
+
+    limiteInp.value = String(u.limiteMensalUsd ?? 10);
+    ajusteInp.value = String(u.ajusteMesUsd ?? 0);
+    bloquearChk.checked = u.bloquearNoLimite !== false;
+
+    usoDet.hidden = false;
+    usoDetBody.replaceChildren();
+    const addGrupo = (titulo, linhas) => {
+      if (!linhas.length) return;
+      const d = el("div", { class: "uso-det-grp" });
+      d.append(el("strong", {}, titulo));
+      for (const ln of linhas) d.append(el("span", {}, ln));
+      usoDetBody.append(d);
+    };
+    addGrupo("Semanas", (u.semanas || []).map(s => `${s.rotulo}: ${fmtUsdPrec(s.usd)} (${Number(s.pct || 0).toFixed(1).replace(".", ",")}%) · ${s.reqs}×`));
+    addGrupo("Meses", (u.meses || []).map(m => `${m.mes}: ${fmtUsdPrec(m.usd)} (${Number(m.pct || 0).toFixed(1).replace(".", ",")}%) · ${m.reqs}×`));
+    addGrupo("Modelos (mês)", Object.entries(u.mesAtual.porModelo || {}).map(([mId, mv]) => `${mId}: ${fmtUsdPrec(mv.usd)} · ${mv.reqs}×`));
+  }
+
+  let usoCarregando = false;
+  async function carregarUso(explicito = false) {
+    const st = T.nuvemStatus();
+    const on = !!st.configurada && typeof T.nuvemUso === "function";
+    usoBtnAtu.disabled = !on || usoCarregando;
+    usoSalvarBtn.disabled = !on;
+    if (!on) {
+      usoDesde.textContent = "Conecte a IA na nuvem acima para acompanhar o uso mensal e semanal.";
+      usoBarraWrap.hidden = true;
+      usoCards.hidden = true;
+      usoDet.hidden = true;
+      usoResumo.textContent = "";
+      return;
+    }
+    if (usoCarregando) return;
+    usoCarregando = true;
+    usoBtnAtu.disabled = true;
+    try {
+      const r = await T.nuvemUso();
+      if (r?.ok) {
+        renderUso(r);
+        if (explicito) usoCfgMsg.textContent = "Consumo atualizado ✓";
+      } else if (explicito) {
+        usoResumo.textContent = r?.status === 404
+          ? "Publique a nova versão do Worker para ativar o medidor em tempo real."
+          : (r?.erro || "Não foi possível consultar o consumo.");
+      }
+    } finally {
+      usoCarregando = false;
+      usoBtnAtu.disabled = false;
+    }
+  }
+
+  document.addEventListener("tutu-nuvem-mudou", () => { sincronizarUI(); carregarUso(false); });
+  document.getElementById("setTab-ia")?.addEventListener("click", () => carregarUso(false));
+  document.getElementById("settingsTop")?.addEventListener("click", () => {
+    if (document.getElementById("setTab-ia")?.getAttribute("aria-selected") === "true") carregarUso(false);
+  });
   sincronizarUI();
+  carregarUso(false);
+})();
+
+/* Textos padrão da máscara: fora da folha do laudo, acessíveis em botão/aba dedicados por exame. */
+(() => {
+  "use strict";
+  if (typeof document === "undefined") return;
+  const ui = window.tutuV2;
+  if (!ui) return;
+  const el = ui.el, button = ui.button;
+
+  const cleanText = raw => {
+    let t = typeof stripMarks === "function" ? stripMarks(raw) : String(raw || "");
+    t = t.replace(/^(?:\{\{[^}]+\}\})+/g, "").trim();
+    const m = t.match(/^\[<(.*)>\](.*)$/) || t.match(/^\[(.*)\](.*)$/);
+    if (m && m[1] !== "") t = m[1] + m[2];
+    return t.trim();
+  };
+
+  function listar() {
+    if (typeof current === "undefined" || !current) return [];
+    const list = [current, ...(typeof extras !== "undefined" && Array.isArray(extras) ? extras : [])].filter(Boolean);
+    const seen = new Set();
+    const out = [];
+    for (const ex of list) {
+      const frases = typeof maskPadroesOf === "function" ? maskPadroesOf(ex) : [];
+      for (const raw of frases) {
+        const txt = cleanText(raw);
+        if (!txt || seen.has(txt)) continue;
+        seen.add(txt);
+        out.push({ exame: ex.name || ex.id || "Máscara", texto: txt });
+      }
+    }
+    return out;
+  }
+
+  function inserirFrase(texto) {
+    if (typeof pushVersion === "function") pushVersion("Antes do texto padrão");
+    if (typeof insertAtCaret === "function") insertAtCaret(texto);
+    if (typeof updateCount === "function") updateCount();
+    if (typeof updVolHint === "function") updVolHint();
+    if (typeof renderAlerts === "function") renderAlerts();
+    if (typeof scheduleCaseSave === "function") scheduleCaseSave();
+    if (typeof pushVersion === "function") pushVersion("Texto padrão inserido");
+    ui.duvidas?.atualizarObrigatorios?.();
+    if (texto.includes("[<>]")) {
+      ui.duvidas?.irParaProximoObrigatorio?.();
+    }
+    if (typeof setStatus === "function") setStatus("Texto padrão inserido no laudo.", "ok");
+  }
+
+  async function copiarFrase(texto) {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(texto);
+      if (typeof setStatus === "function") setStatus("Frase copiada.", "ok");
+    } catch (_) {}
+  }
+
+  const fmtBar = document.querySelector(".fmt-bar");
+  const btn = button("Textos padrão", () => toggle(), {
+    id: "v2PadroesBtn",
+    class: "v2-padroes-btn",
+    "aria-expanded": "false",
+    "aria-controls": "v2PadroesPop",
+    title: "Textos padrão desta máscara — clique para inserir rapidamente",
+    hidden: ""
+  });
+  btn.addEventListener("mousedown", e => e.preventDefault());
+  if (fmtBar) {
+    const obrig = document.getElementById("v2ObrigPill");
+    if (obrig) obrig.before(btn);
+    else fmtBar.append(btn);
+  }
+
+  const pop = el("section", {
+    id: "v2PadroesPop",
+    class: "v2-padroes-pop",
+    role: "dialog",
+    "aria-label": "Textos padrão da máscara",
+    hidden: ""
+  });
+  const popHead = el("div", { class: "v2-padroes-head" });
+  const popTitle = el("strong", {}, "Textos padrão");
+  const popClose = button("×", () => fechar(), { class: "v2-padroes-close", "aria-label": "Fechar textos padrão" });
+  popHead.append(popTitle, popClose);
+  const popFilter = el("input", {
+    id: "v2PadroesFiltro",
+    type: "search",
+    placeholder: "Filtrar frases da máscara…",
+    "aria-label": "Filtrar textos padrão",
+    hidden: ""
+  });
+  const popList = el("div", { id: "v2PadroesLista", class: "v2-padroes-lista" });
+  pop.append(popHead, popFilter, popList);
+  document.body.append(pop);
+
+  /* Espelho também dentro da aba Sugestões para acesso contínuo sem atrapalhar a folha */
+  let abaBox = null, abaList = null;
+  if (ui.panels?.Sugestões) {
+    abaBox = el("section", { id: "v2PadroesAba", class: "v2-padroes-aba", hidden: "" });
+    const det = el("details", { open: "" });
+    const sum = el("summary", {}, "Textos padrão desta máscara");
+    abaList = el("div", { class: "v2-padroes-aba-lista" });
+    det.append(sum, abaList);
+    abaBox.append(det);
+    const sugPanel = ui.panels.Sugestões;
+    const filtroSug = sugPanel.querySelector("#sugFiltro");
+    if (filtroSug) filtroSug.before(abaBox);
+    else sugPanel.prepend(abaBox);
+  }
+
+  function renderLista() {
+    const items = listar();
+    const q = (popFilter.value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+    popTitle.textContent = typeof current !== "undefined" && current?.name
+      ? `Textos padrão · ${current.name}`
+      : "Textos padrão";
+    popFilter.hidden = items.length <= 4;
+    popList.replaceChildren();
+    const filtrados = q
+      ? items.filter(it => it.texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes(q))
+      : items;
+    if (!filtrados.length) {
+      popList.append(el("p", { class: "v2-padroes-vazio" }, "Nenhuma frase encontrada."));
+      return;
+    }
+    for (const it of filtrados) {
+      const card = el("div", { class: "v2-padroes-item" });
+      const textoBtn = button(it.texto, () => { inserirFrase(it.texto); fechar(); }, {
+        class: "v2-padroes-tx",
+        title: "Inserir no cursor do laudo"
+      });
+      const act = el("div", { class: "v2-padroes-act" });
+      act.append(
+        button("Inserir", () => { inserirFrase(it.texto); fechar(); }, { class: "v2-padroes-ins" }),
+        button("Copiar", () => { copiarFrase(it.texto); }, { class: "v2-padroes-cop" })
+      );
+      card.append(textoBtn, act);
+      popList.append(card);
+    }
+  }
+
+  function posicionarPop() {
+    const r = btn.getBoundingClientRect();
+    const left = Math.max(12, Math.min(window.innerWidth - Math.min(520, window.innerWidth - 24) - 12, r.left));
+    const top = Math.min(window.innerHeight - 180, r.bottom + 6);
+    pop.style.left = left + "px";
+    pop.style.top = top + "px";
+  }
+
+  function abrir() {
+    const items = listar();
+    if (!items.length) return;
+    popFilter.value = "";
+    renderLista();
+    pop.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    posicionarPop();
+    if (!popFilter.hidden) popFilter.focus();
+    else popList.querySelector("button")?.focus();
+  }
+
+  function fechar() {
+    pop.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+  }
+
+  function toggle() {
+    if (pop.hidden) abrir();
+    else fechar();
+  }
+
+  function atualizar() {
+    const items = listar();
+    btn.hidden = !items.length;
+    btn.textContent = items.length ? `Textos padrão (${items.length})` : "Textos padrão";
+    if (!items.length && !pop.hidden) fechar();
+    if (!pop.hidden) renderLista();
+    if (abaBox && abaList) {
+      abaBox.hidden = !items.length;
+      abaList.replaceChildren();
+      for (const it of items) {
+        const b = button(it.texto, () => inserirFrase(it.texto), {
+          class: "v2-padroes-chip",
+          title: "Clique para inserir no laudo"
+        });
+        b.addEventListener("mousedown", e => e.preventDefault());
+        abaList.append(b);
+      }
+      const sum = abaBox.querySelector("summary");
+      if (sum) sum.textContent = `Textos padrão da máscara (${items.length})`;
+    }
+  }
+
+  popFilter.addEventListener("input", renderLista);
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !pop.hidden) {
+      e.preventDefault(); e.stopPropagation();
+      fechar();
+      if (typeof focusSheet === "function") focusSheet();
+    }
+  }, true);
+  document.addEventListener("click", e => {
+    if (pop.hidden) return;
+    if (pop.contains(e.target) || btn.contains(e.target)) return;
+    fechar();
+  });
+  window.addEventListener("resize", () => { if (!pop.hidden) posicionarPop(); });
+
+  ui.padroes = { listar, atualizar, abrir, fechar, cleanText };
+  if (ui.actions) ui.actions.padroes = { label: "Textos padrão da máscara", run: abrir };
+  atualizar();
 })();
