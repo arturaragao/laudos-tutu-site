@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "4485613 · 24/11 08:22";
+window.__SITE_VERSION__ = "e45466c · 24/11 08:37";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -14204,8 +14204,8 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     return sel;
   };
   const campo = (rotulo, ctrl) => {
-    const lbl = el("label", {}, el("span", {}, rotulo));
-    lbl.append(ctrl);
+    const lbl = el("label", {});
+    lbl.append(el("span", {}, rotulo), ctrl);
     return lbl;
   };
 

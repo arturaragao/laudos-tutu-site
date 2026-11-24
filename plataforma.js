@@ -404,7 +404,14 @@
     document.dispatchEvent(new CustomEvent("tutu-ponte-mudou"));
   }
   let pontePareadaMsg = "";
-  (function checarHashPareamento(){
+  const mostrarStatusPareamento = msg => {
+    if (typeof setStatus === "function") setStatus(msg, "ok");
+    else {
+      const st = document.getElementById("status");
+      if (st) st.textContent = msg;
+    }
+  };
+  function checarHashPareamento(){
     try{
       const h = location.hash || "";
       if (!h || h.length < 2) return;
@@ -426,8 +433,7 @@
         })) return;
         try{ history.replaceState(null, "", location.pathname + location.search); }catch(_){}
         pontePareadaMsg = "IA na nuvem conectada ✓";
-        const st = document.getElementById("status");
-        if (st) st.textContent = pontePareadaMsg;
+        mostrarStatusPareamento(pontePareadaMsg);
         return;
       }
       if (!params.has("ponte") || !params.has("ponteUrl")) return;
@@ -441,17 +447,17 @@
       if (!salvarPonte(tok, urlOk)) return;
       try{ history.replaceState(null, "", location.pathname + location.search); }catch(_){}
       pontePareadaMsg = "Ponte do PC pareada ✓";
-      const st = document.getElementById("status");
-      if (st) st.textContent = pontePareadaMsg;
+      mostrarStatusPareamento(pontePareadaMsg);
     }catch(_){}
-  })();
+  }
+  checarHashPareamento();
+  window.addEventListener("hashchange", checarHashPareamento);
   if (pontePareadaMsg){
     const t0 = Date.now();
     const iv = setInterval(() => {
       if (window.tutuV2?.initialized || Date.now() - t0 > 10000){
         clearInterval(iv);
-        if (typeof setStatus === "function") setStatus(pontePareadaMsg, "ok");
-        else { const st = document.getElementById("status"); if (st) st.textContent = pontePareadaMsg; }
+        mostrarStatusPareamento(pontePareadaMsg);
       }
     }, 50);
   }
@@ -940,7 +946,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=4485613"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=e45466c"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();
