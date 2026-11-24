@@ -424,6 +424,8 @@
   };
   const nuvemUso = () => nuvemFetchJson("/uso");
   const salvarNuvemUso = cfg => nuvemFetchJson("/uso/config", { method: "POST", body: cfg });
+  const salvarRegraNuvem = doc => nuvemFetchJson("/aprendizado/regra", { method: "POST", body: doc });
+  const salvarCorrecaoNuvem = doc => nuvemFetchJson("/aprendizado/correcao", { method: "POST", body: doc });
   function validarPonteUrl(raw){
     try{
       const u = new URL(String(raw || "").trim());
@@ -987,6 +989,7 @@
     onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream,
     nuvemStatus, salvarNuvem, salvarModeloConversa, limparNuvem, testarNuvem, nuvemLinkPareamento,
     filaUsgListar, filaUsgSalvar, filaUsgApagar, nuvemUso, salvarNuvemUso,
+    salvarRegraNuvem, salvarCorrecaoNuvem,
     ponteStatus: () => { const p = lerPonte(); return { pareada: !!p, url: p?.url || "" }; }, desparearPonte };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
   // Fonte: repo de dados (cache local) > bancos/*.js (reserva, só no PC) + o que foi importado/guardado no IndexedDB.
@@ -1017,7 +1020,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=22c451c"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=bcfb7f4"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();

@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "22c451c · 24/11 11:09";
+window.__SITE_VERSION__ = "bcfb7f4 · 24/11 14:50";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -530,17 +530,19 @@ const stripMarks = t => stripTags(splitAlign(t).t);
 const isHeading = t => HSET.has(norm(stripMarks(t)));
 const todayBR = () => { const d = new Date(); return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear(); };
 const maskOf = ex => String(ex.mask).replace(/\{data\}/gi, todayBR());
-const PADROES_HEAD_RE = /^(?:\{\{[^}]+\}\})*(?:<\/?(?:b|u|i|strong|em)>|\s)*(?:textos?|frases?)\s+padr(?:ão|ões|ao|oes)\s*:?(?:<\/?(?:b|u|i|strong|em)>|\s)*$/i;
+const PADROES_HEAD_RE = /^(?:\{\{[^}]+\}\})*(?:<\/?(?:b|u|i|strong|em)>|\s)*(?:textos?|frases?)\s+padr(?:ão|ões|ao|oes)\s*[:\-—]?(?:<\/?(?:b|u|i|strong|em)>|\s)*$/i;
 function splitMaskPadroes(raw){
   const lines = String(raw || "").replace(/\r\n?/g, "\n").split("\n");
   const idx = lines.findIndex(l => PADROES_HEAD_RE.test(l.trim()));
-  if (idx < 0) return { corpo: String(raw || ""), padroes: [] };
+  if (idx < 0) return { corpo: String(raw || ""), padroes: [], padroesRaw: "" };
   const corpo = lines.slice(0, idx).join("\n").replace(/\n+$/, "");
-  const padroes = lines.slice(idx + 1).map(l => l.trim()).filter(Boolean);
-  return { corpo, padroes };
+  const resto = lines.slice(idx + 1);
+  const padroes = resto.map(l => l.trim()).filter(Boolean);
+  return { corpo, padroes, padroesRaw: resto.join("\n") };
 }
 const maskBodyOf = ex => splitMaskPadroes(maskOf(ex)).corpo;
 const maskPadroesOf = ex => splitMaskPadroes(maskOf(ex)).padroes;
+const maskPadroesRawOf = ex => splitMaskPadroes(maskOf(ex)).padroesRaw;
 /* serializa um bloco editável (contenteditable) em linhas com <b>, <u>, <i>, {{alinhamento}} e listas */
 function serEditable(root){
   const lines = []; let cur = "", curAl = "";
@@ -7260,8 +7262,10 @@ window.tutuSite.appReady = true;
   }
 
   /* Candidata do banco pronta para a conclusão: sem medida, sem lado inventado, sem placeholder. null se não servir. */
+  const DESC_ACHADO_RE = /\b(?:normodistendid\w*|conte[uú]do\s+(?:anecoic|homog[eê]ne|l[ií]quido)|sem\s+ecos\s+no\s+seu\s+interior|textura\s+ecogr[aá]fic|contornos\s+regulares|morfologia\s+e\s+dimens[õo]es\s+normais|paredes?\s+(?:finas|lisas|normais)|calibre\s+e\s+trajeto\s+usuais)\b/i;
   function limparCandidata(linha, ladoAchado) {
     let t = String(linha).replace(/^\s*(?:\d+\s*[.)]|[-•*])\s*/, "").replace(/^\s*conclus[aã]o\s*:\s*/i, "").replace(/\s*\*+\s*$/, "").trim();
+    if (DESC_ACHADO_RE.test(t)) return null;
     t = limparComparacao(t); if (t == null) return null;
     // classificações (Bosniak I, LI-RADS 4...) são conclusão, não medida: ficam intactas
     const prot = [], guarda = m => { prot.push(m); return "\u0001" + String.fromCharCode(96 + prot.length) + "\u0001"; };
@@ -7418,13 +7422,42 @@ window.tutuSite.appReady = true;
     let n = 0; for (const x of A) if (B.has(x)) n++;
     return 2 * n / (A.size + B.size);
   }
+  /* Normalização de sinônimos clínicos só para deduplicação de conclusão (jaTem). */
+  function conceitosConclusao(texto) {
+    const out = new Set();
+    const rawWords = fold(texto).split(/[^a-z0-9]+/).filter(w => (w.length >= 4 || w === "rim") && !/\d/.test(w) && !STOP.has(w));
+    const temBexiga = rawWords.some(w => /^(?:bexig|vesical|vesicais)/.test(w));
+    for (const w of rawWords) {
+      const s = stem(w);
+      if (ESTILO.has(s)) continue;
+      if (/^(?:dimens|volum|tamanh|calibr)/.test(w)) out.add("volum");
+      else if (/^(?:aument|hipertrof|alarg|dilat)/.test(w)) out.add("aument");
+      else if (/^prostatomeg/.test(w)) { out.add("aument"); out.add("prostat"); }
+      else if (/^hepatomeg/.test(w)) { out.add("aument"); out.add("hepat"); }
+      else if (/^esplenomeg/.test(w)) { out.add("aument"); out.add("esplen"); }
+      else if (/^(?:bexig|vesic)/.test(w)) out.add("bexig");
+      else if (temBexiga && /^(?:esforc|trabecul|espess)/.test(w)) out.add("esforc");
+      else if (/^colelit/.test(w)) { out.add("vesic"); out.add("liti"); }
+      else if (/^nefrolit/.test(w)) { out.add("renal"); out.add("liti"); }
+      else if (/^esteatos/.test(w)) { out.add("esteat"); out.add("hepat"); }
+      else if (/^(?:calcul|litias|urolit)/.test(w)) out.add("liti");
+      else if (/^(?:rim|rins|renal|renais)/.test(w)) out.add("renal");
+      else if (/^(?:figad|hepat)/.test(w)) out.add("hepat");
+      else if (/^(?:vesicul|biliar)/.test(w)) out.add("vesic");
+      else out.add(s);
+    }
+    return out;
+  }
   /* a sugestão já está na conclusão? (cobertura de conteúdo clínico, ignora as palavras de estilo) */
   function jaTem(frase, linhas) {
-    const a = semEstilo(tokens(frase)); if (!a.size) return false;
+    const a = conceitosConclusao(frase); if (!a.size) return false;
+    const ladoA = ladoDe(frase);
     for (const l of linhas || []) {
-      const b = semEstilo(tokens(l)); if (!b.size) continue;
+      const ladoL = ladoDe(l);
+      if (ladoA && ladoL && ladoA !== ladoL) continue;
+      const b = conceitosConclusao(l); if (!b.size) continue;
       let n = 0; for (const t of a) if (b.has(t)) n++;
-      if (n / Math.min(a.size, b.size) >= 0.7) return true;
+      if (n / Math.min(a.size, b.size) >= 0.65) return true;
     }
     return false;
   }
@@ -7706,9 +7739,18 @@ window.tutuSite.appReady = true;
   function calcular() {
     if (!ligado) { esconder(); return; }
     if (ui.voiceState && ui.voiceState.interim) { agendar(); return; }     // ditado com texto provisório: espera
+    if (sheet.querySelector(".v2-duvida.ativa")) { esconder(); return; }   // revisão das dúvidas em andamento
     carregar();
     const info = secaoConclusao();
     if (!info || !caretEmAchados()) { esconder(); return; }
+    // Se o laudo ainda está como veio da IA (com conclusão já montada) e não houve edição manual, não sobrepõe sugestões.
+    if (typeof ui.propostaIA === "function") {
+      const prop = ui.propostaIA();
+      if (prop && info.linhas.length && !info.linhas.every(l => /limites da normalidade/i.test(l)) &&
+          laudoTagged().replace(/\s+/g, " ").trim() === prop.replace(/\s+/g, " ").trim()) {
+        esconder(); return;
+      }
+    }
     let achados = []; try { achados = alteredFindings(); } catch (_) {}
     if (!achados.length) { esconder(); return; }
     const caso = ui.activeId ? ui.activeId() : "", desp = dispensadas.get(caso) || new Set();
@@ -9433,6 +9475,7 @@ window.tutuSite.appReady = true;
         sheet.innerHTML = modelSheetHtml({ ...ex, mask: d.laudo });
         const nDuv = ui.duvidas?.aposIA?.({ autoFocar: !ui.isMobile() }) || 0;
         updateCount(); renderAlerts();
+        ui.registrarIA?.(laudoTagged(), d.texto || "", { direct: true });
         await mudarVinculos(vinculos => { vinculos[caso] = pedido; });
         await ui.flush();
         setStatus("Laudo organizado pela IA." + (nDuv ? ` Confira ${nDuv} ponto(s) sublinhado(s) em amarelo (←/→, Enter, Del, ↓) e copie.` : " Revise e copie."), "ok");
@@ -9484,8 +9527,26 @@ window.tutuSite.appReady = true;
     if (texto && String(texto).trim()) propostasIA.set(caso, { proposta: texto, antes: antes || "", exame, id: crypto.randomUUID(), enviada: false, direct: !!opts?.direct }); else propostasIA.delete(caso);
   };
   ui.propostaIA = () => propostasIA.get(ui.activeId())?.proposta || "";
-  const gravarCorrecao = (exame, id, proposta, final) => !/^[a-z0-9-]{1,60}$/.test(exame || "") || mesmoTexto(proposta, final) ? Promise.resolve(false)
-    : G.putJson("ia/correcoes/" + exame + "/" + id + ".json", { exame, proposta, final, quando: new Date().toISOString() }, null, "IA: correção do Artur").then(() => true, () => false);
+  async function gravarCorrecao(exame, id, proposta, final) {
+    if (!/^[a-z0-9-]{1,60}$/.test(exame || "") || mesmoTexto(proposta, final)) return false;
+    let propLimpa = String(proposta), finLimpa = String(final);
+    if (typeof ui.anonimizar === "function") {
+      try {
+        propLimpa = ui.anonimizar(propLimpa);
+        finLimpa = ui.anonimizar(finLimpa);
+      } catch (_) {
+        return false;
+      }
+      if (!propLimpa.trim() || !finLimpa.trim() || mesmoTexto(propLimpa, finLimpa)) return false;
+    }
+    const quando = new Date().toISOString();
+    if (T.nuvemStatus?.()?.configurada && typeof T.salvarCorrecaoNuvem === "function") {
+      const r = await T.salvarCorrecaoNuvem({ exame, id, proposta: propLimpa, final: finLimpa, quando }).catch(() => null);
+      if (r?.ok) return true;
+    }
+    if (!G.token) return false;
+    return G.putJson("ia/correcoes/" + exame + "/" + id + ".json", { exame, proposta: propLimpa, final: finLimpa, quando }, null, "IA: correção do Artur").then(() => true, () => false);
+  }
   if (typeof applyGenerated === "function") { const antigoGerado = applyGenerated; applyGenerated = (...a) => { const antes = laudoTagged(); const r = antigoGerado(...a); ui.registrarIA(laudoTagged(), antes); return r; }; }
   if (typeof undoAllClaude === "function") { const antigoDesfazer = undoAllClaude; undoAllClaude = (...a) => { ui.registrarIA(null); return antigoDesfazer(...a); }; const b = document.getElementById("undoAllBtn"); if (b) b.onclick = undoAllClaude; }
   if (typeof undoVersion === "function") { const antigoUndoVer = undoVersion; undoVersion = (...a) => { const r = antigoUndoVer(...a); if (typeof versions !== "undefined" && typeof verPtr !== "undefined" && versions[verPtr]?.label === "Antes da correção") ui.registrarIA(null); return r; }; const ub = document.getElementById("undoBtn"); if (ub) ub.onclick = undoVersion; }
@@ -9512,8 +9573,8 @@ window.tutuSite.appReady = true;
           if (!r && cachePedidos.has(id + ".json")) r = cachePedidos.get(id + ".json");
           // Aprendizado: proposta da IA → laudo que o Artur copiou (tools/ia_laudo.py usa nas próximas e no guia).
           // Se a IA ajustou depois (Conversar/Gerar), essa versão é a proposta e já foi gravada acima.
-          if (r?.json?.laudo && !reg && G.token) await gravarCorrecao(r.json.exame, id, r.json.laudo, finalTexto);
-          if (r?.json?.laudo) await aprenderVoz(r.json.texto, finalTexto, r.json.exame).catch(() => {});
+          if (r?.json?.laudo && !reg) await gravarCorrecao(r.json.exame, id, r.json.laudo, finalTexto);
+          if (r?.json?.laudo && !(reg?.direct && reg?.antes)) await aprenderVoz(r.json.texto, finalTexto, r.json.exame).catch(() => {});
           if (r || (T.nuvemStatus?.()?.configurada && typeof T.filaUsgApagar === "function")) await apagar(id, r?.sha || "");
           await mudarVinculos(vinculos => { if (vinculos[caso] === id) delete vinculos[caso]; }); await atualizar();
         }
@@ -9637,7 +9698,8 @@ window.tutuSite.appReady = true;
   let tela = null;   // tela acesa enquanto dita (Wake Lock)
   const manterTela = async () => { try { if (on && !tela && navigator.wakeLock && document.visibilityState === "visible") { tela = await navigator.wakeLock.request("screen"); tela.addEventListener("release", () => { tela = null; }); } } catch (_) { tela = null; } };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") manterTela(); });
-  let fails = 0, ignoreUntil = 0, lastInsert = null, lastReached = null, panelShortcut = null;
+  let fails = 0, ignoreUntil = 0, lastInsert = null, panelShortcut = null;
+  const reachedEvents = new WeakSet();
   const note = ui.el("small", { id: "siteDictationNote", title: "Extensão não detectada: o reconhecimento roda nesta página." }, "ditado do site (sem extensão)");
   note.style.cssText = "color:var(--muted);font-size:11px;margin-left:6px"; note.hidden = true; if (label) label.after(note);
   const parse = e => { try { return typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail; } catch (_) { return null; } };
@@ -9899,12 +9961,12 @@ window.tutuSite.appReady = true;
   window.addEventListener("keydown", e => {
     if (extension || !isAltS(e)) return;
     panelShortcut = ui.tempoReal?.noPainel() ? e : null;
-    setTimeout(() => { if (!extension && lastReached !== e && e.defaultPrevented) foundExtension(); }, 0);
+    setTimeout(() => { if (!extension && !reachedEvents.has(e) && e.defaultPrevented) foundExtension(); }, 0);
   }, true);
   window.addEventListener("keydown", e => {
     if (extension || !isAltS(e)) return;
     if (panelShortcut === e) ui.tempoReal.focar();
-    lastReached = e; checked = true;
+    reachedEvents.add(e); checked = true;
     // Sem checar defaultPrevented: o handler antigo da página (document, bolha) já cancela Alt+S só para
     // manter o foco na folha. Quem consome a tecla de verdade (content.js) para a propagação e ela não chega aqui.
     e.preventDefault();               // não insere caractere (ex.: Option+S no Mac)
@@ -9916,7 +9978,7 @@ window.tutuSite.appReady = true;
     // Mesmo caminho do 102: com a extensão (content.js) a tecla sintética liga o microfone dela.
     const ev = new KeyboardEvent("keydown", { key: "s", code: "KeyS", altKey: true, bubbles: true, cancelable: true });
     document.dispatchEvent(ev);
-    if (!extension && lastReached !== ev) { foundExtension(); if (label) label.textContent = "Comando enviado · Alt S"; }
+    if (!extension && !reachedEvents.has(ev)) { foundExtension(); if (label) label.textContent = "Comando enviado · Alt S"; }
   };
   // O modo Áudio usa outro reconhecedor: os dois não podem disputar o microfone.
   document.addEventListener("click", e => { if (on && e.target.closest?.("#usgOpen")) stop(); }, true);
@@ -10015,10 +10077,11 @@ ${pedido}
 REGRAS:
 1. Aplique só o que foi pedido; nunca invente achados, medidas ou lateralidade. Mantenha <b>, <u>, <i>, {{centro}} e títulos.
 2. Se mexer nos Achados, deixe a Conclusão coerente.
-3. Ponto incerto (dúvida, lateralidade ausente em estrutura par, sexo omitido/conflitante, concordância ou dado não ditado): {{?trecho::motivo curto}} (nunca [?]).
+3. Ponto incerto (dúvida, lateralidade ausente em estrutura par — exceto exames unilaterais cujo título já especifica o lado, pois neles a lateralidade fica só no título; artéria tibial não tem lateralidade —, sexo omitido/conflitante, concordância ou dado não ditado): {{?trecho::motivo curto}} (nunca [?]).
+4. Estenoses arteriais ao Doppler de membros: use a frase completa com aumento da velocidade de pico sistólico (~2x, 2 a 4x ou >4x) em relação ao segmento pré-estenótico conforme o grau.
 FORMATO DA RESPOSTA: DIFF só com as linhas alteradas (sem markdown):
 Ln: texto novo | +Ln: inserir após n | -Ln (apagar) | OK (se nada mudar)
-Se valer para próximos laudos ("sempre", "nunca", "da próxima vez"), termine com 1 linha: REGRA: <regra curta, sem dados do paciente>.`;
+Se o pedido ensinar uma preferência reutilizável para próximos laudos (redação, terminologia, frases padrão, lateralidade, nível de detalhe ou formato da conclusão — mesmo sem dizer "sempre"), termine com 1 linha: REGRA: <regra curta e geral, sem dados ou achados específicos deste paciente>. Omita REGRA apenas em ajustes pontuais só deste caso.`;
   }
   function aplicarResposta(draft, linhas, resposta, applyDiffFn) {
     const limpo = String(resposta || "").replace(/\r/g, "").trim().replace(/^```\w*\s*\n|\n\s*```$/g, "").trim();
@@ -10317,12 +10380,17 @@ Se valer para próximos laudos ("sempre", "nunca", "da próxima vez"), termine c
         pedido: anon(pedido)
       }));
       let r = await pedirIA(prompt, ctlConversa.signal, anonimo, pedidoIA.delta ? draft : null, pedidoIA, !!repetir);
-      let patch = r?.modo === "delta" && baseDelta ? D.aplicar(draft, r.text) : null;
+      let extraido = C.extrairRegra(r?.text || "");
+      let patch = r?.modo === "delta" && baseDelta ? D.aplicar(draft, extraido.resto) : null;
       if (repetir && r?.modo === "delta" && !patch) throw Error("A resposta delta veio fora do formato; o laudo ficou como estava.");
-      if (r?.modo === "delta" && !patch) { pedidoIA.delta = false; r = await pedirIA(prompt, ctlConversa.signal, anonimo, null, pedidoIA); }
+      if (r?.modo === "delta" && !patch) {
+        pedidoIA.delta = false;
+        r = await pedirIA(prompt, ctlConversa.signal, anonimo, null, pedidoIA);
+        extraido = C.extrairRegra(r?.text || "");
+      }
       const motor = r?.motor === "nuvem" ? (r?.modelo || modeloSel.value || "IA nuvem") : r?.motor === "antigravity" ? "Antigravity" : "Claude";
       const secs = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
-      const { regra, resto } = C.extrairRegra(r?.text || "");
+      const { regra, resto } = extraido;
       lockSheet(false);
       if (laudoTagged() !== draft) { dizer("A folha mudou enquanto a IA respondia: nada foi aplicado. Envie de novo."); return; }
       genLines = num.linhas;
@@ -10373,6 +10441,13 @@ Se valer para próximos laudos ("sempre", "nunca", "da próxima vez"), termine c
     }
     return false;
   }
+  async function sincronizarRegra(exame, regra, acao, data) {
+    if (T?.nuvemStatus?.()?.configurada && typeof T.salvarRegraNuvem === "function") {
+      const r = await T.salvarRegraNuvem({ exame, regra, acao, data }).catch(() => null);
+      if (r?.ok) return true;
+    }
+    return gravarMd(exame, md => (acao === "remover" ? C.tirarRegraMd(md, regra) : C.regraMd(md, regra, data)));
+  }
   async function lembrar(regra) {
     const exame = current?.id || "todos", data = hoje();
     let id = null;
@@ -10380,16 +10455,16 @@ Se valer para próximos laudos ("sempre", "nunca", "da próxima vez"), termine c
     ultimaRegra = { regra, exame, id };
     lembrei.replaceChildren(el("span", {}, "Lembrei: " + regra + " "), button("Desfazer", () => esquecer(), { id: "conversaEsquecer" }), el("small", { id: "conversaLembreiNota" }, " salvando…"));
     lembrei.hidden = false;
-    const ok = await gravarMd(exame, md => C.regraMd(md, regra, data));
+    const ok = await sincronizarRegra(exame, regra, "adicionar", data);
     const nota = document.getElementById("conversaLembreiNota");
-    if (nota && ultimaRegra?.regra === regra) nota.textContent = ok ? " (vale também no áudio do celular)" : " (só neste aparelho: sem chave do repo de dados ou sem rede)";
+    if (nota && ultimaRegra?.regra === regra) nota.textContent = ok ? " (salvo para os próximos laudos — vale também no áudio)" : " (só neste aparelho: sem nuvem/chave ou sem rede)";
   }
   async function esquecer() {
     const r = ultimaRegra; if (!r) return;
     ultimaRegra = null; lembrei.hidden = true;
     try { if (db && r.id) await db.doc("regras/" + r.id).delete(); } catch (_) {}
-    const ok = await gravarMd(r.exame, md => C.tirarRegraMd(md, r.regra));
-    dizer("Esqueci: " + r.regra + (ok ? "" : " (o arquivo do repo de dados não foi alterado)"));
+    const ok = await sincronizarRegra(r.exame, r.regra, "remover", "");
+    dizer("Esqueci: " + r.regra + (ok ? "" : " (a nuvem ou o arquivo do repo de dados não foi alterado)"));
   }
   ui.conversa = { abrir, mandar, fila, pedirIA, anon, limparPedido: C.limparPedido };   // pedirIA/anon: o modo Frase (@) usa o mesmo caminho para ajustar a frase ao que foi ditado
 })();
@@ -13405,7 +13480,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const RE_IGNORE_SEC = /^(?:indicacao(?:\s+clinica)?|clinica|informacoes\s+clinicas|historia\s+clinica|dados\s+clinicos|comparacao|exame\s+anterior|laudo\s+anterior|estudo\s+anterior|tecnica(?:\s+de\s+exame)?)(?:\s*:|$)/;
   const ORGAOS_PARES = [
     "glandula adrenal", "regiao anexial", "arteria iliaca", "veia iliaca", "arteria renal", "veia renal",
-    "arteria femoral", "veia femoral", "arteria poplitea", "veia poplitea", "arteria tibial", "veia tibial",
+    "arteria femoral", "veia femoral", "arteria poplitea", "veia poplitea", "veia tibial",
     "hemisferio cerebral", "hemisferio cerebelar", "lobo tireoidiano", "lobo superior", "lobo medio", "lobo inferior",
     "lobo hepatico", "seio maxilar", "fossa iliaca", "ventriculo lateral", "rim", "adrenal", "ureter", "ovario",
     "anexo", "pulmao", "hemitorax", "mama", "testiculo", "hipocondrio", "flanco", "orbita", "mastoide",
@@ -13488,6 +13563,10 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     const firstLine = lines.find(l => l.trimmed)?.trimmed || "";
     const tituloFold = fold((ctx.tituloExame || "") + " " + firstLine);
     const tituloTemLado = /\b(direit[oa]|esquerd[oa]|unilateral)\b/.test(tituloFold);
+    const tituloExameUnilateral =
+      tituloTemLado ||
+      (/\b(?:membro\s+(?:inferior|superior)|ombro|joelho|quadril|tornozelo|punho|cotovelo|pe|mao|mama|bolsa\s+escrotal|inguinal)\b/.test(tituloFold) &&
+        !/\b(?:membros\s+(?:inferiores|superiores)|ombros|joelhos|quadris|tornozelos|punhos|cotovelos|pes|maos|mamas|bilatera(?:l|is))\b/.test(tituloFold));
     const mod = ctx.modalidade || detectModalityText(src, ctx.tituloExame);
 
     const idxA = lines.findIndex(l => /^achados(?:\s*:)?$/.test(l.folded));
@@ -13540,8 +13619,8 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         }
       }
 
-      // 2. Lateralidade ausente em achado alterado de estrutura par
-      if (!linhaTodaNormal && !tituloTemLado) {
+      // 2. Lateralidade ausente em achado alterado de estrutura par (exames unilaterais mantêm lado só no título)
+      if (!linhaTodaNormal && !tituloExameUnilateral) {
         const sents = [];
         let sPos = 0;
         for (const parte of ln.trimmed.split(/(?<=[.;!?])\s+/)) {
@@ -13666,17 +13745,23 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const casoAtualId = () => ui.activeId?.() || "padrao";
   const chaveConfirmado = (motivo, trecho) => `${casoAtualId()}|${fold(motivo)}|${fold(trecho).replace(/\s+/g, " ").trim()}`;
 
+  const RE_NAO_HIDRATADO = /\{\{\?|\[\?|\[<>\]/;
+  const temNaoHidratado = rootEl => typeof rootEl !== "undefined" && !!rootEl && blockNodes(rootEl).some(n => RE_NAO_HIDRATADO.test(n.nodeValue || ""));
+  const ehObrigNaoPreenchido = el => !!(el && el.dataset?.obrig === "1" && el.textContent.includes("[<>]"));
+
   const listar = () => {
-    if (!hidratando && typeof sheet !== "undefined" && /\{\{\?|\[\?/.test(sheet.textContent || "")) hidratar();
+    if (!hidratando && typeof sheet !== "undefined" && temNaoHidratado(sheet)) hidratar();
     return [...sheet.querySelectorAll(".v2-duvida")].filter(el => el.isConnected && !el.closest("del.rm, p.rmline"));
   };
 
   const spanDuvida = (trecho, motivo, origem = "") => {
     const s = document.createElement("span");
-    s.className = "v2-duvida";
+    const obrig = origem === "obrig" || String(trecho) === "[<>]";
+    s.className = obrig ? "v2-duvida v2-duvida-obrig" : "v2-duvida";
     const m = String(motivo || "Conferir ponto incerto").trim();
     s.dataset.duvida = m;
     if (origem) s.dataset.origem = origem;
+    if (obrig) s.dataset.obrig = "1";
     s.title = m;
     s.textContent = String(trecho || "");
     return s;
@@ -13719,15 +13804,15 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       const blocks = [...sheet.querySelectorAll("p, div, li")];
       const alvos = blocks.length ? blocks : [sheet];
       for (const blk of alvos) {
-        if (!/\{\{\?|\[\?/.test(blk.textContent || "")) continue;
         const txt = blockNodes(blk).map(n => n.nodeValue).join("");
+        if (!RE_NAO_HIDRATADO.test(txt)) continue;
         const ops = [];
         const ocupados = [];
-        const addOp = (start, end, trecho, motivo) => {
+        const addOp = (start, end, trecho, motivo, origem = "") => {
           if (end <= start) return;
           if (ocupados.some(o => !(end <= o[0] || start >= o[1]))) return;
           ocupados.push([start, end]);
-          ops.push({ start, end, trecho, motivo });
+          ops.push({ start, end, trecho, motivo, origem });
         };
 
         for (const m of txt.matchAll(/\{\{\?([^}\n]+?)(?:::([^}\n]+?))?\}\}/g)) {
@@ -13740,6 +13825,9 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
           const antes = (m[1] || "").trim();
           addOp(m.index, m.index + m[0].length, antes || "preencher", "Conferir ponto incerto");
         }
+        for (const m of txt.matchAll(/\[<>\]/g)) {
+          addOp(m.index, m.index + m[0].length, "[<>]", "Campo obrigatório — preencha (↓ editar)", "obrig");
+        }
 
         ops.sort((a, b) => b.start - a.start);
         for (const op of ops) {
@@ -13748,7 +13836,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
           const parA = r.startContainer.parentElement;
           const parB = r.endContainer.parentElement;
           r.deleteContents();
-          r.insertNode(spanDuvida(op.trecho, op.motivo));
+          r.insertNode(spanDuvida(op.trecho, op.motivo, op.origem));
           if (parA && parA !== blk && !parA.textContent.trim()) parA.remove();
           if (parB && parB !== blk && !parB.textContent.trim()) parB.remove();
           for (const tag of blk.querySelectorAll("b, u, i, em, strong")) if (!tag.textContent) tag.remove();
@@ -13974,9 +14062,14 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   function confirmar(el = ativa) {
     if (!el || !el.isConnected) return false;
     if (!el.textContent.trim()) return apagar(el);
+    if (ehObrigNaoPreenchido(el)) {
+      selecionar(el, { editar: true, focar: true });
+      if (typeof setStatus === "function") setStatus("Preencha o campo obrigatório [<>] (ou Delete para apagar).", "err");
+      return false;
+    }
     const listaAntes = listar();
     const idx = listaAntes.indexOf(el);
-    confirmados.add(chaveConfirmado(el.dataset.duvida || "", el.textContent));
+    if (el.dataset.obrig !== "1") confirmados.add(chaveConfirmado(el.dataset.duvida || "", el.textContent));
     const par = el.closest("p, div, li");
     const ultimoTexto = el.lastChild;
     el.replaceWith(...el.childNodes);
@@ -14011,7 +14104,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     if (!el || !el.isConnected) return false;
     const listaAntes = listar();
     const idx = listaAntes.indexOf(el);
-    confirmados.add(chaveConfirmado(el.dataset.duvida || "", el.textContent));
+    if (el.dataset.obrig !== "1") confirmados.add(chaveConfirmado(el.dataset.duvida || "", el.textContent));
     const par = el.closest("p, div, li");
     el.remove();
     limparEspacosBloco(par);
@@ -14054,7 +14147,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     const hit = items[i];
     if (!hit) { sectionNav(1); return; }
     if (hit.kind === "duvida") {
-      selecionar(hit.el, { editar: false, focar: true });
+      selecionar(hit.el, { editar: ehObrigNaoPreenchido(hit.el), focar: true });
       return;
     }
     sair();
@@ -14070,11 +14163,15 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   /* ---------- destaque visual dos [<>] obrigatórios e pílulas na barra ---------- */
   function atualizarObrigatorios() {
     if (typeof sheet === "undefined" || !sheet) return 0;
+    let total = 0;
     const ranges = [];
     for (const n of sheetTextNodes(sheet)) {
       const v = n.nodeValue || "";
       if (!v.includes("[<>]")) continue;
+      const emDuvida = !!(n.parentElement && n.parentElement.closest(".v2-duvida-obrig"));
       for (const m of v.matchAll(/\[<>\]/g)) {
+        total++;
+        if (emDuvida) continue;
         try {
           const r = document.createRange();
           r.setStart(n, m.index);
@@ -14089,14 +14186,29 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         else CSS.highlights.delete("tutu-obrigatorio");
       }
     } catch (_) {}
-    return ranges.length;
+    return total;
   }
 
   function irParaProximoObrigatorio(fromOverride = null) {
+    if (temNaoHidratado(sheet)) hidratar();
+    const from = typeof fromOverride === "number" ? fromOverride : position(1);
+    const obrigSpans = listar()
+      .filter(el => ehObrigNaoPreenchido(el))
+      .map(el => {
+        try {
+          const s = offsetOf(sheet, el, 0);
+          return { el, start: s, end: s + el.textContent.length };
+        } catch (_) { return null; }
+      })
+      .filter(Boolean);
+    if (obrigSpans.length) {
+      const idx = nextIndex(obrigSpans, from, 1);
+      const hit = obrigSpans[idx];
+      if (hit) return selecionar(hit.el, { editar: true, focar: true });
+    }
     const matches = Array.from(sheetText().matchAll(/\[<>\]/g), m => ({ start: m.index, end: m.index + 4, text: "[<>]" }));
     if (!matches.length) return false;
     sair();
-    const from = typeof fromOverride === "number" ? fromOverride : position(1);
     const idx = nextIndex(matches, from, 1);
     const hit = matches[idx];
     if (!hit) return false;
@@ -14223,16 +14335,31 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     if (editando && editando.isConnected) {
       const s = getSelection();
       if (s.rangeCount && editando.contains(s.anchorNode)) return;
-      editando.classList.remove("editando");
+      const saiu = editando;
+      saiu.classList.remove("editando");
       editando = null;
       ativa = null;
       limparClasses();
+      if (saiu.dataset?.obrig === "1") {
+        const par = saiu.closest("p, div, li");
+        if (!saiu.textContent.trim()) {
+          saiu.remove();
+          limparEspacosBloco(par);
+          if (typeof scheduleCaseSave === "function") scheduleCaseSave();
+          if (typeof renderAlerts === "function") renderAlerts();
+        } else if (!saiu.textContent.includes("[<>]")) {
+          saiu.replaceWith(...saiu.childNodes);
+          par?.normalize();
+          if (typeof scheduleCaseSave === "function") scheduleCaseSave();
+          if (typeof renderAlerts === "function") renderAlerts();
+        }
+      }
     }
     refresh();
   });
 
   new MutationObserver(() => {
-    if (!hidratando && /\{\{\?|\[\?/.test(sheet.textContent || "")) hidratar();
+    if (!hidratando && temNaoHidratado(sheet)) hidratar();
     refresh();
   }).observe(sheet, { childList: true, subtree: true, characterData: true });
 
@@ -14259,7 +14386,8 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   doCopy = () => {
     const lista = listar();
     const nObrig = countObrigatorios(sheetText());
-    const warning = copyWarning(lista.length, nObrig);
+    const nDuvOutras = lista.filter(el => !ehObrigNaoPreenchido(el)).length;
+    const warning = copyWarning(nDuvOutras, nObrig);
     if (!warning) return originalCopy();
     message.textContent = warning;
     if (!dialog.open) dialog.showModal();
@@ -16152,58 +16280,528 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   carregarUso(false);
 })();
 
-/* Textos padrão da máscara: fora da folha do laudo, acessíveis em botão/aba dedicados por exame. */
+/* Textos padrão da máscara: fora da folha, organizados por órgão/alteração no botão "Textos padrão",
+   com inserção automática na linha correspondente de Achados e na Conclusão. */
+(function (root) {
+  "use strict";
+  const Sug = root.TutuSugestoes || (typeof require !== "undefined" ? require("./119-v2-sugestoes.js") : null);
+  const fold = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  const ORGAO_LABEL = new Map((Sug?.ORGAOS || []).map(o => [o.id, o.label]));
+  const CONC_START_RE = /^(?:sinais\s+de|aspectos?\s+compat[ií]veis|estenose|ateromatose|esteatose|colelit[ií]ase|nefrolit[ií]ase|urolit[ií]ase|hepatopatia|cisto|cistos|n[oó]dulo|n[oó]dulos|h[eé]rnia|derrame|espessamento|aumento|redu[cç][aã]o|oclus[aã]o|trombose|lit[ií]ase|colecistite|pancreatite|esplenomegalia|hepatomegalia|hidronefrose|diverticulose|apendicite|bexiga\s+de\s+esfor[cç]o|status\s+p[oó]s-|placas?\s+de\s+ateroma|altera[cç][õo]es|achados?\s+compat[ií]veis|doen[cç]a\s+|calcifica[cç][õo]es|p[oó]lipo|adenoma|linfonodomegalia|linfadenopatia|ectasia|dilata[cç][aã]o)/i;
+  const DESC_START_RE = /^(?:art[eé]rias?|veias?|f[ií]gado|ves[ií]cula|p[aâ]ncreas|ba[çc]o|rins?|rim\b|bexiga|pr[oó]stata|[uú]tero|ov[aá]rios?|tireoide|par[eê]nquima|vias?\s+biliares|n[aã]o\s+h[aá]\b|aus[eê]ncia\s+de|todas?\s+as?\s+|presen[cç]a\s+de|realizada|pun[cç][aã]o)/i;
+  const ACH_LBL_RE = /^(?:achados?|descri[cç][aã]o|frase)\s*:\s*(.*)$/i;
+  const CONC_LBL_RE = /^(?:conclus[aã]o|conc\.?|impress[aã]o)\s*:\s*(.*)$/i;
+
+  function cleanText(raw) {
+    let t = String(raw || "")
+      .replace(/^(?:\{\{[^}]+\}\})+/g, "")
+      .replace(/<\/?(?:b|u|i|strong|em)>/gi, "")
+      .trim();
+    const m = t.match(/^\[<(.*)>\](.*)$/) || t.match(/^\[(.*)\](.*)$/);
+    if (m && m[1] !== "" && m[1] !== "<>") t = m[1] + m[2];
+    t = t.replace(/^[-•*]\s+/, "");
+    return t.replace(/\s+/g, " ").trim();
+  }
+
+  function detectarOrgaoTexto(texto, sugApi = Sug) {
+    if (!texto || !sugApi?.matchOrgaos) return { id: "", label: "", strong: false };
+    const hits = sugApi.matchOrgaos(texto);
+    if (!hits.length) return { id: "", label: "", strong: false };
+    const top = hits[0];
+    return {
+      id: top.id,
+      label: ORGAO_LABEL.get(top.id) || top.id,
+      strong: top.sc >= 10
+    };
+  }
+
+  function isLikelyConc(prevLine, candLine, sugApi = Sug) {
+    if (!prevLine || !candLine) return false;
+    if (prevLine.length < 45 || candLine.length > 125 || candLine.includes("[<>]")) return false;
+    if (DESC_START_RE.test(candLine)) return false;
+    if (!CONC_START_RE.test(candLine)) return false;
+    const o1 = detectarOrgaoTexto(prevLine, sugApi);
+    const o2 = detectarOrgaoTexto(candLine, sugApi);
+    if (o1.strong && o2.strong && o1.id !== o2.id) return false;
+    return true;
+  }
+
+  function parseHeading(rawLine, nextNonEmpty, sugApi = Sug) {
+    const t = String(rawLine || "").trim();
+    if (!t || ACH_LBL_RE.test(t) || CONC_LBL_RE.test(t)) return null;
+    if (/^\[<.*>\]$/.test(t)) return null;
+    const md = t.match(/^(#{1,3})\s+(.+)$/);
+    const brk = !md && t.match(/^\[([^[\]<>]{2,48})\]$/);
+    const eq = !md && !brk && t.match(/^={2,}\s*(.+?)\s*={2,}$/);
+    const semHtml = t.replace(/^(?:\{\{[^}]+\}\})+/g, "").replace(/<\/?(?:b|u|i|strong|em)>/gi, "").trim();
+    const hadBold = /^<(?:b|u|strong)>/i.test(t);
+    const cleanHead = (md ? md[2] : brk ? brk[1] : eq ? eq[1] : semHtml).replace(/[:\s]+$/, "").trim();
+    if (!cleanHead || cleanHead.length > 60) return null;
+
+    const explicit = !!(md || brk || eq || hadBold || /:\s*$/.test(semHtml));
+    if (!explicit) return null;
+    // Frase normal com ponto final não é título (mesmo se terminar em ":")
+    if (/[.!?]/.test(cleanHead) && !md && !brk && !eq) return null;
+    if (!nextNonEmpty && !md && !brk && !eq && !hadBold) return null;
+
+    if (/[›>]/.test(cleanHead)) {
+      const [esq, dir] = cleanHead.split(/\s*[›>]\s*/, 2);
+      const o = detectarOrgaoTexto(esq, sugApi);
+      return {
+        kind: "combo",
+        orgaoId: o.id || "geral",
+        orgaoLabel: o.label || esq.trim(),
+        titulo: (dir || "").trim()
+      };
+    }
+
+    const level = md ? md[1].length : 0;
+    const o = detectarOrgaoTexto(cleanHead, sugApi);
+    if (level <= 2 && (o.strong || brk || eq || level === 1 || level === 2)) {
+      return {
+        kind: o.id ? "orgao" : (level >= 2 ? "titulo" : "orgao"),
+        orgaoId: o.id || fold(cleanHead).replace(/[^a-z0-9]+/g, "_") || "geral",
+        orgaoLabel: o.label || cleanHead,
+        titulo: o.id ? "" : cleanHead
+      };
+    }
+    if (level === 3 || !o.id) {
+      return { kind: "titulo", titulo: cleanHead };
+    }
+    return {
+      kind: "orgao",
+      orgaoId: o.id,
+      orgaoLabel: o.label || cleanHead,
+      titulo: ""
+    };
+  }
+
+  function parsePadroes(rawText, _exame, sugApi = Sug) {
+    const rawLines = String(rawText || "").replace(/\r\n?/g, "\n").split("\n");
+    const items = [];
+    let curOrg = null; // { id, label }
+    let curTitulo = "";
+    let cur = null;
+    let expectField = ""; // "achado" | "conclusao" | ""
+
+    const flush = () => {
+      if (!cur) return;
+      const ach = (cur.achado || "").trim();
+      const conc = (cur.conclusao || "").replace(/\s+$/, "").trim();
+      if (ach) {
+        const det = !cur.orgaoId ? detectarOrgaoTexto(ach + " " + cur.titulo, sugApi) : null;
+        const orgId = cur.orgaoId || det?.id || "geral";
+        const orgLabel = cur.orgaoLabel || det?.label || "Geral";
+        items.push({
+          orgaoId: orgId,
+          orgaoLabel: orgLabel,
+          titulo: cur.titulo || "",
+          achado: ach,
+          conclusao: conc
+        });
+      }
+      cur = null;
+      expectField = "";
+    };
+
+    const nextNonEmptyOf = i => {
+      for (let j = i + 1; j < rawLines.length; j++) {
+        if (rawLines[j].trim()) return rawLines[j].trim();
+      }
+      return "";
+    };
+
+    for (let i = 0; i < rawLines.length; i++) {
+      const raw = rawLines[i].trim();
+      if (!raw) {
+        flush();
+        curTitulo = "";
+        continue;
+      }
+
+      const hd = parseHeading(raw, nextNonEmptyOf(i), sugApi);
+      if (hd) {
+        flush();
+        if (hd.kind === "combo") {
+          curOrg = { id: hd.orgaoId, label: hd.orgaoLabel };
+          curTitulo = hd.titulo;
+        } else if (hd.kind === "orgao") {
+          curOrg = { id: hd.orgaoId, label: hd.orgaoLabel };
+          curTitulo = "";
+        } else {
+          curTitulo = hd.titulo;
+        }
+        continue;
+      }
+
+      const txt = cleanText(raw);
+      if (!txt) continue;
+
+      const mAch = txt.match(ACH_LBL_RE);
+      if (mAch) {
+        if (cur && cur.achado) flush();
+        cur = cur || { orgaoId: curOrg?.id || "", orgaoLabel: curOrg?.label || "", titulo: curTitulo, achado: "", conclusao: "" };
+        expectField = "achado";
+        if (mAch[1].trim()) {
+          cur.achado = mAch[1].trim();
+          expectField = "";
+        }
+        continue;
+      }
+
+      const mConc = txt.match(CONC_LBL_RE);
+      if (mConc) {
+        cur = cur || { orgaoId: curOrg?.id || "", orgaoLabel: curOrg?.label || "", titulo: curTitulo, achado: "", conclusao: "" };
+        expectField = "conclusao";
+        if (mConc[1].trim()) {
+          cur.conclusao = mConc[1].trim();
+          flush();
+        }
+        continue;
+      }
+
+      if (expectField === "achado" && cur) {
+        cur.achado = cur.achado ? cur.achado + " " + txt : txt;
+        expectField = "";
+        continue;
+      }
+      if (expectField === "conclusao" && cur) {
+        cur.conclusao = cur.conclusao ? cur.conclusao + " " + txt : txt;
+        flush();
+        continue;
+      }
+
+      if (cur && cur.achado && !cur.conclusao && isLikelyConc(cur.achado, txt, sugApi)) {
+        cur.conclusao = txt;
+        flush();
+        continue;
+      }
+
+      flush();
+      cur = {
+        orgaoId: curOrg?.id || "",
+        orgaoLabel: curOrg?.label || "",
+        titulo: curTitulo,
+        achado: txt,
+        conclusao: ""
+      };
+    }
+    flush();
+
+    const seen = new Set();
+    return items.filter(it => {
+      const k = fold(it.achado) + "|" + fold(it.conclusao);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
+  function agruparPorOrgao(itens, exame, sugApi = Sug) {
+    const groups = new Map();
+    for (const it of itens || []) {
+      const id = it.orgaoId || "geral";
+      if (!groups.has(id)) groups.set(id, { id, label: it.orgaoLabel || "Geral", itens: [] });
+      groups.get(id).itens.push(it);
+    }
+    const order = sugApi?.orgaosDoExame ? sugApi.orgaosDoExame(exame) : [];
+    const rank = id => {
+      if (id === "geral") return 9999;
+      const i = order.indexOf(id);
+      return i >= 0 ? i : 1000;
+    };
+    return [...groups.values()].sort((a, b) => rank(a.id) - rank(b.id) || a.label.localeCompare(b.label, "pt-BR"));
+  }
+
+  function ladoTexto(t) {
+    const f = fold(t);
+    const d = /\bdireit[oa]s?\b/.test(f), e = /\besquerd[oa]s?\b/.test(f);
+    if (d && e) return "B";
+    if (d) return "D";
+    if (e) return "E";
+    return "";
+  }
+
+  const SUBJECT_STOP = new Set("a o as os e de da do dos das em no na nos nas com sem para pelo pela comeco apresentando evidencia sinais sinal ausencia nao".split(" "));
+  const SUBJECT_STOP_WORDS = new Set("todas todos ambas ambos discreto discreta leve moderada moderado raras raros pequeno pequena grande".split(" "));
+  const SUBJ_SYN = {
+    figad: "hepat", hepat: "hepat",
+    vesic: "vesic", colec: "vesic",
+    pancre: "pancre",
+    baco: "esple", esple: "esple",
+    rins: "renal", rim: "renal", renal: "renal", renais: "renal",
+    bexig: "bexig", vesical: "bexig", vesicais: "bexig",
+    prost: "prost",
+    utero: "utero", endom: "utero",
+    ovari: "ovari",
+    aorta: "aorta",
+    tireo: "tireo",
+    paren: "paren"
+  };
+
+  function subjectKey(t) {
+    const ws = fold(cleanText(t)).split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !SUBJECT_STOP.has(w) && !SUBJECT_STOP_WORDS.has(w));
+    if (!ws.length) return [];
+    const out = [];
+    for (const w of ws.slice(0, 3)) {
+      const p5 = w.slice(0, 5);
+      out.push(SUBJ_SYN[p5] || SUBJ_SYN[w] || w);
+    }
+    return out;
+  }
+
+  function headTokens(t) {
+    const clause = cleanText(t).split(/[,;.]|\b(?:apresentando|exibindo|evidenciando|com\s+(?:parede|ecogenicidade|volume|calibre|dimens[õo]es|aspecto|sinais)|de\s+(?:parede|calibre|dimens[õo]es|ecogenicidade)|n[aã]o\s+(?:identific|visibiliz)|p[eé]rvi[oa]s?)\b/i)[0] || t;
+    const out = [];
+    for (const w of fold(clause).split(/[^a-z0-9]+/)) {
+      if (w.length < 3 || SUBJECT_STOP.has(w) || SUBJECT_STOP_WORDS.has(w)) continue;
+      const p5 = w.slice(0, 5);
+      out.push(SUBJ_SYN[p5] || SUBJ_SYN[w] || p5);
+    }
+    return [...new Set(out)];
+  }
+
+  function sameSubject(a, b) {
+    const ka = subjectKey(a), kb = subjectKey(b);
+    if (!ka.length || !kb.length) return false;
+    if (ka[0] === kb[0]) {
+      if (ka[0].startsWith("arter") && ka[1] && kb[1]) return ka[1] === kb[1];
+      return true;
+    }
+    return false;
+  }
+
+  function encontrarAlvo(paragrafos, achado, orgaoId, sugApi = Sug) {
+    if (!Array.isArray(paragrafos) || !paragrafos.length) return null;
+    const ladoA = ladoTexto(achado);
+    const achHead = headTokens(achado);
+    const achOrg = orgaoId && orgaoId !== "geral" ? orgaoId : (detectarOrgaoTexto(achado, sugApi).id || "");
+
+    let best = null;
+    for (const p of paragrafos) {
+      const txt = String(p.texto || "").trim();
+      if (!txt) continue;
+      const ladoP = ladoTexto(txt);
+      if (ladoA && ladoP && ladoA !== "B" && ladoP !== "B" && ladoA !== ladoP) continue;
+
+      let sc = 0;
+      const pHead = headTokens(txt);
+      const pTokens = new Set([...pHead, ...fold(txt).split(/[^a-z0-9]+/).filter(w => w.length >= 4).map(w => SUBJ_SYN[w.slice(0, 5)] || w.slice(0, 5))]);
+      for (const tk of achHead) {
+        if (pHead.includes(tk)) sc += 6;
+        else if (pTokens.has(tk)) sc += 3;
+      }
+      if (sameSubject(achado, txt)) sc += 8;
+
+      if (achOrg && sugApi?.matchOrgaos) {
+        const pOrgs = sugApi.matchOrgaos(txt);
+        const hit = pOrgs.find(h => h.id === achOrg);
+        if (hit) sc += hit.sc >= 10 ? 7 : 3;
+      }
+      if (ladoA && ladoP && ladoA === ladoP) sc += 2;
+      if (sc > 0 && (!best || sc > best.score)) best = { idx: p.idx, score: sc };
+    }
+    return best && best.score >= 5 ? best : null;
+  }
+
+  function aplicarNoParagrafo(textoAtual, achado, ehNormalAtual) {
+    const cur = String(textoAtual || "").trim();
+    const novo = String(achado || "").trim();
+    if (!cur || cur === "[<>]") return { modo: "substituir", texto: novo };
+    if (fold(cur).includes(fold(novo))) return { modo: "noop", texto: cur };
+
+    const sents = cur.split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (ehNormalAtual && sents.length >= 2) {
+      let trocou = false;
+      const out = sents.map(s => {
+        if (!trocou && sameSubject(novo, s) && (!Sug?.ehNormalTexto || Sug.ehNormalTexto(s) || ehNormalAtual)) {
+          trocou = true;
+          return novo;
+        }
+        return s;
+      });
+      if (trocou) return { modo: "substituir", texto: out.join(" ") };
+    }
+
+    if (ehNormalAtual && sameSubject(novo, cur)) {
+      return { modo: "substituir", texto: novo };
+    }
+
+    const sep = /[.!?]$/.test(cur) ? " " : ". ";
+    return { modo: "anexar", texto: cur + sep + novo };
+  }
+
+  const api = { cleanText, parsePadroes, agruparPorOrgao, encontrarAlvo, aplicarNoParagrafo, sameSubject, isLikelyConc };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TutuPadroes = api;
+})(globalThis);
+
 (() => {
   "use strict";
   if (typeof document === "undefined") return;
-  const ui = window.tutuV2;
-  if (!ui) return;
+  const ui = window.tutuV2, P = window.TutuPadroes, Sug = window.TutuSugestoes, C = window.TutuConclusao;
+  if (!ui || !P) return;
   const el = ui.el, button = ui.button;
+  const fold = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-  const cleanText = raw => {
-    let t = typeof stripMarks === "function" ? stripMarks(raw) : String(raw || "");
-    t = t.replace(/^(?:\{\{[^}]+\}\})+/g, "").trim();
-    const m = t.match(/^\[<(.*)>\](.*)$/) || t.match(/^\[(.*)\](.*)$/);
-    if (m && m[1] !== "") t = m[1] + m[2];
-    return t.trim();
-  };
+  let itensCache = [];
+  const collapsedOrgs = new Set();
 
   function listar() {
     if (typeof current === "undefined" || !current) return [];
-    const list = [current, ...(typeof extras !== "undefined" && Array.isArray(extras) ? extras : [])].filter(Boolean);
-    const seen = new Set();
-    const out = [];
-    for (const ex of list) {
-      const frases = typeof maskPadroesOf === "function" ? maskPadroesOf(ex) : [];
-      for (const raw of frases) {
-        const txt = cleanText(raw);
-        if (!txt || seen.has(txt)) continue;
-        seen.add(txt);
-        out.push({ exame: ex.name || ex.id || "Máscara", texto: txt });
+    const exs = [current, ...(typeof extras !== "undefined" && Array.isArray(extras) ? extras : [])].filter(Boolean);
+    const out = [], seen = new Set();
+    for (const ex of exs) {
+      const raw = typeof maskPadroesRawOf === "function"
+        ? maskPadroesRawOf(ex)
+        : (typeof maskPadroesOf === "function" ? maskPadroesOf(ex).join("\n") : "");
+      if (!raw || !raw.trim()) continue;
+      for (const it of P.parsePadroes(raw, ex, Sug)) {
+        const k = fold(it.achado) + "|" + fold(it.conclusao);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push({ ...it, exame: ex.name || ex.id || "Máscara", texto: it.achado });
       }
     }
     return out;
   }
 
-  function inserirFrase(texto) {
+  function maskNormalSet() {
+    const set = new Set();
+    try {
+      const raw = typeof maskBodyOf === "function" ? maskBodyOf(current) : "";
+      for (const ln of String(raw || "").split(/\r?\n/)) {
+        const clean = P.cleanText(ln);
+        if (clean) set.add(fold(clean));
+      }
+    } catch (_) {}
+    return set;
+  }
+
+  function htmlDeTexto(t) {
+    return typeof fmtInline === "function"
+      ? fmtInline(t)
+      : String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function inserirConclusaoPadrao(conc) {
+    if (!conc) return false;
+    const ps = [...sheet.children];
+    const ci = ps.findIndex(p => norm(p.textContent) === "conclusão");
+    if (ci < 0) return false;
+    let end = ci + 1;
+    while (end < ps.length && !isHeading(ps[end].textContent.trim())) end++;
+    const blocos = ps.slice(ci + 1, end);
+    const soNum = t => /^\s*\d+\s*[.)]?\s*$/.test(t);
+    const cheios = blocos.filter(b => { const t = b.textContent.trim(); return t && !soNum(t); });
+    const linhas = cheios.map(b => b.textContent.trim());
+    if (C?.jaTem?.(conc, linhas)) return false;
+
+    const normConcFold = fold("Exame dentro dos limites da normalidade.");
+    let targetEl = null;
+    if (cheios.length === 1 && fold(cheios[0].textContent.replace(/^\s*\d+\s*[.)]\s*/, "").replace(/\.+$/, "").trim()) === normConcFold.replace(/\.+$/, "") && fold(conc) !== normConcFold) {
+      cheios[0].innerHTML = htmlDeTexto("1. " + conc);
+      targetEl = cheios[0];
+    } else {
+      const placeholder = blocos.find(b => soNum(b.textContent));
+      const nums = cheios.map(b => +(b.textContent.trim().match(/^(\d+)\s*[.)]/) || [])[1]).filter(Boolean);
+      const nextNum = nums.length ? Math.max(...nums) + 1 : cheios.length + 1;
+      if (placeholder) {
+        const num = (placeholder.textContent.trim().match(/^(\d+)/) || [])[1] || nextNum;
+        placeholder.innerHTML = htmlDeTexto(num + ". " + conc);
+        targetEl = placeholder;
+      } else {
+        const p = document.createElement("p");
+        p.setAttribute("style", PSTYLE);
+        p.innerHTML = htmlDeTexto(nextNum + ". " + conc);
+        const ultimo = cheios[cheios.length - 1] || ps[ci];
+        ultimo.after(p);
+        targetEl = p;
+      }
+    }
+    if (targetEl) {
+      targetEl.classList.add("conversa-flash");
+      setTimeout(() => targetEl.classList.remove("conversa-flash"), 2400);
+    }
+    return true;
+  }
+
+  function inserirItem(item) {
+    const achado = typeof item === "string" ? item : (item?.achado || "");
+    const conclusao = typeof item === "string" ? "" : (item?.conclusao || "");
+    const orgaoId = typeof item === "string" ? "" : (item?.orgaoId || "");
+    if (!achado) return;
+
     if (typeof pushVersion === "function") pushVersion("Antes do texto padrão");
-    if (typeof insertAtCaret === "function") insertAtCaret(texto);
+    const ps = [...sheet.children];
+    const hi = ps.findIndex(p => norm(p.textContent) === "achados");
+    const ci = ps.findIndex(p => norm(p.textContent) === "conclusão");
+    const normals = maskNormalSet();
+    let targetNode = null;
+
+    if (hi >= 0) {
+      const endAch = ci > hi ? ci : ps.length;
+      const achBlocos = ps.slice(hi + 1, endAch)
+        .filter(p => !isHeading(p.textContent.trim()))
+        .map(elP => ({ el: elP, texto: typeof blockText === "function" ? blockText(elP).trim() : elP.textContent.trim() }))
+        .filter(x => x.texto && x.texto !== "\n");
+      const alvo = P.encontrarAlvo(achBlocos.map((b, idx) => ({ idx, texto: b.texto })), achado, orgaoId, Sug);
+      if (alvo && achBlocos[alvo.idx]) {
+        const blk = achBlocos[alvo.idx].el;
+        const curTxt = achBlocos[alvo.idx].texto;
+        const ehNorm = normals.has(fold(curTxt)) || !!Sug?.ehNormalTexto?.(curTxt);
+        const res = P.aplicarNoParagrafo(curTxt, achado, ehNorm);
+        if (res.modo !== "noop") blk.innerHTML = htmlDeTexto(res.texto);
+        targetNode = blk;
+      } else {
+        const p = document.createElement("p");
+        p.setAttribute("style", PSTYLE);
+        p.innerHTML = htmlDeTexto(achado);
+        const before = ci > hi ? ps[ci] : null;
+        if (before) {
+          // Se houver parágrafo em branco logo antes de Conclusão, insere antes dele
+          const prev = before.previousElementSibling;
+          if (prev && prev !== ps[hi] && !prev.textContent.trim()) before.before(p);
+          else before.before(p);
+        } else {
+          const last = achBlocos[achBlocos.length - 1]?.el || ps[hi];
+          last.after(p);
+        }
+        targetNode = p;
+      }
+      if (targetNode) {
+        targetNode.classList.add("conversa-flash");
+        setTimeout(() => targetNode.classList.remove("conversa-flash"), 2400);
+        try {
+          if (typeof rangeAtEnd === "function") sheetRange = rangeAtEnd(targetNode);
+        } catch (_) {}
+      }
+    } else if (typeof insertAtCaret === "function") {
+      insertAtCaret(achado);
+    }
+
+    const entrouConc = inserirConclusaoPadrao(conclusao);
+
     if (typeof updateCount === "function") updateCount();
     if (typeof updVolHint === "function") updVolHint();
     if (typeof renderAlerts === "function") renderAlerts();
     if (typeof scheduleCaseSave === "function") scheduleCaseSave();
     if (typeof pushVersion === "function") pushVersion("Texto padrão inserido");
     ui.duvidas?.atualizarObrigatorios?.();
-    if (texto.includes("[<>]")) {
+    if (achado.includes("[<>]") || conclusao.includes("[<>]")) {
       ui.duvidas?.irParaProximoObrigatorio?.();
     }
-    if (typeof setStatus === "function") setStatus("Texto padrão inserido no laudo.", "ok");
+    if (typeof setStatus === "function") {
+      setStatus(entrouConc ? "Texto padrão inserido na linha correspondente e na Conclusão." : "Texto padrão inserido na linha correspondente.", "ok");
+    }
   }
 
-  async function copiarFrase(texto) {
+  async function copiarItem(item) {
+    const txt = item.conclusao ? `${item.achado}\n\nConclusão:\n${item.conclusao}` : item.achado;
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(texto);
-      if (typeof setStatus === "function") setStatus("Frase copiada.", "ok");
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(txt);
+      if (typeof setStatus === "function") setStatus("Texto padrão copiado.", "ok");
     } catch (_) {}
   }
 
@@ -16213,7 +16811,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     class: "v2-padroes-btn",
     "aria-expanded": "false",
     "aria-controls": "v2PadroesPop",
-    title: "Textos padrão desta máscara — clique para inserir rapidamente",
+    title: "Textos padrão desta máscara — clique para colar direto na linha certa e na conclusão",
     hidden: ""
   });
   btn.addEventListener("mousedown", e => e.preventDefault());
@@ -16237,78 +16835,94 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const popFilter = el("input", {
     id: "v2PadroesFiltro",
     type: "search",
-    placeholder: "Filtrar frases da máscara…",
+    placeholder: "Buscar por órgão, alteração ou frase…",
     "aria-label": "Filtrar textos padrão",
     hidden: ""
   });
   const popList = el("div", { id: "v2PadroesLista", class: "v2-padroes-lista" });
-  pop.append(popHead, popFilter, popList);
+  const popFoot = el("div", { class: "v2-padroes-foot" }, "Clique na frase para colar na linha correspondente (+ conclusão) · F9 desfaz");
+  pop.append(popHead, popFilter, popList, popFoot);
   document.body.append(pop);
 
-  /* Espelho também dentro da aba Sugestões para acesso contínuo sem atrapalhar a folha */
-  let abaBox = null, abaList = null;
-  if (ui.panels?.Sugestões) {
-    abaBox = el("section", { id: "v2PadroesAba", class: "v2-padroes-aba", hidden: "" });
-    const det = el("details", { open: "" });
-    const sum = el("summary", {}, "Textos padrão desta máscara");
-    abaList = el("div", { class: "v2-padroes-aba-lista" });
-    det.append(sum, abaList);
-    abaBox.append(det);
-    const sugPanel = ui.panels.Sugestões;
-    const filtroSug = sugPanel.querySelector("#sugFiltro");
-    if (filtroSug) filtroSug.before(abaBox);
-    else sugPanel.prepend(abaBox);
-  }
-
   function renderLista() {
-    const items = listar();
-    const q = (popFilter.value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+    const q = fold(popFilter.value).trim();
     popTitle.textContent = typeof current !== "undefined" && current?.name
       ? `Textos padrão · ${current.name}`
       : "Textos padrão";
-    popFilter.hidden = items.length <= 4;
+    popFilter.hidden = itensCache.length <= 3;
     popList.replaceChildren();
     const filtrados = q
-      ? items.filter(it => it.texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes(q))
-      : items;
+      ? itensCache.filter(it => fold(`${it.orgaoLabel} ${it.titulo} ${it.achado} ${it.conclusao}`).includes(q))
+      : itensCache;
     if (!filtrados.length) {
       popList.append(el("p", { class: "v2-padroes-vazio" }, "Nenhuma frase encontrada."));
       return;
     }
-    for (const it of filtrados) {
-      const card = el("div", { class: "v2-padroes-item" });
-      const textoBtn = button(it.texto, () => { inserirFrase(it.texto); fechar(); }, {
-        class: "v2-padroes-tx",
-        title: "Inserir no cursor do laudo"
-      });
-      const act = el("div", { class: "v2-padroes-act" });
-      act.append(
-        button("Inserir", () => { inserirFrase(it.texto); fechar(); }, { class: "v2-padroes-ins" }),
-        button("Copiar", () => { copiarFrase(it.texto); }, { class: "v2-padroes-cop" })
-      );
-      card.append(textoBtn, act);
-      popList.append(card);
+
+    const grupos = P.agruparPorOrgao(filtrados, typeof current !== "undefined" ? current : null, Sug);
+    const mostrarCabOrgao = grupos.length > 1 || (grupos[0] && grupos[0].id !== "geral");
+
+    for (const grp of grupos) {
+      const aberto = !!q || !collapsedOrgs.has(grp.id);
+      if (mostrarCabOrgao) {
+        const orgBtn = button("", () => {
+          if (collapsedOrgs.has(grp.id)) collapsedOrgs.delete(grp.id);
+          else collapsedOrgs.add(grp.id);
+          renderLista();
+        }, { class: "v2-padroes-org", "aria-expanded": String(aberto) });
+        orgBtn.append(
+          el("span", { class: "v2-padroes-chev" }, aberto ? "▾" : "▸"),
+          el("span", { class: "v2-padroes-org-lbl" }, grp.label),
+          el("small", { class: "v2-padroes-org-cnt" }, String(grp.itens.length))
+        );
+        orgBtn.addEventListener("mousedown", e => e.preventDefault());
+        popList.append(orgBtn);
+        if (!aberto) continue;
+      }
+
+      for (const it of grp.itens) {
+        const card = el("div", { class: "v2-padroes-item" });
+        const textoBtn = button("", () => { inserirItem(it); fechar(); }, {
+          class: "v2-padroes-tx v2-padroes-ins",
+          title: it.conclusao ? "Colar achado na linha certa + conclusão" : "Colar achado na linha certa"
+        });
+        textoBtn.addEventListener("mousedown", e => e.preventDefault());
+        if (it.titulo) textoBtn.append(el("span", { class: "v2-padroes-tit" }, it.titulo));
+        textoBtn.append(el("span", { class: "v2-padroes-ach" }, it.achado));
+        if (it.conclusao) {
+          const concTag = el("span", { class: "v2-padroes-conc" });
+          concTag.append(el("b", {}, "Conclusão: "), it.conclusao);
+          textoBtn.append(concTag);
+        }
+        const act = el("div", { class: "v2-padroes-act" });
+        const copBtn = button("Copiar", () => { copiarItem(it); }, { class: "v2-padroes-cop", title: "Copiar para área de transferência" });
+        copBtn.addEventListener("mousedown", e => e.preventDefault());
+        act.append(copBtn);
+        card.append(textoBtn, act);
+        popList.append(card);
+      }
     }
   }
 
   function posicionarPop() {
     const r = btn.getBoundingClientRect();
-    const left = Math.max(12, Math.min(window.innerWidth - Math.min(520, window.innerWidth - 24) - 12, r.left));
-    const top = Math.min(window.innerHeight - 180, r.bottom + 6);
+    const w = Math.min(540, window.innerWidth - 24);
+    const left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left));
+    const top = Math.min(window.innerHeight - 200, r.bottom + 6);
     pop.style.left = left + "px";
     pop.style.top = top + "px";
   }
 
   function abrir() {
-    const items = listar();
-    if (!items.length) return;
+    itensCache = listar();
+    if (!itensCache.length) return;
     popFilter.value = "";
     renderLista();
     pop.hidden = false;
     btn.setAttribute("aria-expanded", "true");
     posicionarPop();
     if (!popFilter.hidden) popFilter.focus();
-    else popList.querySelector("button")?.focus();
+    else popList.querySelector(".v2-padroes-ins")?.focus();
   }
 
   function fechar() {
@@ -16322,27 +16936,23 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
 
   function atualizar() {
-    const items = listar();
-    btn.hidden = !items.length;
-    btn.textContent = items.length ? `Textos padrão (${items.length})` : "Textos padrão";
-    if (!items.length && !pop.hidden) fechar();
+    itensCache = listar();
+    btn.hidden = !itensCache.length;
+    btn.textContent = itensCache.length ? `Textos padrão (${itensCache.length})` : "Textos padrão";
+    if (!itensCache.length && !pop.hidden) fechar();
     if (!pop.hidden) renderLista();
-    if (abaBox && abaList) {
-      abaBox.hidden = !items.length;
-      abaList.replaceChildren();
-      for (const it of items) {
-        const b = button(it.texto, () => inserirFrase(it.texto), {
-          class: "v2-padroes-chip",
-          title: "Clique para inserir no laudo"
-        });
-        b.addEventListener("mousedown", e => e.preventDefault());
-        abaList.append(b);
-      }
-      const sum = abaBox.querySelector("summary");
-      if (sum) sum.textContent = `Textos padrão da máscara (${items.length})`;
-    }
   }
 
+  pop.addEventListener("keydown", e => {
+    const btns = [...popList.querySelectorAll(".v2-padroes-ins, .v2-padroes-org")];
+    if (!btns.length) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault(); e.stopPropagation();
+      const i = btns.indexOf(document.activeElement);
+      const next = i < 0 ? 0 : (i + (e.key === "ArrowDown" ? 1 : -1) + btns.length) % btns.length;
+      btns[next].focus();
+    }
+  });
   popFilter.addEventListener("input", renderLista);
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && !pop.hidden) {
@@ -16358,7 +16968,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   });
   window.addEventListener("resize", () => { if (!pop.hidden) posicionarPop(); });
 
-  ui.padroes = { listar, atualizar, abrir, fechar, cleanText };
+  ui.padroes = { listar, atualizar, abrir, fechar, inserirItem, cleanText: P.cleanText };
   if (ui.actions) ui.actions.padroes = { label: "Textos padrão da máscara", run: abrir };
   atualizar();
 })();
