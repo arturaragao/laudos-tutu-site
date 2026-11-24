@@ -1040,3 +1040,66 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
 #nuvemSec .nuvem-status { margin:0; padding:7px 11px; border-radius:9px; font-size:12.5px; line-height:1.4; background:var(--panel); border:1px solid var(--line); color:var(--muted); }
 #nuvemSec .nuvem-status[data-ativo="1"] { background:var(--p-green); border-color:color-mix(in srgb, var(--changed) 30%, var(--line)); color:var(--text); font-weight:500; }
 #nuvemSec .voz-msg { margin:0; font-size:12.5px; color:var(--muted); min-height:1.2em; }
+
+/* Revisor interativo de dúvidas (sublinhado amarelo · 122-v2-marcador.js) */
+.tutu-v2 #laudo .v2-duvida {
+  background:color-mix(in srgb, #f5c542 22%, transparent);
+  border-bottom:2px solid #d99b00;
+  border-radius:3px;
+  padding:0 2px;
+  cursor:pointer;
+  transition:background .12s, box-shadow .12s;
+}
+.tutu-v2 #laudo .v2-duvida.ativa {
+  background:#ffea8a;
+  color:#3a2600;
+  border-bottom-color:#b57600;
+  box-shadow:0 0 0 2px #f2b70566;
+}
+.tutu-v2 #laudo .v2-duvida.ativa.editando {
+  background:#fff6c7;
+  color:#2b2100;
+  box-shadow:0 0 0 2px var(--accent, #557a96);
+  outline:none;
+}
+body.tutu-v2.sepia-night #laudo .v2-duvida {
+  background:#8c6a1038;
+  border-bottom-color:#ebb731;
+}
+body.tutu-v2.sepia-night #laudo .v2-duvida.ativa {
+  background:#6b520f;
+  color:#fff3cf;
+  border-bottom-color:#ffd15c;
+  box-shadow:0 0 0 2px #ffd15c55;
+}
+body.tutu-v2.sepia-night #laudo .v2-duvida.ativa.editando {
+  background:#53400d;
+  color:#fff8e2;
+  box-shadow:0 0 0 2px var(--accent, #9dbbd3);
+}
+#v2Marcador {
+  display:inline-flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:4px;
+  max-width:min(520px, 100%);
+  border:1px solid color-mix(in srgb, #d99b00 55%, var(--line, #8886));
+  background:var(--p-yellow, #f5e8c4);
+  color:var(--text, #2b2620);
+  border-radius:999px;
+  padding:2px 8px;
+  font-size:12px;
+  margin-left:6px;
+}
+#v2Marcador[hidden] { display:none !important; }
+#v2Marcador .v2-duvida-lbl { font-weight:600; white-space:nowrap; }
+#v2Marcador .v2-duvida-motivo { color:var(--warn, #7a5800); max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#v2Marcador button {
+  padding:1px 6px;
+  min-width:22px;
+  min-height:22px;
+  border-radius:999px;
+  font-size:12px;
+  line-height:1.2;
+}
+#v2MarcadorAviso .v2-aviso-acoes { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }

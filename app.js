@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "e45466c · 24/11 08:37";
+window.__SITE_VERSION__ = "88d8735 · 24/11 09:15";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -456,7 +456,12 @@ const alData = al => { const { fn, fs } = alParts(al); return fn ? ` data-fonte=
 const P = (inner, al) => `<p style="${PSTYLE}${alCss(al)}"${alData(al)}>${inner}</p>`;
 const BLANK = P("<br>");
 const stripTags = t => String(t).replace(/<\/?[bui]>/gi, "");
-const fmtInline = t => esc(t).replace(/&lt;(\/?)([bui])&gt;/gi, "<$1$2>");
+const fmtInline = t => esc(t)
+  .replace(/&lt;(\/?)([bui])&gt;/gi, "<$1$2>")
+  .replace(/\{\{\?([^}\n]+?)(?:::([^}\n]+?))?\}\}/g, (_, txt, mot) => {
+    const m = stripTags(mot || "Conferir ponto incerto").replace(/"/g, "&quot;").trim();
+    return `<span class="v2-duvida" data-duvida="${m}" title="${m}">${txt.trim()}</span>`;
+  });
 const ALIGN_RE = /^\{\{(centro|justificado|esquerda|direita)\}\}/;
 const FONT_RE = /^\{\{fonte:([A-Za-z][A-Za-z ]{0,40}),(\d{1,2}(?:\.\d)?)\}\}/;
 const FONTES = ["Arial", "Calibri", "Times New Roman", "Verdana", "Courier New"];
@@ -688,7 +693,7 @@ const delEl = (t, id) => `<del class="rm" data-e="${id}" contenteditable="false"
 const insEl = (t, id) => `<span class="chg" data-e="${id}">${fmtInline(t)}</span>`;
 function wordDiffHtml(oldT, newT){
   const id0 = ++editSeq;
-  if (/<\/?[bui]>/i.test(oldT + newT)) return delEl(oldT, id0) + " " + insEl(newT, id0);
+  if (/<\/?[bui]>|\{\{\?/i.test(oldT + newT)) return delEl(oldT, id0) + " " + insEl(newT, id0);
   const a = oldT.split(/\s+/).filter(Boolean), b = newT.split(/\s+/).filter(Boolean), ops = lcsOps(a, b, (x, y) => x === y);
   const out = []; let dels = [], adds = [];
   const flush = () => { if (!dels.length && !adds.length) return; const id = ++editSeq; if (dels.length) out.push(delEl(dels.join(" "), id)); if (adds.length) out.push(insEl(adds.join(" "), id)); dels = []; adds = []; };
@@ -1330,7 +1335,7 @@ function clipboardHtml(){
   const tmp = document.createElement("div");
   tmp.innerHTML = $("laudo").innerHTML;
   tmp.querySelectorAll("del.rm, p.rmline").forEach(s => s.remove());
-  tmp.querySelectorAll("span.chg").forEach(s => s.replaceWith(...s.childNodes));
+  tmp.querySelectorAll("span.chg, span.v2-duvida").forEach(s => s.replaceWith(...s.childNodes));
   tmp.querySelectorAll("[style*='color']").forEach(n => n.style.removeProperty("color"));
   tmp.querySelectorAll("font").forEach(f => f.replaceWith(...f.childNodes));
   tmp.querySelectorAll("[style]").forEach(n => { n.style.removeProperty("font-family"); n.style.removeProperty("font-size"); if (!n.getAttribute("style").trim()) n.removeAttribute("style"); });
@@ -2721,6 +2726,7 @@ function conferirLocal(){
     : '<p class="review-empty">Conferência local (sem Claude): nada encontrado.</p>')
     + `<div class="rv-bar" style="margin-top:8px"><button class="btn small" id="confClaude" type="button"${sample ? "" : " disabled"}>Conferir também com o Claude</button></div>`;
   $("confClaude").onclick = () => conferir();
+  window.tutuV2?.duvidas?.analisar?.({ autoFocar: false });
   setStatus(al.length ? `Conferência local: ${al.length} ${al.length === 1 ? "ponto" : "pontos"} abaixo (nenhum token gasto).` : "Conferência local: nada encontrado (nenhum token gasto).", al.length ? "" : "ok");
 }
 
@@ -8727,6 +8733,41 @@ window.tutuSite.appReady = true;
   if (typeof document === "undefined") return;
   const ui = window.tutuV2, T = window.tutuSite, G = T.gh, U = window.TutuUSG, el = ui.el, button = ui.button;
   let speech = null, ouvindo = false, busy = false, listBusy = false, dicaFilaMostrada = false, phrasesOff = false;
+  const idsCriadosAqui = new Set(), idsVistos = new Set();
+  async function garantirNaFila({ ex, mascara, texto, laudo, modelo, res }) {
+    if (res?.filaSalva && res?.filaId) { idsCriadosAqui.add(res.filaId); return res.filaId; }
+    try {
+      if (T.nuvemStatus?.()?.configurada && typeof T.filaUsgSalvar === "function") {
+        const r = await T.filaUsgSalvar({
+          exame: ex.id,
+          nome: ex.name,
+          mascara,
+          texto,
+          laudo,
+          modelo: modelo ? `nuvem:${modelo}` : "nuvem"
+        });
+        if (r?.ok && r.id) { idsCriadosAqui.add(r.id); return r.id; }
+      }
+      if (G.token) {
+        const id = crypto.randomUUID(), agora = new Date().toISOString();
+        await G.putJson("fila-usg/" + id + ".json", {
+          exame: ex.id,
+          nome: ex.name,
+          mascara,
+          modo: "audio",
+          texto,
+          laudo,
+          modelo: modelo || "nuvem",
+          ia: "pronto",
+          criado: agora,
+          pronto: agora
+        }, null, "IA nuvem: laudo pronto");
+        idsCriadosAqui.add(id);
+        return id;
+      }
+    } catch (_) {}
+    return "";
+  }
   const FILA_IA_DISPATCH_URL = "https://api.github.com/repos/arturaragao/fila-ia/actions/workflows/fila.yml/dispatches";
   const FILA_IA_ATRASO_MS = 130000;
   const FILA_IA_DICA = "Pedido salvo. Para a IA começar na hora com o PC desligado, dê à chave acesso 'Actions: leitura e escrita' no repo fila-ia (Configurações › Sincronização).";
@@ -8922,7 +8963,7 @@ window.tutuSite.appReady = true;
           if (!ui.initialized || genBusy || corrBusy || typeof T.directStream !== "function") throw Error("Ponte ocupada ou indisponível.");
           const mascara = current.id === ex.id && modelIntact() ? maskOf(current) : maskOf(ex);
           let acumulado = "";
-          const res = await T.directStream({ exame: ex.id, mascara, texto: fresh, modo: "completo", leve: usarLeve }, (_delta, acum) => {
+          const res = await T.directStream({ exame: ex.id, mascara, texto: fresh, modo: "completo", leve: usarLeve, salvarFila: nuvemAtiva, nome: ex.name }, (_delta, acum) => {
             acumulado = acum;
             if (acum && indicador.textContent === "IA montando o laudo…") indicador.textContent = "IA montando o laudo… (escrevendo)";
           });
@@ -8930,12 +8971,21 @@ window.tutuSite.appReady = true;
           if (!final) throw Error("Resposta vazia do Direct.");
           if (!ui.audioTarget(ex)) throw Error("A folha está ocupada.");
           sheet.innerHTML = modelSheetHtml({ ...ex, mask: final });
+          const nDuv = ui.duvidas?.aposIA?.({ autoFocar: true }) || 0;
           updateCount(); renderAlerts();
           ui.registrarIA?.(laudoTagged(), fresh, { direct: true });
+          const avisoDuv = nDuv ? ` Confira ${nDuv} ponto(s) sublinhado(s) em amarelo (←/→, Enter, Del, ↓) e copie.` : " Revise e copie.";
+          setStatus((res?.motor === "nuvem" ? `Laudo organizado pela IA (${res.modelo || "nuvem"}).` : "Laudo organizado pela IA (Direct).") + avisoDuv, "ok");
+          const casoAtual = ui.activeId?.() || "";
+          let filaId = "";
+          if (nuvemAtiva || res?.motor === "nuvem") {
+            filaId = await garantirNaFila({ ex, mascara, texto: fresh, laudo: final, modelo: res?.modelo, res });
+            if (filaId && casoAtual) await mudarVinculos(v => { v[casoAtual] = filaId; });
+          }
           await ui.flush();
+          if (filaId) atualizar();
           texto.value = ""; enviado = true; atualizarUI();
-          setStatus(res?.motor === "nuvem" ? `Laudo organizado pela IA (${res.modelo || "nuvem"}). Confira os trechos marcados [?] e copie.` : "Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
-          dizer("Laudo pronto ✓");
+          dizer(filaId ? "Laudo pronto e sincronizado ✓" : "Laudo pronto ✓");
           return;
         } catch (err) {
           avisoPonte = err?.code === "nuvem_nao_autorizada" ? "Token da IA na nuvem recusado — confira em Configurações › IA."
@@ -8959,7 +9009,7 @@ window.tutuSite.appReady = true;
         };
         try {
           const res = await T.directStream(
-            { exame: ex.id, mascara: maskOf(ex), texto: fresh, leve: usarLeve, salvarFila: nuvemAtiva && (modoIA === "completo" || (modoIA === "auto" && nPalavras > 80)), nome: ex.name },
+            { exame: ex.id, mascara: maskOf(ex), texto: fresh, leve: usarLeve, salvarFila: nuvemAtiva, nome: ex.name },
             (_delta, acum) => {
               ultimoTexto = acum;
               if (!casoCriado) {
@@ -8978,11 +9028,22 @@ window.tutuSite.appReady = true;
           const laudoFinal = (res?.laudo || ultimoTexto || "").trim();
           if (!laudoFinal) throw Error("Resposta vazia do Direct.");
           aplicarFolha(laudoFinal);
+          const nDuv = ui.duvidas?.aposIA?.({ autoFocar: false }) || 0;
           renderAlerts();
           ui.registrarIA?.(laudoTagged(), fresh, { direct: true });
+          const avisoDuv = nDuv ? ` Confira ${nDuv} ponto(s) sublinhado(s) em amarelo.` : " Revise e copie.";
+          const baseSt = (res?.motor === "nuvem" ? `Laudo organizado pela IA (${res.modelo || "nuvem"}).` : "Laudo organizado pela IA (Direct).") + avisoDuv;
+          setStatus(baseSt, "ok");
+          const casoAtual = ui.activeId?.() || "";
+          let filaId = "";
+          if (nuvemAtiva || res?.motor === "nuvem") {
+            filaId = await garantirNaFila({ ex, mascara: maskOf(ex), texto: fresh, laudo: laudoFinal, modelo: res?.modelo, res });
+            if (filaId && casoAtual) await mudarVinculos(v => { v[casoAtual] = filaId; });
+          }
           await ui.flush();
-          setStatus(res?.motor === "nuvem" ? `Laudo organizado pela IA (${res.modelo || "nuvem"}). Confira os trechos marcados [?] e copie.` : "Laudo organizado pela IA (Direct). Confira os trechos marcados [?] e copie.", "ok");
-          texto.value = ""; enviado = true; atualizarUI(); dizer("Laudo pronto ✓");
+          if (filaId) atualizar();
+          if (filaId) setStatus(baseSt + " Disponível também nos PCs.", "ok");
+          texto.value = ""; enviado = true; atualizarUI(); dizer(filaId ? "Laudo pronto e enviado aos PCs ✓" : "Laudo pronto ✓");
           return;
         } catch (err) {
           if (renderTimer) { clearTimeout(renderTimer); renderTimer = 0; }
@@ -9060,7 +9121,7 @@ window.tutuSite.appReady = true;
     };
     requestAnimationFrame(abrirAudio);
   }
-  const painel = el("details", { id: "usgInbox" }), cachePedidos = new Map();
+  const painel = el("details", { id: "usgInbox" }), painelSummary = el("summary", {}, "Laudos Áudio"), cachePedidos = new Map();
   const lista = el("div", { id: "usgLista" }), inboxMsg = el("p", { id: "usgInboxMsg", role: "status" });
   const sugestoes = el("details", { id: "usgSugestoes" }); sugestoes.hidden = true;   // 17/11: vazio mostrava "Saiba mais"
   // 17/11/2026 (Artur): o botão mostra que foi clicado: "Atualizando…" e depois "Atualizado ✓ hh:mm"
@@ -9071,7 +9132,7 @@ window.tutuSite.appReady = true;
     btnAtualizar.textContent = ok ? "Atualizado ✓ " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "Não atualizou — tente de novo";
     clearTimeout(btnAtualizar._t); btnAtualizar._t = setTimeout(() => { btnAtualizar.textContent = "Atualizar pedidos"; delete btnAtualizar.dataset.estado; }, 4000);
   }, { id: "usgAtualizar" });
-  painel.append(el("summary", {}, "Laudos Áudio"), btnAtualizar, inboxMsg, lista, sugestoes); ui.center.append(painel);
+  painel.append(painelSummary, btnAtualizar, inboxMsg, lista, sugestoes); ui.center.append(painel);
   let vinculosPendentes = Promise.resolve();
   function mudarVinculos(fn) {
     const tarefa = vinculosPendentes.then(async () => {
@@ -9115,16 +9176,27 @@ window.tutuSite.appReady = true;
   async function abrir(id, d) {
     try {
       if (!ui.initialized || genBusy || corrBusy) throw Error("Aguarde a operação na folha.");
-      const ex = EXAMS.find(e => e.id === d.exame); if (!ex) throw Error("Sincronize a máscara deste exame primeiro.");
-      const fresh = filtrar(d.texto, ex), antes = ui.activeId(); ui.newTab(ex.id);
+      let ex = EXAMS.find(e => e.id === d.exame);
+      const temMascara = !!ex;
+      if (!ex) {
+        if (!d.laudo) throw Error("Sincronize a máscara deste exame primeiro.");
+        ex = { id: d.exame || "personalizado", name: d.nome || d.exame || "Exame", code: "US", mask: d.mascara || d.laudo };
+      }
+      const fresh = d.laudo ? "" : filtrar(d.texto, ex), antes = ui.activeId();
+      if (temMascara) ui.newTab(ex.id);
+      else {
+        ui.newTab(null);
+        if (typeof current !== "undefined") { current = ex; if (typeof updMaskChip === "function") updMaskChip(); }
+      }
       const caso = ui.activeId(), pedido = id;
       if (caso === antes) throw Error("Aguarde a operação na folha.");
-      if (d.laudo) {   // laudo organizado pela IA (tools/ia_laudo.py no repo de dados)
+      if (d.laudo) {   // laudo organizado pela IA (nuvem ou tools/ia_laudo.py no repo de dados)
         sheet.innerHTML = modelSheetHtml({ ...ex, mask: d.laudo });
+        const nDuv = ui.duvidas?.aposIA?.({ autoFocar: !ui.isMobile() }) || 0;
         updateCount(); renderAlerts();
         await mudarVinculos(vinculos => { vinculos[caso] = pedido; });
         await ui.flush();
-        setStatus("Laudo organizado pela IA. Confira os trechos marcados [?] e copie.", "ok");
+        setStatus("Laudo organizado pela IA." + (nDuv ? ` Confira ${nDuv} ponto(s) sublinhado(s) em amarelo (←/→, Enter, Del, ↓) e copie.` : " Revise e copie."), "ok");
         return;
       }
       const n = organizar(fresh);
@@ -9135,6 +9207,11 @@ window.tutuSite.appReady = true;
     } catch (e) { inboxMsg.textContent = e.message; }
   }
   async function apagar(id, sha) {
+    if (T.nuvemStatus?.()?.configurada && typeof T.filaUsgApagar === "function") {
+      const rNuvem = await T.filaUsgApagar(id, sha).catch(() => null);
+      if (rNuvem?.ok) { cachePedidos.delete(id + ".json"); return; }
+    }
+    if (!G.token) throw Error("Não foi possível apagar da fila.");
     const r = await fetch("https://api.github.com/repos/" + G.repo + "/contents/fila-usg/" + id + ".json", {
       method: "DELETE", headers: { Authorization: "Bearer " + G.token, "Content-Type": "application/json" },
       body: JSON.stringify({ message: "USG: remover texto da fila", sha, branch: "main" })
@@ -9191,12 +9268,13 @@ window.tutuSite.appReady = true;
         const { id, erro } = await vinculo;
         if (erro) throw Error("Vínculo indisponível.");
         if (id) {
-          const r = await G.getJson("fila-usg/" + id + ".json");
+          let r = G.token ? await G.getJson("fila-usg/" + id + ".json").catch(() => null) : null;
+          if (!r && cachePedidos.has(id + ".json")) r = cachePedidos.get(id + ".json");
           // Aprendizado: proposta da IA → laudo que o Artur copiou (tools/ia_laudo.py usa nas próximas e no guia).
           // Se a IA ajustou depois (Conversar/Gerar), essa versão é a proposta e já foi gravada acima.
-          if (r?.json?.laudo && !reg) await gravarCorrecao(r.json.exame, id, r.json.laudo, finalTexto);
+          if (r?.json?.laudo && !reg && G.token) await gravarCorrecao(r.json.exame, id, r.json.laudo, finalTexto);
           if (r?.json?.laudo) await aprenderVoz(r.json.texto, finalTexto, r.json.exame).catch(() => {});
-          if (r) await apagar(id, r.sha);
+          if (r || (T.nuvemStatus?.()?.configurada && typeof T.filaUsgApagar === "function")) await apagar(id, r?.sha || "");
           await mudarVinculos(vinculos => { if (vinculos[caso] === id) delete vinculos[caso]; }); await atualizar();
         }
       } catch (_) { inboxMsg.textContent = "Laudo copiado; remoção da fila pendente. Copie de novo quando a rede voltar."; }
@@ -9205,17 +9283,42 @@ window.tutuSite.appReady = true;
   };
   let atualizando = null;
   async function atualizar(espera) {
-    if (!G.token) return false;
+    const nuvemAtiva = !!T.nuvemStatus?.()?.configurada && typeof T.filaUsgListar === "function";
+    if (!G.token && !nuvemAtiva) return false;
     if (listBusy) return espera ? atualizando : false;
     listBusy = true;
     return atualizando = (async () => { try {
-      const arquivos = (await G.list("fila-usg")).filter(f => /^[a-f0-9-]{36}\.json$/.test(f.name)), rows = [];
-      for (const f of arquivos) {
-        let r = cachePedidos.get(f.name);
-        if (!r || r.sha !== f.sha) { r = await G.getJson("fila-usg/" + f.name); if (r) cachePedidos.set(f.name, r); }
-        if (!r) continue;
-        const d = r.json, id = f.name.slice(0, -5), criado = Date.parse(d.criado);
+      let entries = null;
+      if (nuvemAtiva) {
+        const res = await T.filaUsgListar().catch(() => null);
+        if (res?.ok && Array.isArray(res.items)) {
+          entries = res.items;
+          for (const it of entries) {
+            if (it?.id && it?.json) cachePedidos.set(it.id + ".json", { sha: it.sha || "", json: it.json });
+          }
+        }
+      }
+      if (!entries) {
+        if (!G.token) throw Error("Fila indisponível.");
+        const arquivos = (await G.list("fila-usg")).filter(f => /^[a-f0-9-]{36}\.json$/.test(f.name));
+        entries = [];
+        for (const f of arquivos) {
+          let r = cachePedidos.get(f.name);
+          if (!r || r.sha !== f.sha) { r = await G.getJson("fila-usg/" + f.name); if (r) cachePedidos.set(f.name, r); }
+          if (r) entries.push({ id: f.name.slice(0, -5), sha: r.sha || f.sha || "", json: r.json });
+        }
+      }
+      const rows = [];
+      let novoDeOutroAparelho = false;
+      for (const item of entries) {
+        const id = item.id, d = item.json, sha = item.sha || "";
+        if (!d || !id) continue;
+        const criado = Date.parse(d.criado);
         const expirado = Number.isFinite(criado) && Date.now() - criado >= 30 * 86400000;
+        if (!expirado && d.laudo && !idsVistos.has(id) && !idsCriadosAqui.has(id)) {
+          novoDeOutroAparelho = true;
+        }
+        idsVistos.add(id);
         const row = el("div", { class: "usg-pedido", "data-id": id, "data-state": expirado ? "expirado" : "recebido" }), ex = EXAMS.find(e => e.id === d.exame);
         // 17/11/2026 (Artur): mostrar o motivo do erro e avisar quando a IA está parada, para corrigir rápido
         const minutos = Number.isFinite(criado) ? Math.floor((Date.now() - criado) / 60000) : 0;
@@ -9227,19 +9330,23 @@ window.tutuSite.appReady = true;
         // 17/11/2026 (Artur): hora do envio e do laudo pronto ao lado do exame; descartar vira um × pequeno
         const hora = iso => { const t = Date.parse(iso || ""); return Number.isFinite(t) ? new Date(t).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", "") : ""; };
         const horas = el("span", { class: "usg-horas" }, "enviado " + (hora(d.criado) || "—") + (hora(d.pronto) ? " · pronto " + hora(d.pronto) : ""));
-        row.append(el("span", { class: "usg-nome" }, ex?.name || "Exame"), horas, el("span", { class: "usg-selo", "data-k": selo[0] }, selo[1]), button("Abrir como exame novo", () => abrir(id, d)), button("×", async () => {
+        row.append(el("span", { class: "usg-nome" }, ex?.name || d.nome || d.exame || "Exame"), horas, el("span", { class: "usg-selo", "data-k": selo[0] }, selo[1]), button("Abrir como exame novo", () => abrir(id, d)), button("×", async () => {
           if (!confirm("Apagar este pedido da lista?")) return;
-          try { await apagar(id, r.sha); await atualizar(); }
+          try { await apagar(id, sha); await atualizar(); }
           catch (e) { inboxMsg.textContent = e.message; }
         }, { class: "usg-x", title: "Descartar pedido", "aria-label": "Descartar pedido" })); row._criado = Number.isFinite(criado) ? criado : 0; rows.push(row);
       }
       rows.sort((a, b) => b._criado - a._criado);   // 17/11/2026 (Artur): mais recente primeiro
-      lista.replaceChildren(...rows); inboxMsg.textContent = rows.length ? "Organização neste navegador. Revise antes de copiar." : "Nenhum pedido.";
+      lista.replaceChildren(...rows);
+      painelSummary.textContent = rows.length ? `Laudos Áudio (${rows.length})` : "Laudos Áudio";
+      inboxMsg.textContent = rows.length ? "Organização neste navegador. Revise antes de copiar." : "Nenhum pedido.";
+      if (novoDeOutroAparelho && !painel.open && !ui.isMobile()) painel.open = true;
       return true;
-    } catch (_) { inboxMsg.textContent = "Fila indisponível; confira rede e chave em Sincronização."; return false; }
+    } catch (_) { inboxMsg.textContent = "Fila indisponível; confira IA na nuvem ou chave em Sincronização."; return false; }
     finally { listBusy = false; } })();
   }
-  T.onChave(atualizar); setInterval(() => { if (!document.hidden) atualizar(); }, 15000);
+  T.onChave(atualizar); document.addEventListener("tutu-nuvem-mudou", () => atualizar());
+  setInterval(() => { if (!document.hidden) atualizar(); }, 15000);
   window.addEventListener("focus", atualizar); document.addEventListener("visibilitychange", () => { if (!document.hidden) atualizar(); }); atualizar();
   ui.actions.ditarusg = { label: "Audio", run: abrirDialog }; ui.usg = { atualizar, preencher };
 })();
@@ -9636,6 +9743,7 @@ REGRAS:
 1. Faça só o que o pedido diz; o resto do laudo fica igual. Nunca invente achados, medidas ou lateralidade que o pedido não trouxe.
 2. Mantenha as marcações <b>, <u>, <i>, {{centro}} e os títulos como estão. Texto puro, sem markdown.
 3. Se o pedido mexer em achados, deixe a conclusão coerente com eles.
+4. Se houver dúvida de transcrição, lateralidade ausente/incerta em estrutura par, sexo não informado quando pertinente, concordância incerta ou dado incluído sem ter sido ditado, envolva o trecho com {{?trecho::motivo curto}} (nunca use [?]).
 FORMATO DA RESPOSTA: DIFF, só as linhas que mudam, uma operação por linha, sem comentários:
 Ln: texto novo   (substitui a linha n)
 +Ln: texto       (insere depois da linha n; várias seguidas ficam nessa ordem)
@@ -9882,6 +9990,7 @@ MEMÓRIA: se o pedido valer também para os PRÓXIMOS laudos deste exame (ex.: "
         pushVersion("Antes da correção");   // "Desfazer IA" (undoAllClaude) volta até aqui
         if (patch) { if (!D.aplicarDOM(baseDelta, patch)) return; }
         else sheet.innerHTML = diffLaudoHtml(draft, novo);
+        ui.duvidas?.aposIA?.({ autoFocar: false });
         pushVersion("Ajustado na conversa (" + motor + ")");
         ui.registrarIA?.(laudoTagged(), draft);   // última versão da IA: ao copiar vira ia/correcoes e regra automática de voz (114)
         renderAlerts(); updateCount(); scheduleCaseSave();
@@ -12562,13 +12671,45 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   };
 })();
 
-/* Navegação e revisão dos trechos incertos, sem modificar o texto da folha. */
+/* Revisor interativo de dúvidas (sublinhado amarelo · sem [?] no texto · ←/→/Enter/Del/↓). */
 (() => {
   "use strict";
-  function findMarkers(text, fieldSource = "") {
-    const re = new RegExp("\\[\\?\\]|\\[<>\\]" + (fieldSource ? "|" + fieldSource : ""), "g");
-    return Array.from(text.matchAll(re), m => ({ start: m.index, end: m.index + m[0].length, text: m[0] }));
+
+  const fold = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const foldSent = s => fold(s).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+  function foldIndexed(text) {
+    let folded = "";
+    const idxMap = [];
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i].normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      for (let j = 0; j < c.length; j++) {
+        folded += c[j];
+        idxMap.push(i);
+      }
+    }
+    return {
+      folded,
+      sliceStart: a => (idxMap[a] ?? text.length),
+      sliceEnd: b => (b > 0 && idxMap[b - 1] !== undefined ? idxMap[b - 1] + 1 : 0)
+    };
   }
+
+  function findMarkers(text, fieldSource = "") {
+    const parts = [
+      "\\{\\{\\?[^}\\n]+\\}\\}",
+      "\\[\\?(?:\\s+[^\\]\\n]{1,60})?\\]",
+      "\\[<>\\]"
+    ];
+    if (fieldSource) parts.push(fieldSource);
+    const re = new RegExp(parts.join("|"), "g");
+    return Array.from(String(text || "").matchAll(re), m => ({
+      start: m.index,
+      end: m.index + m[0].length,
+      text: m[0]
+    }));
+  }
+
   function nextIndex(markers, from, direction = 1) {
     if (!markers.length) return -1;
     if (direction < 0) {
@@ -12578,18 +12719,474 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     const i = markers.findIndex(m => m.start >= from);
     return i < 0 ? 0 : i;
   }
-  const uncertainties = text => findMarkers(text).filter(m => m.text === "[?]");
-  const copyWarning = text => {
-    const n = uncertainties(text).length;
-    return n ? `Ainda há ${n} [?] no laudo` : "";
+
+  function parseDuvidas(text) {
+    const s = String(text || "");
+    const out = [];
+    const reTag = /\{\{\?([^}\n]+?)(?:::([^}\n]+?))?\}\}/g;
+    for (const m of s.matchAll(reTag)) {
+      out.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        raw: m[0],
+        trecho: m[1].trim(),
+        motivo: (m[2] || "Conferir ponto incerto").trim()
+      });
+    }
+    const reBracket = /\[\?(?:\s+([^\]\n]{1,60}))?\]/g;
+    for (const m of s.matchAll(reBracket)) {
+      out.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        raw: m[0],
+        trecho: (m[1] || "[?]").trim(),
+        motivo: m[1] ? "Informação faltante" : "Conferir ponto incerto"
+      });
+    }
+    out.sort((a, b) => a.start - b.start);
+    return out;
+  }
+
+  const uncertainties = text => parseDuvidas(text).map(d => ({ start: d.start, end: d.end, text: d.raw, motivo: d.motivo }));
+
+  const copyWarning = countOrText => {
+    const n = typeof countOrText === "number" ? countOrText : uncertainties(countOrText).length;
+    return n ? `Ainda há ${n} ${n === 1 ? "ponto de dúvida" : "pontos de dúvida"} no laudo` : "";
   };
+
+  /* ---------- detector determinístico local (sem tokens) ---------- */
+  const RE_HEADING = /^(?:informacoes clinicas|indicacao clinica|historia clinica|dados clinicos|tecnica(?: de exame)?|achados(?: adicionais)?|analise|conclusao|impressao(?: diagnostica)?|opiniao|comparacao|exame anterior|laudo anterior|parecer provisorio)\b/;
+  const RE_IGNORE_SEC = /^(?:indicacao(?:\s+clinica)?|clinica|informacoes\s+clinicas|historia\s+clinica|dados\s+clinicos|comparacao|exame\s+anterior|laudo\s+anterior|estudo\s+anterior|tecnica(?:\s+de\s+exame)?)(?:\s*:|$)/;
+  const ORGAOS_PARES = [
+    "glandula adrenal", "regiao anexial", "arteria iliaca", "veia iliaca", "arteria renal", "veia renal",
+    "arteria femoral", "veia femoral", "arteria poplitea", "veia poplitea", "arteria tibial", "veia tibial",
+    "hemisferio cerebral", "hemisferio cerebelar", "lobo tireoidiano", "lobo superior", "lobo medio", "lobo inferior",
+    "lobo hepatico", "seio maxilar", "fossa iliaca", "ventriculo lateral", "rim", "adrenal", "ureter", "ovario",
+    "anexo", "pulmao", "hemitorax", "mama", "testiculo", "hipocondrio", "flanco", "orbita", "mastoide",
+    "hemicolon", "quadril", "joelho", "ombro", "carotida", "jugular"
+  ];
+  const ORGAO_PAR_SIDE_RE = new RegExp(
+    "\\b(" + ORGAOS_PARES.join("|") + ")\\b[^.;\\n]{0,45}?\\b(direit[oa]|esquerd[oa])\\b",
+    "g"
+  );
+  const ORGAO_PAR_SEM_LADO_RE = new RegExp(
+    "\\b(" + ORGAOS_PARES.join("|") + ")(?:\\s+(?:comum|superficial|profund[oa]|intern[oa]|extern[oa]|principal|proximal|medial|distal|polar|superior|inferior))?\\b",
+    "g"
+  );
+  const HAS_LATERALIDADE = /\b(?:direit[oa]s?|esquerd[oa]s?|bilateral(?:mente)?|amb[oa]s|contralateral|ipsilateral)\b/;
+  const HAS_ACHADO_ALTERADO = /\b(?:cisto|nodulo|calculo|litiase|nefrolitiase|ureterolitiase|dilatacao|ectasia|hidronefrose|estenose|oclusao|placa|ateroma\w*|tromb\w*|espessament\w*|massa|lesao|fratura|derrame|consolidacao|atelectasia|opacidade|infarto|hematoma|abscesso|colecao|rotura|ruptura|calcificacao|cistolitiase|pneumotorax|hernia)\b/;
+
+  const FEM_ORGAOS_RE = /\b(utero|uterin[oa]|endometri[oa]|ovario|ovarios|ovarian[oa]|tubas?\s+uterinas?|regi(?:ao|oes)\s+anexia(?:l|is)|anexos?\s+uterinos?|colo\s+uterino|vagina\w*|vulva\w*)\b/g;
+  const MASC_ORGAOS_RE = /\b(prostata|prostatic[oa]|vesiculas?\s+seminais?|testiculo|testiculos|testicular(?:es)?|epididimo\w*|bolsa\s+escrotal|escrot\w*|penis|penian[oa])\b/g;
+
+  const RE_ART_FEM_SUB_MASC = /\b(a|uma|da|na|pela|esta|essa|aquela)\s+(figado|rim|baco|pancreas|utero|ovario|testiculo|ureter|ducto|cisto|nodulo|calculo|abscesso|derrame|hematoma|aneurisma|trombo|lumen|calibre|contorno|parenquima|exame|laudo|achado|segmento)\b/g;
+  const RE_ART_MASC_SUB_FEM = /\b(o|um|do|no|pelo|este|esse|aquele)\s+(vesicula|prostata|bexiga|arteria|veia|aorta|mama|tireoide|lesao|imagem|colecao|estenose|oclusao|placa|ateromatose|conclusao|tecnica|parede|capsula|ecogenicidade|densidade|atenuacao)\b/g;
+  const FEM_QUAL = "(?:\\s+(?:biliar|urinaria|femoral|iliaca|renal|poplitea|tibial|fibular|carotida|jugular|subclavia|axilar|braquial|radial|ulnar|vertebral|mesenterica|esplenica|hepatica|pulmonar|comum|superficial|profunda|interna|externa|anterior|posterior|inferior|superior|abdominal|toracica|cefalica|basilica|magna|parva|direita|esquerda))*";
+  const MASC_QUAL = "(?:\\s+(?:direito|esquerdo|renal|hepatico|pulmonar|esplenico|cortical|simples|unico|comum|superficial|profundo|interno|externo|superior|inferior|medio|anterior|posterior))*";
+  const RE_FEM_ADJ_MASC = new RegExp("\\b(vesicula|prostata|bexiga|arteria|veia|aorta|mama|tireoide|lesao|imagem|colecao|fratura|parede|capsula|estenose|oclusao|placa)" + FEM_QUAL + "\\s+(pervio|espessado|distendido|reduzido|aumentado|preservado|normalizado|hipodenso|hiperdenso|isodenso|hipoecoico|hiperecoico|isoecoico|hipoecogenico|hiperecogenico|calcificado|ocluso|trombosado|dilatado|irregulares|normais|pervios|espessados|dilatados|preservados)\\b", "g");
+  const RE_MASC_ADJ_FEM = new RegExp("\\b(figado|rim|baco|pancreas|utero|ovario|testiculo|ureter|cisto|nodulo|calculo|abscesso|derrame|hematoma|aneurisma|trombo|calibre|parenquima)" + MASC_QUAL + "\\s+(pervia|espessada|distendida|reduzida|aumentada|preservada|hipodensa|hiperdensa|isodensa|hipoecoica|hiperecoica|isoecoica|hipoecogenica|hiperecogenica|calcificada|oclusa|trombosada|dilatada|pervias|espessadas|dilatadas|normais)\\b", "g");
+  const RE_PLURAL_SINGULAR = /\b(os|as|uns|umas|dos|das|nos|nas|pelos|pelas)\s+(rim|figado|baco|pancreas|utero|ovario|prostata|bexiga|vesicula|aorta|tireoide|cisto|nodulo|calculo|derrame|lesao|placa|parede)\b/g;
+  const RE_PLURAL_ORG_LADO_SING = /\b(rins|ovarios|ureteres|testiculos|pulmoes|lobos|seios|mamas|arterias|veias)\s+(direito|direita|esquerdo|esquerda)\b/g;
+
+  function detectModalityText(text, tituloExame = "") {
+    const matchMod = s => {
+      if (/\b(us|usg|ultrassonografia|ultrassom|ultra-sonografia|ecografia|doppler)\b/.test(s)) return "USG";
+      if (/\b(rm|ressonancia|angio-?rm|colangio-?rm)\b/.test(s)) return "RM";
+      if (/\b(tc|tomografia|angio-?tc|angiotomografia)\b/.test(s)) return "TC";
+      if (/\b(rx|radiografia|raio-?x|raios-?x)\b/.test(s)) return "RX";
+      if (/\b(mamografia|mmg)\b/.test(s)) return "MAMO";
+      return null;
+    };
+    const first = String(text || "").split("\n").find(l => l.trim()) || "";
+    return matchMod(fold(first)) || matchMod(fold(tituloExame));
+  }
+
+  function isNegated(foldedLine, pos) {
+    const win = foldedLine.slice(Math.max(0, pos - 80), pos);
+    const clause = win.split(/[.,;\n(:]/).pop() || "";
+    return /\b(?:sem|ausencia\s+de|ausente|nao\s+ha|nao\s+se\s+(?:observ(?:a|am|ou)|evidenci(?:a|am|ou)|identific(?:a|am|ou))|nao\s+apresenta|nao\s+exibe|nao\s+mostra|nao\s+possui|negativ[oa]\s+para|afastando)\b/.test(clause);
+  }
+
+  function isVertebralLevelCtx(folded, pos, len) {
+    const before = (folded.slice(Math.max(0, pos - 45), pos).split(/[.!?\n]/).pop() || "");
+    const after = (folded.slice(pos + len, pos + len + 25).split(/[.!?\n]/)[0] || "");
+    if (/\b(?:vertebras?|corpos?\s+vertebra(?:l|is)|nive(?:l|is)|segmentos?|discos?|fraturas?|colapsos?|coluna)\b/.test(before)) return true;
+    if (/(?:^|[\s,(])(?:c[1-7]|t(?:[1-9]|1[0-2])|l[1-5])\s*(?:[-–/]|(?:e|a)\b)\s*$/.test(before)) return true;
+    if (/^\s*(?:[-–/]|(?:e|a)\b)\s*(?:c[1-7]|t(?:[1-9]|1[0-2])|l[1-5])\b/.test(after)) return true;
+    return false;
+  }
+
+  function detectarProblemasLocais(text, ctx = {}) {
+    const src = String(text || "");
+    if (!src.trim()) return [];
+    const normalSet = ctx.normalSet instanceof Set ? ctx.normalSet : new Set();
+    const hits = [];
+    const addHit = (start, end, motivo, categoria) => {
+      while (start < end && /\s/.test(src[start])) start++;
+      while (end > start && /\s/.test(src[end - 1])) end--;
+      if (end <= start) return;
+      if (hits.some(h => !(end <= h.start || start >= h.end))) return;
+      hits.push({ start, end, trecho: src.slice(start, end), motivo, categoria });
+    };
+
+    const lines = [];
+    let pos = 0;
+    for (const raw of src.split("\n")) {
+      const start = pos;
+      pos += raw.length + 1;
+      const trimmed = raw.trim();
+      const lead = raw.length - raw.trimStart().length;
+      lines.push({ raw, start, trimmedStart: start + lead, trimmed, folded: fold(trimmed) });
+    }
+
+    const firstLine = lines.find(l => l.trimmed)?.trimmed || "";
+    const tituloFold = fold((ctx.tituloExame || "") + " " + firstLine);
+    const tituloTemLado = /\b(direit[oa]|esquerd[oa]|unilateral)\b/.test(tituloFold);
+    const mod = ctx.modalidade || detectModalityText(src, ctx.tituloExame);
+
+    const idxA = lines.findIndex(l => /^achados(?:\s*:)?$/.test(l.folded));
+    const idxC = lines.findIndex(l => /^conclusao(?:\s*:)?$/.test(l.folded));
+    const idxX = lines.findIndex(l => /^achados adicionais(?:\s*:)?$/.test(l.folded));
+    const headFold = lines.slice(0, idxA >= 0 ? idxA : 3).map(l => l.folded).join("\n");
+    const semContraste = ctx.semContraste ?? /\bsem\s+(?:a\s+)?(?:injecao\s+(?:endovenosa|venosa)\s+de\s+|uso\s+de\s+|administracao\s+de\s+|meio\s+de\s+)?contraste\b/.test(headFold);
+
+    const achText = idxA >= 0
+      ? lines.slice(idxA + 1, idxC > idxA ? idxC : undefined).map(l => l.trimmed).join("\n")
+      : src;
+    const achPairs = new Set();
+    ORGAO_PAR_SIDE_RE.lastIndex = 0;
+    for (const m of fold(achText).matchAll(ORGAO_PAR_SIDE_RE)) {
+      achPairs.add(m[1].replace(/^glandula /, "") + "|" + (m[2].startsWith("direit") ? "D" : "E"));
+    }
+
+    const sexRaw = fold(src);
+    const sexoExpl = ctx.sexo || (/\b(sexo\s+)?(feminino|feminina|mulher|paciente do sexo feminino)\b/.test(sexRaw) ? "F"
+      : /\b(sexo\s+)?(masculino|homem|paciente do sexo masculino)\b/.test(sexRaw) ? "M" : "");
+
+    const femHits = [];
+    const mascHits = [];
+
+    let inIgnore = false;
+    lines.forEach((ln, li) => {
+      if (!ln.trimmed) { inIgnore = false; return; }
+      const ehTituloOuCab = li === 0 || RE_HEADING.test(ln.folded);
+      if (RE_IGNORE_SEC.test(ln.folded)) { inIgnore = true; return; }
+      if (ehTituloOuCab) { inIgnore = false; return; }
+      if (inIgnore) return;
+
+      const { folded, sliceStart, sliceEnd } = foldIndexed(ln.trimmed);
+      const baseOff = ln.trimmedStart;
+      const linhaTodaNormal = ln.trimmed.length >= 15 && ln.trimmed.split(/(?<=[.;!?])\s+/).filter(Boolean).every(s => normalSet.has(foldSent(s)));
+
+      // 1. Lateralidade conflitante na Conclusão vs Achados
+      const emConclusao = idxC >= 0 && li > idxC && (idxX < 0 || li < idxX);
+      if (emConclusao && idxA >= 0) {
+        ORGAO_PAR_SIDE_RE.lastIndex = 0;
+        let m;
+        while ((m = ORGAO_PAR_SIDE_RE.exec(folded))) {
+          const org = m[1].replace(/^glandula /, "");
+          const sd = m[2].startsWith("direit") ? "D" : "E";
+          const outro = org + "|" + (sd === "D" ? "E" : "D");
+          if (!achPairs.has(org + "|" + sd) && achPairs.has(outro)) {
+            const sideIdx = m[0].lastIndexOf(m[2]);
+            addHit(baseOff + sliceStart(m.index + sideIdx), baseOff + sliceEnd(m.index + m[0].length), "Lateralidade diverge dos achados", "lateralidade");
+          }
+        }
+      }
+
+      // 2. Lateralidade ausente em achado alterado de estrutura par
+      if (!linhaTodaNormal && !tituloTemLado) {
+        const sents = [];
+        let sPos = 0;
+        for (const parte of ln.trimmed.split(/(?<=[.;!?])\s+/)) {
+          const idx = ln.trimmed.indexOf(parte, sPos);
+          if (idx >= 0) { sents.push({ raw: parte, off: baseOff + idx }); sPos = idx + parte.length; }
+        }
+        for (const s of sents) {
+          if (normalSet.has(foldSent(s.raw))) continue;
+          const fi = foldIndexed(s.raw);
+          if (HAS_LATERALIDADE.test(fi.folded) || !HAS_ACHADO_ALTERADO.test(fi.folded)) continue;
+          ORGAO_PAR_SEM_LADO_RE.lastIndex = 0;
+          const m = ORGAO_PAR_SEM_LADO_RE.exec(fi.folded);
+          if (m) {
+            addHit(s.off + fi.sliceStart(m.index), s.off + fi.sliceEnd(m.index + m[0].length), "Lateralidade ausente (D/E/bilateral?)", "lateralidade");
+          }
+        }
+      }
+
+      // 3. Sexo (conflito explícito ou mistura M + F)
+      FEM_ORGAOS_RE.lastIndex = 0;
+      for (const m of folded.matchAll(FEM_ORGAOS_RE)) {
+        if (!isNegated(folded, m.index)) {
+          femHits.push({ start: baseOff + sliceStart(m.index), end: baseOff + sliceEnd(m.index + m[0].length) });
+        }
+      }
+      MASC_ORGAOS_RE.lastIndex = 0;
+      for (const m of folded.matchAll(MASC_ORGAOS_RE)) {
+        if (!isNegated(folded, m.index)) {
+          mascHits.push({ start: baseOff + sliceStart(m.index), end: baseOff + sliceEnd(m.index + m[0].length) });
+        }
+      }
+
+      // 4. Concordância gramatical (alta precisão)
+      for (const [rx, msg] of [
+        [RE_ART_FEM_SUB_MASC, "Concordância de gênero"],
+        [RE_ART_MASC_SUB_FEM, "Concordância de gênero"],
+        [RE_FEM_ADJ_MASC, "Concordância de gênero"],
+        [RE_MASC_ADJ_FEM, "Concordância de gênero"],
+        [RE_PLURAL_SINGULAR, "Concordância de número"],
+        [RE_PLURAL_ORG_LADO_SING, "Concordância (plural/singular)"]
+      ]) {
+        rx.lastIndex = 0;
+        let m;
+        while ((m = rx.exec(folded))) {
+          addHit(baseOff + sliceStart(m.index), baseOff + sliceEnd(m.index + m[0].length), msg, "concordancia");
+        }
+      }
+
+      // 5. Medida sem unidade ou fora de escala
+      const semUniRe = /\d+,\d+(?:\s*(?:x|×)\s*\d+(?:,\d+)?)*(?!\s*(?:x|×|cm|mm|ml|mL|cm³|cm3|UH|HU|%|ml\/|mm³|mmHg|°|º|hz|khz|mhz))(?=[\s.;,)]|$)/g;
+      for (const m of ln.trimmed.matchAll(semUniRe)) {
+        addHit(baseOff + m.index, baseOff + m.index + m[0].length, "Medida sem unidade", "medida");
+      }
+      const escalaRe = /(\d+(?:[.,]\d+)?)\s*(cm|mm)\b(?!³|3)/g;
+      for (const m of ln.trimmed.matchAll(escalaRe)) {
+        const val = parseFloat(m[1].replace(",", "."));
+        if ((m[2] === "cm" && val > 30) || (m[2] === "mm" && val > 300)) {
+          addHit(baseOff + m.index, baseOff + m.index + m[0].length, "Medida fora da escala esperada", "medida");
+        }
+      }
+
+      // 6. Termo de modalidade / contraste incompatível
+      const MOD_RULES = [
+        { origem: "USG", invalida: ["TC", "RM", "RX"], re: /\b(?:ecogenicidade|(?:an|hipo|hiper|iso)?ecogenic[oa]s?|(?:an|hipo|hiper|iso)?ecoic[oa]s?|sombra\s+acustica)\b/g },
+        { origem: "TC", invalida: ["USG", "RM"], re: /\b(?:densidade|atenuacao|(?:hipo|hiper|iso)?dens[oa]s?|uh)\b/g },
+        { origem: "RM", invalida: ["TC", "USG"], re: /\b(?:(?:hiper|hipo|iso)(?:sinal|intens[oa]s?)|t1|t2|difusao|sinal)\b/g },
+        { origem: "USG (Doppler)", invalida: ["TC", "RM", "RX", "MAMO"], re: /\b(?:fluxo\s+ao\s+)?doppler\b/g }
+      ];
+      if (mod) {
+        for (const r of MOD_RULES) {
+          if (!r.invalida.includes(mod)) continue;
+          r.re.lastIndex = 0;
+          let m;
+          while ((m = r.re.exec(folded))) {
+            const tok = m[0];
+            if (tok === "sinal" && /^(?:inflamat|d[eoa]s?\s|clinic|indiret|diret)/.test(folded.slice(m.index + tok.length).trimStart())) continue;
+            if ((tok === "t1" || tok === "t2") && isVertebralLevelCtx(folded, m.index, tok.length)) continue;
+            if (mod === "USG" && tok === "atenuacao" && /^\s+(?:acustica|posterior|sonora)\b/.test(folded.slice(m.index + tok.length))) continue;
+            if (mod === "USG" && /^dens[oa]s?$/.test(tok) && /\b(?:conteudo|liquido|material|bile|secrecao)\b/.test(folded.slice(Math.max(0, m.index - 35), m.index).split(/[.,;\n(:]/).pop() || "")) continue;
+            if (isNegated(folded, m.index)) continue;
+            addHit(baseOff + sliceStart(m.index), baseOff + sliceEnd(m.index + tok.length), `Termo de ${r.origem} em laudo de ${mod}`, "modalidade");
+          }
+        }
+      }
+      if (semContraste) {
+        const reC = /\b(?:(?:hiper|hipo)?-?realce|impregnac(?:ao|oes)|captacao\s+(?:de|do|pelo)\s+(?:meio\s+de\s+)?contraste|wash[\s-]?out|fase\s+(?:arterial|portal))\b/g;
+        let m;
+        while ((m = reC.exec(folded))) {
+          if (isNegated(folded, m.index)) continue;
+          addHit(baseOff + sliceStart(m.index), baseOff + sliceEnd(m.index + m[0].length), "Contraste em exame sem contraste", "contraste");
+        }
+      }
+    });
+
+    if (sexoExpl === "M") {
+      for (const h of femHits) addHit(h.start, h.end, "Sexo: paciente masculino", "sexo");
+    } else if (sexoExpl === "F") {
+      for (const h of mascHits) addHit(h.start, h.end, "Sexo: paciente feminino", "sexo");
+    } else if (femHits.length && mascHits.length) {
+      for (const h of femHits) addHit(h.start, h.end, "Conferir sexo (M e F no mesmo laudo)", "sexo");
+      for (const h of mascHits) addHit(h.start, h.end, "Conferir sexo (M e F no mesmo laudo)", "sexo");
+    }
+
+    hits.sort((a, b) => a.start - b.start);
+    return hits;
+  }
+
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { findMarkers, nextIndex, uncertainties, copyWarning };
+    module.exports = { findMarkers, nextIndex, parseDuvidas, uncertainties, copyWarning, detectarProblemasLocais };
     return;
   }
+
   const ui = window.tutuV2;
   if (!ui) return;
-  const text = () => sheetTextNodes(sheet).map(n => n.nodeValue).join("");
+
+  let ativa = null;
+  let editando = null;
+  let ignoreSel = false;
+  let hidratando = false;
+  const confirmados = new Set();
+
+  const casoAtualId = () => ui.activeId?.() || "padrao";
+  const chaveConfirmado = (motivo, trecho) => `${casoAtualId()}|${fold(motivo)}|${fold(trecho).replace(/\s+/g, " ").trim()}`;
+
+  const listar = () => {
+    if (!hidratando && typeof sheet !== "undefined" && /\{\{\?|\[\?/.test(sheet.textContent || "")) hidratar();
+    return [...sheet.querySelectorAll(".v2-duvida")].filter(el => el.isConnected && !el.closest("del.rm, p.rmline"));
+  };
+
+  const spanDuvida = (trecho, motivo, origem = "") => {
+    const s = document.createElement("span");
+    s.className = "v2-duvida";
+    const m = String(motivo || "Conferir ponto incerto").trim();
+    s.dataset.duvida = m;
+    if (origem) s.dataset.origem = origem;
+    s.title = m;
+    s.textContent = String(trecho || "");
+    return s;
+  };
+
+  function blockNodes(rootEl) {
+    const out = [];
+    const w = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+      acceptNode: n => (n.parentElement && n.parentElement.closest("del.rm, p.rmline, .v2-duvida")
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT)
+    });
+    let n;
+    while ((n = w.nextNode())) out.push(n);
+    return out;
+  }
+
+  function blockRange(rootEl, s, e) {
+    const nodes = blockNodes(rootEl);
+    if (!nodes.length) return null;
+    let pos = 0, sN = null, sO = 0, eN = null, eO = 0;
+    for (const n of nodes) {
+      const L = n.nodeValue.length;
+      if (!sN && pos + L > s) { sN = n; sO = s - pos; }
+      if (sN && pos + L >= e) { eN = n; eO = e - pos; break; }
+      pos += L;
+    }
+    if (!sN || !eN) return null;
+    const r = document.createRange();
+    r.setStart(sN, sO);
+    r.setEnd(eN, eO);
+    return r;
+  }
+
+  function hidratar() {
+    if (hidratando) return 0;
+    hidratando = true;
+    let total = 0;
+    try {
+      const blocks = [...sheet.querySelectorAll("p, div, li")];
+      const alvos = blocks.length ? blocks : [sheet];
+      for (const blk of alvos) {
+        if (!/\{\{\?|\[\?/.test(blk.textContent || "")) continue;
+        const txt = blockNodes(blk).map(n => n.nodeValue).join("");
+        const ops = [];
+        const ocupados = [];
+        const addOp = (start, end, trecho, motivo) => {
+          if (end <= start) return;
+          if (ocupados.some(o => !(end <= o[0] || start >= o[1]))) return;
+          ocupados.push([start, end]);
+          ops.push({ start, end, trecho, motivo });
+        };
+
+        for (const m of txt.matchAll(/\{\{\?([^}\n]+?)(?:::([^}\n]+?))?\}\}/g)) {
+          addOp(m.index, m.index + m[0].length, m[1].trim(), (m[2] || "Conferir ponto incerto").trim());
+        }
+        for (const m of txt.matchAll(/\[\?\s+([^\]\n]{1,60})\]/g)) {
+          addOp(m.index, m.index + m[0].length, m[1].trim(), "Informação faltante");
+        }
+        for (const m of txt.matchAll(/((?:\d+(?:[.,]\d+)?\s*(?:cm|mm|mL|ml|%|UH|HU|cm³)?|[àa]s?\s+(?:direit[oa]|esquerd[oa])|direit[oa]|esquerd[oa]|[^\s,;()[\]{}]+)\s*)?\[\?\]/gi)) {
+          const antes = (m[1] || "").trim();
+          addOp(m.index, m.index + m[0].length, antes || "preencher", "Conferir ponto incerto");
+        }
+
+        ops.sort((a, b) => b.start - a.start);
+        for (const op of ops) {
+          const r = blockRange(blk, op.start, op.end);
+          if (!r) continue;
+          const parA = r.startContainer.parentElement;
+          const parB = r.endContainer.parentElement;
+          r.deleteContents();
+          r.insertNode(spanDuvida(op.trecho, op.motivo));
+          if (parA && parA !== blk && !parA.textContent.trim()) parA.remove();
+          if (parB && parB !== blk && !parB.textContent.trim()) parB.remove();
+          for (const tag of blk.querySelectorAll("b, u, i, em, strong")) if (!tag.textContent) tag.remove();
+          total++;
+        }
+      }
+    } finally {
+      hidratando = false;
+    }
+    return total;
+  }
+
+  function analisar({ autoFocar = false } = {}) {
+    const novos = hidratar();
+    const rawBlocks = [...sheet.querySelectorAll("p, div, li")].filter(b => !b.querySelector("p, div, li"));
+    const blocks = rawBlocks.length ? rawBlocks : [sheet];
+    const mapa = [];
+    const linhas = [];
+    let pos = 0;
+    for (const blk of blocks) {
+      const bTxt = sheetTextNodes(blk).map(n => n.nodeValue).join("");
+      const start = pos;
+      const end = start + bTxt.length;
+      const duvRanges = [...blk.querySelectorAll(".v2-duvida")]
+        .filter(el => el.isConnected && !el.closest("del.rm, p.rmline"))
+        .map(el => {
+          try {
+            const s = offsetOf(blk, el, 0);
+            const e = s + sheetTextNodes(el).map(n => n.nodeValue).join("").length;
+            return [s, e];
+          } catch (_) { return null; }
+        })
+        .filter(Boolean);
+      mapa.push({ blk, start, end, duvRanges });
+      linhas.push(bTxt);
+      pos = end + 1;
+    }
+    const text = linhas.join("\n");
+    if (!text.trim()) { refresh(); return listar().length; }
+
+    const ns = typeof normalSetAll === "function" ? normalSetAll() : new Set();
+    const curSexo = typeof sexo !== "undefined" ? sexo : "";
+    const curName = typeof current !== "undefined" && current ? current.name || "" : "";
+    const rawHits = detectarProblemasLocais(text, { normalSet: ns, sexo: curSexo, tituloExame: curName });
+
+    const porBloco = new Map();
+    for (const h of rawHits) {
+      if (confirmados.has(chaveConfirmado(h.motivo, h.trecho))) continue;
+      const slot = mapa.find(m => h.start >= m.start && h.end <= m.end);
+      if (!slot) continue;
+      const ls = h.start - slot.start;
+      const le = h.end - slot.start;
+      if (slot.duvRanges.some(([s, e]) => !(le <= s || ls >= e))) continue;
+      if (!porBloco.has(slot.blk)) porBloco.set(slot.blk, []);
+      porBloco.get(slot.blk).push({ ls, le, h });
+    }
+
+    let inseridos = 0;
+    hidratando = true;
+    try {
+      for (const [blk, itens] of porBloco) {
+        itens.sort((a, b) => b.ls - a.ls);
+        for (const { ls, le, h } of itens) {
+          const r = rangeFromOffsets(blk, ls, le);
+          if (!r) continue;
+          r.deleteContents();
+          r.insertNode(spanDuvida(h.trecho, h.motivo, "local"));
+          inseridos++;
+        }
+      }
+    } finally {
+      hidratando = false;
+    }
+    const lista = listar();
+    if (autoFocar && lista.length) selecionar(lista[0], { focar: true });
+    else refresh();
+    return lista.length || (novos + inseridos);
+  }
+
+  function aposIA({ autoFocar = false } = {}) {
+    return analisar({ autoFocar });
+  }
+
+  const sheetText = () => sheetTextNodes(sheet).map(n => n.nodeValue).join("");
   const selectionRange = () => {
     const s = getSelection();
     return s.rangeCount && sheet.contains(s.anchorNode) ? s.getRangeAt(0) : sheetRange;
@@ -12598,69 +13195,374 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     const r = selectionRange(), end = direction > 0;
     return r && sheet.contains(end ? r.endContainer : r.startContainer)
       ? offsetOf(sheet, end ? r.endContainer : r.startContainer, end ? r.endOffset : r.startOffset)
-      : end ? 0 : text().length;
+      : end ? 0 : sheetText().length;
   }
-  function select(marker) {
-    if (!marker) return false;
-    const r = rangeFromOffsets(sheet, marker.start, marker.end);
-    if (!r) return false;
-    sheet.focus({ preventScroll: true });
-    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
-    sheetRange = r.cloneRange();
-    let rect = r.getBoundingClientRect();
-    for (let node = r.startContainer.parentElement; node; node = node.parentElement) {
+
+  function scrollIntoViewNice(el) {
+    let rect = el.getBoundingClientRect();
+    for (let node = el.parentElement; node; node = node.parentElement) {
       if (node.scrollHeight <= node.clientHeight || !/auto|scroll/.test(getComputedStyle(node).overflowY)) continue;
       const box = node.getBoundingClientRect();
       if (rect.top < box.top || rect.bottom > box.bottom) {
         node.scrollTop += rect.top - box.top - (node.clientHeight - rect.height) / 2;
-        rect = r.getBoundingClientRect();
+        rect = el.getBoundingClientRect();
       }
     }
     if (rect.top < 0 || rect.bottom > innerHeight) {
       window.scrollBy(0, rect.top - (innerHeight - rect.height) / 2);
     }
+  }
+
+  function limparClasses() {
+    for (const el of sheet.querySelectorAll(".v2-duvida.ativa, .v2-duvida.editando")) {
+      el.classList.remove("ativa", "editando");
+    }
+  }
+
+  function sair() {
+    ativa = null;
+    editando = null;
+    limparClasses();
+    refresh();
+  }
+
+  function sairEdicao() {
+    if (!editando) return false;
+    const alvo = editando;
+    editando.classList.remove("editando");
+    editando = null;
+    if (alvo.isConnected) {
+      ativa = alvo;
+      ignoreSel = true;
+      try {
+        sheet.focus({ preventScroll: true });
+        const r = document.createRange();
+        r.setStart(alvo, 0);
+        r.collapse(true);
+        const s = getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+        sheetRange = r.cloneRange();
+      } finally { ignoreSel = false; }
+    } else {
+      ativa = null;
+    }
     refresh();
     return true;
   }
-  function navigate(direction, fields = false) {
-    const markers = fields ? findMarkers(text(), FIELD_RE.source) : uncertainties(text());
-    return select(markers[nextIndex(markers, position(direction), direction)]);
+
+  function selecionar(el, { editar = false, focar = true } = {}) {
+    if (!el || !el.isConnected) return false;
+    limparClasses();
+    ativa = el;
+    el.classList.add("ativa");
+    editando = editar ? el : null;
+    if (editar) el.classList.add("editando");
+    scrollIntoViewNice(el);
+    if (focar) {
+      ignoreSel = true;
+      try {
+        sheet.focus({ preventScroll: true });
+        el.normalize();
+        const r = document.createRange();
+        if (editar) {
+          const firstTxt = el.firstChild;
+          const lastTxt = el.lastChild;
+          if (firstTxt?.nodeType === 3 && lastTxt?.nodeType === 3) {
+            r.setStart(firstTxt, 0);
+            r.setEnd(lastTxt, lastTxt.nodeValue.length);
+          } else {
+            r.selectNodeContents(el);
+          }
+        } else {
+          r.setStart(el, 0);
+          r.collapse(true);
+        }
+        const s = getSelection();
+        s.removeAllRanges();
+        s.addRange(r);
+        sheetRange = r.cloneRange();
+      } finally {
+        ignoreSel = false;
+      }
+    }
+    refresh();
+    return true;
   }
-  ui.actions.proximo.run = () => { if (!navigate(1, true)) sectionNav(1); };
-  const pill = ui.el("span", { id: "v2Marcador", role: "group", "aria-label": "Trechos incertos" });
-  pill.style.cssText = "display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border,#8886);border-radius:999px;padding:2px 7px;font-size:12px;margin-left:6px";
-  const label = ui.el("span", { "aria-live": "polite" });
-  pill.append(ui.button("‹", () => navigate(-1), { "aria-label": "[?] anterior", title: "[?] anterior" }), label,
-    ui.button("›", () => navigate(1), { "aria-label": "Próximo [?]", title: "Próximo [?]" }));
+
+  function entrarEdicao(el = ativa) {
+    const alvo = (el && el.isConnected) ? el : listar()[0];
+    if (!alvo) return false;
+    return selecionar(alvo, { editar: true, focar: true });
+  }
+
+  function navegar(direction = 1) {
+    const lista = listar();
+    if (!lista.length) { sair(); return false; }
+    if (ativa && ativa.isConnected) {
+      const i = lista.indexOf(ativa);
+      if (i >= 0) {
+        const prox = lista[(i + (direction < 0 ? -1 : 1) + lista.length) % lista.length];
+        return selecionar(prox, { editar: false, focar: true });
+      }
+    }
+    const offsets = lista.map(el => {
+      try {
+        const s = offsetOf(sheet, el, 0);
+        return { el, start: s, end: s + el.textContent.length };
+      } catch (_) { return { el, start: 0, end: 0 }; }
+    });
+    const idx = nextIndex(offsets, position(direction), direction);
+    return selecionar(offsets[idx]?.el, { editar: false, focar: true });
+  }
+
+  function limparEspacosBloco(par) {
+    if (!par || !par.isConnected) return;
+    if (typeof collapseSpaces === "function") collapseSpaces(par);
+    par.normalize();
+    const ns = sheetTextNodes(par);
+    for (const n of ns) n.nodeValue = n.nodeValue.replace(/ +([.,;:!?])/g, "$1");
+    if (!par.textContent.replace(/\s+/g, "").trim() && sheet.children.length > 1) par.remove();
+  }
+
+  function confirmar(el = ativa) {
+    if (!el || !el.isConnected) return false;
+    if (!el.textContent.trim()) return apagar(el);
+    const listaAntes = listar();
+    const idx = listaAntes.indexOf(el);
+    confirmados.add(chaveConfirmado(el.dataset.duvida || "", el.textContent));
+    const par = el.closest("p, div, li");
+    const ultimoTexto = el.lastChild;
+    el.replaceWith(...el.childNodes);
+    par?.normalize();
+    ativa = null;
+    editando = null;
+
+    if (typeof scheduleCaseSave === "function") scheduleCaseSave();
+    if (typeof renderAlerts === "function") renderAlerts();
+
+    const restantes = listar();
+    if (restantes.length) {
+      return selecionar(restantes[idx >= 0 && idx < restantes.length ? idx : 0], { editar: false, focar: true });
+    }
+    if (ultimoTexto?.isConnected) {
+      ignoreSel = true;
+      try {
+        const r = document.createRange();
+        if (ultimoTexto.nodeType === 3) r.setStart(ultimoTexto, ultimoTexto.nodeValue.length);
+        else r.setStartAfter(ultimoTexto);
+        r.collapse(true);
+        const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+        sheetRange = r.cloneRange();
+      } catch (_) {} finally { ignoreSel = false; }
+    }
+    refresh();
+    if (typeof setStatus === "function") setStatus("Todas as dúvidas conferidas ✓", "ok");
+    return true;
+  }
+
+  function apagar(el = ativa) {
+    if (!el || !el.isConnected) return false;
+    const listaAntes = listar();
+    const idx = listaAntes.indexOf(el);
+    confirmados.add(chaveConfirmado(el.dataset.duvida || "", el.textContent));
+    const par = el.closest("p, div, li");
+    el.remove();
+    limparEspacosBloco(par);
+    ativa = null;
+    editando = null;
+
+    if (typeof pushVersion === "function") pushVersion("Dúvida removida");
+    if (typeof scheduleCaseSave === "function") scheduleCaseSave();
+    if (typeof renderAlerts === "function") renderAlerts();
+
+    const restantes = listar();
+    if (restantes.length) {
+      return selecionar(restantes[idx >= 0 && idx < restantes.length ? idx : 0], { editar: false, focar: true });
+    }
+    refresh();
+    if (typeof setStatus === "function") setStatus("Dúvida removida · laudo sem dúvidas ✓", "ok");
+    return true;
+  }
+
+  ui.actions.proximo.run = () => {
+    const duvidas = listar().map(el => {
+      const s = offsetOf(sheet, el, 0);
+      return { kind: "duvida", el, start: s, end: s + el.textContent.length };
+    });
+    const reField = new RegExp("\\[<>\\]|" + FIELD_RE.source, "g");
+    const fields = Array.from(sheetText().matchAll(reField), m => ({
+      kind: "field",
+      start: m.index,
+      end: m.index + m[0].length
+    })).filter(f => !duvidas.some(d => !(f.end <= d.start || f.start >= d.end)));
+
+    const items = [...duvidas, ...fields].sort((a, b) => a.start - b.start);
+    if (!items.length) { sectionNav(1); return; }
+
+    let from = position(1);
+    if (ativa && ativa.isConnected) {
+      try { from = offsetOf(sheet, ativa, 0) + ativa.textContent.length; } catch (_) {}
+    }
+    const i = nextIndex(items, from, 1);
+    const hit = items[i];
+    if (!hit) { sectionNav(1); return; }
+    if (hit.kind === "duvida") {
+      selecionar(hit.el, { editar: false, focar: true });
+      return;
+    }
+    sair();
+    const r = rangeFromOffsets(sheet, hit.start, hit.end);
+    if (!r) return;
+    sheet.focus({ preventScroll: true });
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    sheetRange = r.cloneRange();
+    const tmpEl = r.startContainer.parentElement;
+    if (tmpEl) scrollIntoViewNice(tmpEl);
+  };
+
+  /* ---------- pílula flutuante na barra ---------- */
+  const pill = ui.el("span", { id: "v2Marcador", role: "group", "aria-label": "Dúvidas para conferir" });
+  const label = ui.el("span", { class: "v2-duvida-lbl", "aria-live": "polite" });
+  const motivoEl = ui.el("span", { class: "v2-duvida-motivo" });
+  pill.append(
+    ui.button("‹", () => navegar(-1), { "aria-label": "Dúvida anterior", title: "Dúvida anterior (←)" }),
+    label,
+    motivoEl,
+    ui.button("›", () => navegar(1), { "aria-label": "Próxima dúvida", title: "Próxima dúvida (→)" }),
+    ui.button("✓", () => confirmar(ativa || listar()[0]), { "aria-label": "Confirmar dúvida", title: "Confirmar e ir para a próxima (Enter)" }),
+    ui.button("✎", () => entrarEdicao(ativa || listar()[0]), { "aria-label": "Editar dúvida", title: "Editar trecho (↓)" }),
+    ui.button("✕", () => apagar(ativa || listar()[0]), { "aria-label": "Apagar dúvida", title: "Apagar dúvida (Delete)" })
+  );
   pill.addEventListener("mousedown", e => e.preventDefault());
   document.querySelector(".fmt-bar").append(pill);
+
   function refresh() {
-    const markers = uncertainties(text());
-    pill.hidden = !markers.length;
-    pill.style.display = markers.length ? "inline-flex" : "none";
-    const from = position(-1);
-    let i = markers.findIndex(m => m.start >= from);
+    if (ativa && !ativa.isConnected) ativa = null;
+    if (editando && !editando.isConnected) editando = null;
+    const lista = listar();
+    pill.hidden = !lista.length;
+    if (!lista.length) return;
+    let i = ativa ? lista.indexOf(ativa) : -1;
     if (i < 0) i = 0;
-    label.textContent = `[?] ${i + 1} de ${markers.length}`;
+    const atual = ativa || lista[i];
+    label.textContent = `Dúvida ${i + 1} de ${lista.length}`;
+    const m = atual?.dataset?.duvida || "";
+    motivoEl.textContent = m ? `· ${m}` : "";
+    motivoEl.hidden = !m;
   }
-  new MutationObserver(refresh).observe(sheet, { childList: true, subtree: true, characterData: true });
-  document.addEventListener("selectionchange", refresh);
+
+  /* ---------- eventos no laudo ---------- */
+  const fraseAberta = () => {
+    const f = document.getElementById("fraseBox");
+    return !!(f && !f.hidden);
+  };
+  const menuAberto = () => {
+    const p = document.getElementById("commandPalette");
+    return !!(p && !p.hidden);
+  };
+
+  sheet.addEventListener("keydown", e => {
+    if (fraseAberta() || menuAberto()) return;
+    if (e.isComposing) return;
+    const semMod = !e.ctrlKey && !e.metaKey && !e.altKey;
+
+    if (editando && editando.isConnected) {
+      if (e.key === "Enter" && semMod && !e.shiftKey) {
+        e.preventDefault(); e.stopPropagation();
+        confirmar(editando);
+      } else if (e.key === "Escape") {
+        e.preventDefault(); e.stopPropagation();
+        sairEdicao();
+      }
+      return;
+    }
+
+    if (!ativa || !ativa.isConnected) return;
+    if (!semMod) return;
+
+    if (e.key === "ArrowRight") {
+      e.preventDefault(); e.stopPropagation();
+      navegar(1);
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault(); e.stopPropagation();
+      navegar(-1);
+    } else if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault(); e.stopPropagation();
+      confirmar(ativa);
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault(); e.stopPropagation();
+      apagar(ativa);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault(); e.stopPropagation();
+      entrarEdicao(ativa);
+    } else if (e.key === "Escape") {
+      e.preventDefault(); e.stopPropagation();
+      sair();
+    } else if (e.key === "ArrowUp") {
+      sair();
+    } else if (e.key.length === 1) {
+      entrarEdicao(ativa);
+    }
+  }, true);
+
+  sheet.addEventListener("click", e => {
+    const d = e.target.closest?.(".v2-duvida");
+    if (d && sheet.contains(d) && !d.closest("del.rm")) {
+      if (editando === d) return;
+      selecionar(d, { editar: false, focar: true });
+      return;
+    }
+    if (ativa && !e.target.closest?.("#v2Marcador")) sair();
+  });
+
+  document.addEventListener("selectionchange", () => {
+    if (ignoreSel) return;
+    if (editando && editando.isConnected) {
+      const s = getSelection();
+      if (s.rangeCount && editando.contains(s.anchorNode)) return;
+      editando.classList.remove("editando");
+      editando = null;
+      ativa = null;
+      limparClasses();
+    }
+    refresh();
+  });
+
+  new MutationObserver(() => {
+    if (!hidratando && /\{\{\?|\[\?/.test(sheet.textContent || "")) hidratar();
+    refresh();
+  }).observe(sheet, { childList: true, subtree: true, characterData: true });
+
+  /* ---------- aviso ao copiar com dúvidas abertas ---------- */
   const originalCopy = doCopy;
   const dialog = ui.el("dialog", { id: "v2MarcadorAviso", "aria-labelledby": "v2MarcadorAvisoTexto" });
   dialog.style.cssText = "border:1px solid #8886;border-radius:12px;padding:20px;background:var(--bg,#fff);color:var(--text,#222);max-width:90vw";
   const message = ui.el("p", { id: "v2MarcadorAvisoTexto" });
   const first = ui.button("Ir para o primeiro", () => {
-    dialog.close(); select(uncertainties(text())[0]);
+    dialog.close();
+    const primeiro = listar()[0];
+    if (primeiro) selecionar(primeiro, { editar: false, focar: true });
   });
-  const anyway = ui.button("Copiar mesmo assim", () => { dialog.close(); originalCopy(); });
-  dialog.append(message, first, anyway);
+  const anyway = ui.button("Copiar mesmo assim", () => {
+    dialog.close();
+    originalCopy();
+  });
+  const boxAcoes = ui.el("div", { class: "v2-aviso-acoes" });
+  boxAcoes.append(first, anyway);
+  dialog.append(message, boxAcoes);
   document.body.append(dialog);
+
   doCopy = () => {
-    const warning = copyWarning(text());
+    const lista = listar();
+    const warning = copyWarning(lista.length);
     if (!warning) return originalCopy();
     message.textContent = warning;
     if (!dialog.open) dialog.showModal();
   };
+
+  ui.duvidas = { hidratar, analisar, aposIA, listar, selecionar, navegar, confirmar, apagar, entrarEdicao, sair, ativa: () => ativa, editando: () => editando };
+  hidratar();
   refresh();
 })();
 

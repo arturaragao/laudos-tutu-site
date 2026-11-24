@@ -370,6 +370,37 @@
       clearTimeout(timer);
     }
   }
+  async function nuvemFetchJson(path, { method = "GET", body } = {}){
+    const n = lerNuvem();
+    if (!n) return { ok: false, erro: "IA na nuvem não configurada." };
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 10000);
+    try{
+      const r = await fetch(n.url + path, {
+        method,
+        headers: {
+          "X-Tutu-Token": n.token,
+          ...(body ? { "Content-Type": "application/json" } : {})
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        cache: "no-store",
+        signal: ctl.signal
+      });
+      const dados = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, status: r.status, erro: dados?.erro || `HTTP ${r.status}` };
+      return dados && typeof dados === "object" ? { ok: true, ...dados } : { ok: true };
+    }catch(e){
+      return { ok: false, erro: e?.name === "AbortError" ? "Tempo esgotado (10 s)." : "Falha ao conectar à IA na nuvem." };
+    }finally{
+      clearTimeout(timer);
+    }
+  }
+  const filaUsgListar = () => nuvemFetchJson("/fila-usg");
+  const filaUsgSalvar = doc => nuvemFetchJson("/fila-usg", { method: "POST", body: doc });
+  const filaUsgApagar = (id, sha) => {
+    const q = sha ? `?sha=${encodeURIComponent(sha)}` : "";
+    return nuvemFetchJson(`/fila-usg/${encodeURIComponent(id)}${q}`, { method: "DELETE" });
+  };
   function validarPonteUrl(raw){
     try{
       const u = new URL(String(raw || "").trim());
@@ -451,7 +482,7 @@
     }catch(_){}
   }
   checarHashPareamento();
-  window.addEventListener("hashchange", checarHashPareamento);
+  if (typeof window !== "undefined") window.addEventListener?.("hashchange", checarHashPareamento);
   if (pontePareadaMsg){
     const t0 = Date.now();
     const iv = setInterval(() => {
@@ -527,7 +558,9 @@
         finalizado = {
           laudo: typeof payload?.laudo === "string" ? payload.laudo : acum,
           motor: payload?.motor || "",
-          modelo: payload?.modelo || ""
+          modelo: payload?.modelo || "",
+          filaSalva: !!payload?.filaSalva,
+          filaId: typeof payload?.filaId === "string" ? payload.filaId : ""
         };
         return;
       }
@@ -916,6 +949,7 @@
   window.tutuSite = { ready, db, importBackup, exportBackup, mergeBank, saveBankNT, sync, gh, setToken, pedirChave,
     onChave: f => { chaveHooks.push(f); }, bancosRefresh, lerBancosGh, brData, directStream,
     nuvemStatus, salvarNuvem, limparNuvem, testarNuvem, nuvemLinkPareamento,
+    filaUsgListar, filaUsgSalvar, filaUsgApagar,
     ponteStatus: () => { const p = lerPonte(); return { pareada: !!p, url: p?.url || "" }; }, desparearPonte };
   // Bancos carregados antes do app: índices, vocabulário e treino usam o mesmo código do artefato.
   // Fonte: repo de dados (cache local) > bancos/*.js (reserva, só no PC) + o que foi importado/guardado no IndexedDB.
@@ -946,7 +980,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=e45466c"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=88d8735"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();
