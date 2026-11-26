@@ -1105,7 +1105,7 @@
       ? { laudos: g.nt.frases.filter(e => /Técnica/i.test(e[1])).length, data: brData(g.nt.atualizado), iso: g.nt.atualizado || new Date().toISOString() }
       : { laudos: 0, data: "sem backup importado", iso: new Date().toISOString(), ...fileMeta, ...(b.bank_nt.length ? b.bank_nt_meta : {}) };
     window.BANK_GH = { tc: !!g.tc, nt: !!g.nt };
-    const script = document.createElement("script"); script.src = "app.js?v=5d0cf34"; script.charset = "utf-8";
+    const script = document.createElement("script"); script.src = "app.js?v=fbb8de5"; script.charset = "utf-8";
     document.body.append(script);
   })().catch(e => { document.getElementById("status").textContent = e.message; });
 })();

@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "5d0cf34 · 26/11 09:48";
+window.__SITE_VERSION__ = "fbb8de5 · 26/11 20:10";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -18158,3 +18158,189 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   if (ui.actions) ui.actions.padroes = { label: "Textos padrão da máscara", run: abrir };
   atualizar();
 })();
+
+/* Detecção automática do exame aberto no Vue PACS Windows (via ponte 127.0.0.1:47831/events).
+   Recebe apenas o nome do procedimento (nunca dados de paciente). Se a folha estiver limpa, abre a máscara certa;
+   se já houver edição do médico, mostra uma barra discreta para abrir em nova aba sem perder o laudo atual. */
+(function (root) {
+  "use strict";
+  const fold = s => String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  function normPacsText(s) {
+    return " " + fold(s)
+      .replace(/\b(?:ultrassonografia|ultrasonografia|ultrassom|ultrasom|ecografia)\b/g, "usg")
+      .replace(/\btomografia(?:\s+computadorizada)?\b/g, "tc")
+      .replace(/\bangiotomografia|\bangio[\s-]*tc\b/g, "angiotc")
+      .replace(/\bressonancia(?:\s+magnetica)?\b/g, "rm")
+      .replace(/\b(?:radiografia|raio[\s-]*x)\b/g, "rx")
+      .replace(/\b(?:abdomen|abdominal)\b/g, "abdome")
+      .replace(/\bmembros?\s+inferiores?\b/g, "mmii")
+      .replace(/\bmembros?\s+superiores?\b/g, "mmss")
+      .replace(/\bcarotidas?\b/g, "carotidas")
+      .replace(/\btoracic[oa]s?\b/g, "torax")
+      .replace(/\bpelvic[oa]s?\b/g, "pelvica")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim() + " ";
+  }
+
+  function detectModality(text) {
+    const t = normPacsText(text);
+    if (/\b(?:usg|us|doppler)\b/.test(t)) return "US";
+    if (/\b(?:tc|angiotc)\b/.test(t)) return "TC";
+    if (/\b(?:rm|rnm)\b/.test(t)) return "RM";
+    if (/\brx\b/.test(t)) return "RX";
+    return "";
+  }
+
+  const STOP = new Set(["tc", "us", "usg", "rm", "rx", "de", "do", "da", "dos", "das", "e", "em", "com", "sem", "total", "exame", "parecer", "colorido", "unilateral", "bilateral"]);
+
+  function matchExamPacs(procedimento, exams) {
+    const proc = String(procedimento || "").trim();
+    if (!proc || !Array.isArray(exams) || !exams.length) return null;
+    const pNorm = normPacsText(proc);
+    const procMod = detectModality(proc);
+    const procAngio = /\bangiotc\b|\bangio\b/.test(pNorm);
+    const procTokens = pNorm.trim().split(/\s+/).filter(w => w && !STOP.has(w));
+    if (!procTokens.length) return null;
+
+    let best = null, bestScore = 0;
+    for (const ex of exams) {
+      if (!ex || !ex.id) continue;
+      const exMod = detectModality(ex.name || "");
+      let sc = 0;
+      for (const term of [ex.name, ...(ex.voz || [])]) {
+        const tNorm = normPacsText(term);
+        const toks = tNorm.trim().split(/\s+/).filter(w => w && !STOP.has(w));
+        if (!toks.length) continue;
+        let hits = 0;
+        for (const tk of toks) {
+          if (pNorm.includes(" " + tk + " ") || (tk.length >= 5 && pNorm.includes(" " + tk.slice(0, 5)))) hits++;
+        }
+        if (!hits) continue;
+        const revHits = procTokens.filter(pt => tNorm.includes(" " + pt + " ") || (pt.length >= 5 && tNorm.includes(" " + pt.slice(0, 5)))).length;
+        const s = (hits / toks.length) * 0.65 + (revHits / procTokens.length) * 0.35 + hits * 0.05;
+        if (s > sc) sc = s;
+      }
+      if (!sc) continue;
+      if (procMod && exMod) sc += (procMod === exMod ? 0.25 : -0.6);
+      if (procAngio !== /\bangio/.test(normPacsText(ex.name || ""))) sc -= 0.35;
+      if (ex.tipo === "parecer") sc -= 0.4;
+      if (sc > bestScore) { bestScore = sc; best = ex; }
+    }
+    return bestScore >= 0.45 ? best : null;
+  }
+
+  const api = { matchExamPacs, normPacsText, detectModality };
+  if (typeof module !== "undefined" && module.exports) { module.exports = api; return; }
+  root.TutuPacs = api;
+
+  if (typeof document === "undefined" || !root.tutuV2) return;
+  const ui = root.tutuV2;
+  const KEY = "v2PacsAuto";
+  const ANDROID = /Android/i.test(navigator.userAgent);
+  const ligado = () => localStorage.getItem(KEY) !== "0";
+
+  let lastSeq = 0;
+  let pacsPend = null;
+  let es = null;
+  let retryTimer = 0;
+  let retryMs = 3000;
+
+  // Barra discreta no topo da folha (aparece só quando há edição em curso e chega exame novo do PACS)
+  const bar = ui.el("div", { id: "pacsBar", class: "tasy-bar pacs-bar", hidden: "" });
+  const tx = ui.el("span", { id: "pacsTx", class: "tasy-tx" });
+  const btnNova = ui.button("Nova aba", () => {
+    const p = pacsPend; if (!p) return;
+    bar.hidden = true; pacsPend = null;
+    if (p.ex) {
+      if (typeof ui.newTab === "function") ui.newTab(p.ex.id);
+      else selectExam(p.ex.id, false);
+      if (typeof focusSheet === "function") focusSheet(true);
+      if (typeof setStatus === "function") setStatus(`PACS: ${p.procedimento} → nova aba ${p.ex.name}.`, "ok");
+    }
+  }, { id: "pacsNovaAba" });
+  const btnTrocar = ui.button("Trocar máscara", () => {
+    const p = pacsPend; if (!p) return;
+    bar.hidden = true; pacsPend = null;
+    if (p.ex) {
+      if (typeof selectExam === "function") selectExam(p.ex.id, false);
+      if (typeof focusSheet === "function") focusSheet(true);
+    }
+  }, { id: "pacsTrocar" });
+  const btnFechar = ui.button("×", () => { bar.hidden = true; pacsPend = null; }, { id: "pacsX", "aria-label": "Fechar aviso do PACS" });
+  bar.append(tx, btnNova, btnTrocar, btnFechar);
+
+  const tasyBar = document.getElementById("tasyBar");
+  const laudoEl = document.getElementById("laudo");
+  if (tasyBar && tasyBar.parentNode) tasyBar.after(bar);
+  else if (laudoEl && laudoEl.parentNode) laudoEl.before(bar);
+
+  function processarEvento(ev) {
+    if (!ev || !ev.procedimento) return;
+    const seq = Number(ev.seq) || 0;
+    if (seq && seq <= lastSeq) return;
+    if (seq) lastSeq = seq;
+
+    const proc = String(ev.procedimento).trim();
+    const exams = typeof EXAMS !== "undefined" ? EXAMS : [];
+    const ex = matchExamPacs(proc, exams);
+    const vazio = typeof sheetHasContent === "function" && typeof modelIntact === "function"
+      ? (!sheetHasContent() || modelIntact())
+      : true;
+
+    if (vazio) {
+      bar.hidden = true; pacsPend = null;
+      if (ex && typeof current !== "undefined" && ex.id !== current.id) {
+        selectExam(ex.id, false);
+      }
+      if (ex && typeof focusSheet === "function") focusSheet(true);
+      if (typeof setStatus === "function") {
+        setStatus(ex ? `PACS: ${proc} → ${ex.name}.` : `PACS: ${proc} (sem máscara correspondente).`, "ok");
+      }
+      return;
+    }
+
+    if (!ex) return;
+    pacsPend = { procedimento: proc, ex };
+    tx.textContent = "";
+    tx.append(ui.el("b", {}, "PACS abriu: "), document.createTextNode(`${proc} → ${ex.name}`));
+    btnNova.textContent = `Nova aba (${ex.name})`;
+    btnTrocar.hidden = typeof current !== "undefined" && ex.id === current.id;
+    bar.hidden = false;
+  }
+
+  function conectar() {
+    if (ANDROID || !ligado() || typeof EventSource === "undefined") return;
+    if (es && es.readyState !== 2) return;
+    clearTimeout(retryTimer);
+    try {
+      es = new EventSource("http://127.0.0.1:47831/events");
+      es.onopen = () => { retryMs = 3000; };
+      es.onmessage = msg => {
+        const d = String(msg.data || "");
+        if (!d.startsWith("pacs:")) return;
+        try { processarEvento(JSON.parse(d.slice(5))); } catch (_) {}
+      };
+      es.onerror = () => {
+        try { es.close(); } catch (_) {}
+        es = null;
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(conectar, retryMs);
+        retryMs = Math.min(30000, retryMs * 2);
+      };
+    } catch (_) {}
+  }
+
+  function setLigado(on) {
+    localStorage.setItem(KEY, on ? "1" : "0");
+    if (!on && es) { try { es.close(); } catch (_) {} es = null; clearTimeout(retryTimer); }
+    else if (on) conectar();
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && ligado()) conectar();
+  });
+  if (ligado()) setTimeout(conectar, 400);
+
+  ui.pacs = { matchExamPacs, simularEvento: processarEvento, ligado, setLigado };
+})(globalThis);
