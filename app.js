@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "289c6de · 24/11 17:03";
+window.__SITE_VERSION__ = "5d0cf34 · 26/11 09:48";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -107,7 +107,7 @@ function extractNotasTomografia(t){
 const DEFAULT_EXAMS = [
   { id:"abdome", code:"AB", name:"TC de abdome total", proto:"Com contraste", sexo:true, mine:true, voz:["abdome","abdome total","abdômen","abdômen total","abdominal"],
     groups:["ABDOME","ABDOME COM CONTRASTE","ANGIO TC ABD E ILÍACAS","ANGIO ABD E ILÍACAS"],
-    mask:`TOMOGRAFIA COMPUTADORIZADA DE ABDOME TOTAL
+    mask:`{{centro}}TOMOGRAFIA COMPUTADORIZADA DE ABDOME TOTAL
 Informações Clínicas
 [<>]
 Técnica de exame
@@ -138,7 +138,7 @@ Conclusão
 Achados adicionais` },
   { id:"cranio", code:"CR", name:"TC de crânio", proto:"Sem contraste", sexo:false, mine:false, voz:["crânio","cabeça","encéfalo"],
     groups:["CRÂNIO","CABEÇA","ANGIO CRÂNIO"],
-    mask:`TOMOGRAFIA COMPUTADORIZADA DE CRÂNIO
+    mask:`{{centro}}TOMOGRAFIA COMPUTADORIZADA DE CRÂNIO
 Informações Clínicas
 [<>]
 Técnica de exame
@@ -157,7 +157,7 @@ Conclusão
 Achados adicionais` },
   { id:"torax", code:"TX", name:"TC de tórax", proto:"Sem contraste", sexo:false, mine:false, voz:["tórax","torax","pulmão","pulmões"],
     groups:["TÓRAX","ANGIOTC TÓRAX - TEP"],
-    mask:`TOMOGRAFIA COMPUTADORIZADA DE TÓRAX
+    mask:`{{centro}}TOMOGRAFIA COMPUTADORIZADA DE TÓRAX
 Informações Clínicas
 [<>]
 Técnica de exame
@@ -526,6 +526,19 @@ const splitAlign = t => {
   return { al: f ? a + "|" + f : a, t };
 };
 const alPrefix = al => { const { a, fn, fs } = alParts(al); return (a ? `{{${a}}}` : "") + (fn ? `{{fonte:${fn},${fs}}}` : ""); };
+function centerTitleAlign(al){
+  const { fn, fs } = alParts(al);
+  return fn ? `centro|${fn},${fs}` : "centro";
+}
+function ensureCenteredTitle(mask, tipo){
+  if (tipo === "parecer") return String(mask || "");
+  const lines = String(mask || "").split("\n");
+  const i = lines.findIndex(l => l.trim());
+  if (i < 0) return String(mask || "");
+  const { al, t } = splitAlign(lines[i].trim());
+  lines[i] = alPrefix(centerTitleAlign(al)) + t;
+  return lines.join("\n");
+}
 const stripMarks = t => stripTags(splitAlign(t).t);
 const isHeading = t => HSET.has(norm(stripMarks(t)));
 const todayBR = () => { const d = new Date(); return String(d.getDate()).padStart(2,"0") + "/" + String(d.getMonth()+1).padStart(2,"0") + "/" + d.getFullYear(); };
@@ -626,7 +639,7 @@ function modelSheetHtml(ex){
   for (const raw of maskLines(ex)){
     if (!raw){ out += BLANK; vazio = true; continue; }
     const { al, t } = splitAlign(raw), head = !parecer && !first && isHeading(t);
-    if (!parecer && first) out += P(fmt(fmtInline(stripTags(t)), FORMAT.title), al);
+    if (!parecer && first) out += P(fmt(fmtInline(stripTags(t)), FORMAT.title), centerTitleAlign(al));
     else if (head) out += (vazio ? "" : BLANK) + P(fmt(fmtInline(stripTags(t)), FORMAT.heading), al);
     else if (t === "[<>]") out += P("<br>", al);
     else { let m;
@@ -1773,8 +1786,9 @@ document.addEventListener("keydown", e => {
 /* ================= 6. Editor de máscaras ================= */
 const BANK_GROUPS = [...new Set(BANK.map(e => e[0]))];
 function cleanMask(d){
+  const tipo = d.tipo === "parecer" ? "parecer" : "laudo";
   return { id:d.id, code:String(d.code || "").toUpperCase().slice(0,3) || "??", name:d.name || d.id, proto:d.proto || "",
-    sexo:!!d.sexo, tipo:d.tipo === "parecer" ? "parecer" : "laudo", voz:Array.isArray(d.voz) ? d.voz : [], mask:String(d.mask || ""), groups:Array.isArray(d.groups) ? d.groups : [],
+    sexo:!!d.sexo, tipo, voz:Array.isArray(d.voz) ? d.voz : [], mask:ensureCenteredTitle(d.mask, tipo), groups:Array.isArray(d.groups) ? d.groups : [],
     criadoEm:d.criadoEm || "" };
 }
 let maskDocs = [];
@@ -1821,7 +1835,7 @@ function loadMask(id){
   const ex = EXAMS.find(e => e.id === id);
   $("mNome").value = ex ? ex.name : ""; $("mProto").value = ex ? ex.proto : "";
   $("mVoz").value = ex ? (ex.voz || []).join(", ") : ""; $("mSexo").checked = ex ? !!ex.sexo : false; $("mParecer").checked = ex ? ex.tipo === "parecer" : false;
-  $("mTexto").innerHTML = textToEditable(ex ? ex.mask : "TOMOGRAFIA COMPUTADORIZADA DE \nInformações Clínicas\n[<>]\nTécnica de exame\n\nAchados\n[<>]\nConclusão\n1. \nAchados adicionais");
+  $("mTexto").innerHTML = textToEditable(ex ? ex.mask : "{{centro}}TOMOGRAFIA COMPUTADORIZADA DE \nInformações Clínicas\n[<>]\nTécnica de exame\n\nAchados\n[<>]\nConclusão\n1. \nAchados adicionais");
   groupBoxes(ex ? (ex.groups || []) : []);
   const isDefault = ex && DEFAULT_EXAMS.some(d => d.id === ex.id);
   $("mDel").hidden = !ex || (isDefault && !ex.overridden);
@@ -7066,8 +7080,23 @@ window.tutuSite.appReady = true;
     document.dispatchEvent(new CustomEvent("tutu-bancos"));
     await bancoStatus();
   }
+  let ultimoBancoRefresh = 0;
   async function atualizarBancos() {
-    if (await T.bancosRefresh() || !window.BANK_GH?.tc && (await T.lerBancosGh()).tc) await aplicarBancos();
+    ultimoBancoRefresh = Date.now();
+    const mudou = await T.bancosRefresh();
+    const g = await T.lerBancosGh();
+    const slugsAtual = window.BANK_BY_SLUG ? Object.keys(window.BANK_BY_SLUG).sort().join(",") : "";
+    const slugsNovo = Object.keys(g.porSlug || {}).sort().join(",");
+    const hashDif = Object.entries(g.porSlug || {}).some(([s, v]) =>
+      (window.BANK_BY_SLUG?.[s]?.hash || "") !== (v?.hash || "") ||
+      (window.BANK_BY_SLUG?.[s]?.atualizado || "") !== (v?.atualizado || "")
+    );
+    if (mudou || slugsAtual !== slugsNovo || hashDif || (!window.BANK_GH?.tc && g.tc)) await aplicarBancos();
+  }
+  function atualizarBancosSePreciso(minIntervalMs = 30000) {
+    if (!G.token || navigator.onLine === false) return Promise.resolve(false);
+    if (Date.now() - ultimoBancoRefresh < minIntervalMs) return Promise.resolve(false);
+    return atualizarBancos().then(() => true).catch(() => false);
   }
 
   /* ---------- Notion: dispara o workflow e acompanha o repositório até os bancos mudarem ---------- */
@@ -7152,7 +7181,7 @@ window.tutuSite.appReady = true;
   window.addEventListener("online", () => agenda(500, true));
   window.addEventListener("offline", () => setEstado("offline"));
   setInterval(() => agenda(0, true), PULL());
-  window.tutuSync = { agora: () => { agenda(0, true); }, estado: () => estado, notionAgora, aplicarBancos };
+  window.tutuSync = { agora: () => { agenda(0, true); }, estado: () => estado, notionAgora, aplicarBancos, atualizarBancosSePreciso };
   S.kvGet("_sync/ultima").then(v => { ultima = v || ""; }).catch(() => {}).finally(() => { if (!G.token) setEstado("semchave"); agenda(0, true); });
 })();
 
@@ -10498,8 +10527,26 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
     ["Ajustar conclusão", "Atualize a Conclusão para refletir todos os achados."],
     ["Melhorar redação", "Melhore a redação no estilo do meu banco, sem inventar achados."]
   ]) {
-    chipsRow.append(button(rot, () => { texto.value = frase; texto.focus(); texto.select(); }, { class: "conversa-chip" }));
+    chipsRow.append(button(rot, () => { texto.value = frase; autoGrow(); texto.focus(); texto.select(); }, { class: "conversa-chip" }));
   }
+
+  let autoHeight = 0, manualMinHeight = 0;
+  const autoGrow = () => {
+    const curH = texto.offsetHeight;
+    if (autoHeight > 0 && curH > autoHeight + 2) manualMinHeight = curH;
+    const maxH = Math.max(180, Math.floor(window.innerHeight * 0.45));
+    texto.style.height = "auto";
+    const nextH = Math.min(maxH, Math.max(76, manualMinHeight, texto.scrollHeight));
+    texto.style.height = nextH + "px";
+    autoHeight = nextH;
+  };
+  texto.addEventListener("input", autoGrow);
+  const registrarResizeManual = () => {
+    const curH = texto.offsetHeight;
+    if (autoHeight > 0 && curH > autoHeight + 2) { manualMinHeight = curH; autoHeight = curH; }
+  };
+  texto.addEventListener("pointerup", registrarResizeManual);
+  texto.addEventListener("mouseup", registrarResizeManual);
 
   const inputWrap = el("div", { class: "conversa-input-wrap" });
   const bar = el("div", { class: "conversa-bar" });
@@ -10530,7 +10577,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   function temLaudo() { try { return !!laudoTagged().trim(); } catch (_) { return false; } }
   function abrir(on) {
     box.hidden = !on; abrirBtn.setAttribute("aria-pressed", String(!!on));
-    if (on) { syncModeloConversa(); dizer(temLaudo() ? "" : "Abra ou escreva um laudo na folha primeiro."); texto.focus(); }
+    if (on) { syncModeloConversa(); dizer(temLaudo() ? "" : "Abra ou escreva um laudo na folha primeiro."); requestAnimationFrame(autoGrow); texto.focus(); }
     else parar({ descartar: true });
   }
   texto.addEventListener("keydown", e => {
@@ -10606,7 +10653,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
         let best = V.bestAlternative(alts[0], alts, cfg);
         if (r.isFinal && ANDROID && window.TutuV2Core?.speechDelta) { const d = TutuV2Core.speechDelta(sessao, best); sessao = d.sessao; best = d.novo; if (!best) continue; }
         const t = (window.TutuV2Core?.fixFala || String)(V.posTexto(best, cfg));
-        if (r.isFinal) texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + t;
+        if (r.isFinal) { texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + t; autoGrow(); }
         else parcial += t;
       }
       dizer(parcial ? "… " + parcial : "Ouvindo. Toque no microfone para parar.");
@@ -10682,6 +10729,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
         const limpo = V ? (window.TutuV2Core?.fixFala || String)(V.posTexto(V.punct(bruto), cfg)).trim() : bruto;
         const finalPed = limpo || bruto;
         texto.value += (texto.value && !/\s$/.test(texto.value) ? " " : "") + finalPed;
+        autoGrow();
         texto.focus();
         dizer("Pedido transcrito (Gemini 3.5) ✓ — Enter para enviar.");
       } catch (_) {
@@ -10870,6 +10918,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
         renderAlerts(); updateCount(); scheduleCaseSave();
       }
       texto.value = "";
+      manualMinHeight = 0; autoHeight = 0; autoGrow();
       window.TutuReprocessar?.sucesso("conversa", pedidoIA);
       dizer((novo === draft ? "Nada a mudar no laudo" : "Ajustado: laudo atualizado") + ` · ${motor} · ${secs} s` + fmtCusto(r?.custoUsd) + (r?.aviso ? " · " + r.aviso : "") + (novo === draft ? "." : " (F9 desfaz)"));
       if (regra) await lembrar(regra);
@@ -15375,8 +15424,31 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   const cab = ui.el("div", { class: "tempo-real-cab" });
   const mic = ui.button("Ditar · Alt S", () => { texto.focus(); ui.dictate(); }, { id: "tempoRealMic" });
   cab.append(ui.el("b", {}, "Conversar em tempo real"), mic);
-  box.append(cab, texto, parcial, msg, fonte);
+  const body = ui.el("div", { class: "tempo-real-body" });
+  body.append(texto, parcial, msg, fonte);
+  box.append(cab, body);
   document.body.append(box);
+  let autoHeight = 0, manualMinHeight = 0;
+  function autoGrow() {
+    if (!texto.textContent.trim()) {
+      manualMinHeight = 0; autoHeight = 0; texto.style.height = "";
+      return;
+    }
+    const curH = texto.offsetHeight;
+    if (autoHeight > 0 && curH > autoHeight + 2) manualMinHeight = curH;
+    else if (!autoHeight && texto.style.height) manualMinHeight = curH;
+    const maxH = Math.max(180, Math.floor(window.innerHeight * 0.45));
+    texto.style.height = "auto";
+    const nextH = Math.min(maxH, Math.max(68, manualMinHeight, texto.scrollHeight));
+    texto.style.height = nextH + "px";
+    autoHeight = nextH;
+  }
+  const registrarResizeManual = () => {
+    const curH = texto.offsetHeight;
+    if (curH > 68) { manualMinHeight = curH; autoHeight = curH; }
+  };
+  texto.addEventListener("pointerup", registrarResizeManual);
+  texto.addEventListener("mouseup", registrarResizeManual);
   const botao = ui.button("Conversar em tempo real", () => toggle(!enabled()),
     { id: "conversarTempoReal", "aria-pressed": "false" });
   const conversar = document.getElementById("conversaAbrir");
@@ -15397,7 +15469,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   function syncCase() {
     if (panelCase === ui.activeId()) return;
     cancelPause(); panelCase = ui.activeId();
-    texto.textContent = ""; parcial.textContent = ""; settled = ""; say(""); sayFonte(0);
+    texto.textContent = ""; autoGrow(); parcial.textContent = ""; settled = ""; say(""); sayFonte(0);
   }
   function activity() {
     syncCase(); cancelPause();
@@ -15424,7 +15496,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     atividade: activity,
     comando(acao) {
       if (!["apagar_isso", "apagar_frase", "cancelar"].includes(acao)) return false;
-      activity(); texto.textContent = ""; parcial.textContent = ""; settled = ""; inputSinceFinal = false;
+      activity(); texto.textContent = ""; autoGrow(); parcial.textContent = ""; settled = ""; inputSinceFinal = false;
       return true;
     },
     desfazer() {
@@ -15444,7 +15516,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     }
   }, true);
   texto.addEventListener("input", () => {
-    activity(); inputSinceFinal = true; schedulePause();
+    activity(); autoGrow(); inputSinceFinal = true; schedulePause();
   });
   texto.addEventListener("keydown", e => {
     // Não deixe o Gerar global consumir Ctrl+Enter dentro do painel.
@@ -15467,6 +15539,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     if (d.source === "ditado-site" || actual === settled && !inputSinceFinal || !norm(actual).endsWith(norm(t))) {
       texto.textContent = [actual, t].filter(Boolean).join(" ");
     }
+    autoGrow();
     settled = read(); inputSinceFinal = false; parcial.textContent = "";
     schedulePause();
   }
@@ -15547,7 +15620,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         undoPatch = { id, before: html, after: sheet.innerHTML };
         renderAlerts(); updateCount(); scheduleCaseSave();
       }
-      texto.textContent = ""; parcial.textContent = ""; settled = "";
+      texto.textContent = ""; autoGrow(); parcial.textContent = ""; settled = "";
       root.TutuReprocessar?.sucesso("tempoReal", pedidoIA);
       say("Ajustado. Dite a próxima frase.");
     } catch (_) {
@@ -17450,9 +17523,6 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       // Exame reconhecido pela modalidade, mas região específica sem match: mostra notas da modalidade inteira
       roots = buildRoots(false);
     }
-    if (!todas && roots.length <= 3) {
-      for (const r of roots) r.defaultOpen = true;
-    }
     return roots;
   }
 
@@ -17522,7 +17592,9 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   let arvoreCacheKey = "";
   let arvoreCache = [];
   let favsState = carregarFavsLocal();
-  const collapsedOrgs = new Set();
+  let ultimoExameKey = "";
+  let ultimoArvoreScope = false;
+  const expandedOrgs = new Set();
   const expandedNodes = new Set();
 
   function carregarFavsLocal() {
@@ -17609,13 +17681,28 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
 
   function snapshotBancosKey() {
-    const slugs = window.BANK_BY_SLUG ? Object.keys(window.BANK_BY_SLUG).sort().map(s => `${s}:${window.BANK_BY_SLUG[s]?.frases?.length || 0}:${window.BANK_BY_SLUG[s]?.pares?.length || 0}`).join(",") : "";
+    const slugs = window.BANK_BY_SLUG
+      ? Object.keys(window.BANK_BY_SLUG).sort().map(s => {
+          const b = window.BANK_BY_SLUG[s];
+          return `${s}:${b?.atualizado || ""}:${b?.hash || ""}:${b?.frases?.length || 0}:${b?.pares?.length || 0}`;
+        }).join(",")
+      : "";
     const tcLen = Array.isArray(window.BANK_TC) ? window.BANK_TC.length : 0;
     const prLen = Array.isArray(window.BANK_PARES) ? window.BANK_PARES.length : 0;
     return `${examKeyAtual()}|${arvoreTodas ? 1 : 0}|${slugs}|tc:${tcLen}|pr:${prLen}`;
   }
 
   function obterArvoreNotas() {
+    const exKey = examKeyAtual();
+    if (exKey !== ultimoExameKey) {
+      ultimoExameKey = exKey;
+      ultimoArvoreScope = arvoreTodas;
+      expandedOrgs.clear();
+      expandedNodes.clear();
+    } else if (arvoreTodas !== ultimoArvoreScope) {
+      ultimoArvoreScope = arvoreTodas;
+      expandedNodes.clear();
+    }
     const k = snapshotBancosKey();
     if (k === arvoreCacheKey) return arvoreCache;
     arvoreCacheKey = k;
@@ -17628,8 +17715,6 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
       todas: arvoreTodas
     }, Sug, window.TutuFrase);
     arvoreCache = roots;
-    expandedNodes.clear();
-    for (const r of roots) if (r.defaultOpen) expandedNodes.add(r.key);
     return roots;
   }
 
@@ -17919,25 +18004,22 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
         popList.append(el("div", { class: "v2-padroes-sec-hdr" }, "Padrões da máscara"));
       }
       const grupos = P.agruparPorOrgao(filtradosMask, typeof current !== "undefined" ? current : null, Sug);
-      const mostrarCabOrgao = grupos.length > 1 || (grupos[0] && grupos[0].id !== "geral");
 
       for (const grp of grupos) {
-        const aberto = !!q || !collapsedOrgs.has(grp.id);
-        if (mostrarCabOrgao) {
-          const orgBtn = button("", () => {
-            if (collapsedOrgs.has(grp.id)) collapsedOrgs.delete(grp.id);
-            else collapsedOrgs.add(grp.id);
-            renderLista();
-          }, { class: "v2-padroes-org", "aria-expanded": String(aberto) });
-          orgBtn.append(
-            el("span", { class: "v2-padroes-chev" }, aberto ? "▾" : "▸"),
-            el("span", { class: "v2-padroes-org-lbl" }, grp.label),
-            el("small", { class: "v2-padroes-org-cnt" }, String(grp.itens.length))
-          );
-          orgBtn.addEventListener("mousedown", e => e.preventDefault());
-          popList.append(orgBtn);
-          if (!aberto) continue;
-        }
+        const aberto = !!q || expandedOrgs.has(grp.id);
+        const orgBtn = button("", () => {
+          if (expandedOrgs.has(grp.id)) expandedOrgs.delete(grp.id);
+          else expandedOrgs.add(grp.id);
+          renderLista();
+        }, { class: "v2-padroes-org", "aria-expanded": String(aberto) });
+        orgBtn.append(
+          el("span", { class: "v2-padroes-chev" }, aberto ? "▾" : "▸"),
+          el("span", { class: "v2-padroes-org-lbl" }, grp.label),
+          el("small", { class: "v2-padroes-org-cnt" }, String(grp.itens.length))
+        );
+        orgBtn.addEventListener("mousedown", e => e.preventDefault());
+        popList.append(orgBtn);
+        if (!aberto) continue;
         for (const it of grp.itens) popList.append(criarCardItem(it));
       }
     }
@@ -18011,6 +18093,7 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
   }
 
   function abrir() {
+    window.tutuSync?.atualizarBancosSePreciso?.(30000);
     itensCache = listar();
     const temNotas = obterArvoreNotas().length > 0;
     if (!itensCache.length && !temNotas) return;

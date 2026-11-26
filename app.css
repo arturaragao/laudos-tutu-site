@@ -631,17 +631,18 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
 
 /* Conversar em tempo real ocupa o lugar da pílula de voz, sem alterar os comandos. */
 .conversar-tempo-real #voicePill { display:none!important; }
-#tempoRealPainel { position:fixed; z-index:59; bottom:12px; left:12px; right:calc(var(--v2-actions-inset,0px) + 12px); max-width:760px; margin:auto; box-sizing:border-box; padding:10px 14px; border:1px solid var(--line); border-radius:14px; background:var(--paper); color:var(--text); box-shadow:0 6px 24px #0003; }
+#tempoRealPainel { position:fixed; z-index:59; bottom:16px; left:50%; transform:translateX(-50%); right:auto; width:min(720px, calc(100vw - 32px)); max-height:calc(100vh - 110px); display:flex; flex-direction:column; box-sizing:border-box; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:16px; background:var(--paper); color:var(--text); box-shadow:0 16px 42px rgba(24, 18, 12, .22); }
 #tempoRealPainel[hidden] { display:none; }
-.tempo-real-cab { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; }
-#tempoRealTexto { min-height:38px; max-height:110px; overflow:auto; padding:7px 0; outline:none; white-space:pre-wrap; overflow-wrap:anywhere; font-size:15px; }
+.tempo-real-cab { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 16px; background:var(--panel, #f6f1e7); border-bottom:1px solid var(--line); font-size:13px; }
+.tempo-real-body { display:flex; flex-direction:column; gap:8px; padding:12px 16px 14px; overflow-y:auto; }
+#tempoRealTexto { min-height:68px; max-height:48vh; height:auto; overflow-y:auto; resize:vertical; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--ground, #fff); outline:none; white-space:pre-wrap; overflow-wrap:anywhere; font-size:14.5px; line-height:1.45; box-sizing:border-box; }
 #tempoRealTexto:empty::before { content:attr(data-placeholder); color:var(--muted); pointer-events:none; }
-#tempoRealTexto:focus { border-bottom:1px solid var(--accent); }
+#tempoRealTexto:focus { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent, #8a5a2b) 18%, transparent); }
 #tempoRealParcial, #tempoRealMsg { margin:0; font-size:12px; color:var(--muted); }
 #tempoRealParcial { font-style:italic; }
 .tutu-v2 #conversarTempoReal[aria-pressed="true"] { background:var(--p-green); color:var(--changed); }
-.conversar-tempo-real #v2Center { padding-bottom:190px!important; }
-@media(max-width:760px) { #tempoRealPainel { right:12px; bottom:calc(12px + env(safe-area-inset-bottom,0px)); } }
+.conversar-tempo-real #v2Center { padding-bottom:240px!important; }
+@media(max-width:760px) { #tempoRealPainel { left:12px; right:12px; transform:none; width:auto; bottom:calc(12px + env(safe-area-inset-bottom,0px)); } }
 @media print { #tempoRealPainel { display:none!important; } }
 
 /* Ctrl+K: continuações da frase no topo da paleta */
@@ -929,22 +930,19 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
   background:var(--panel, #f5efe5); border-top:1px solid var(--line);
 }
 
-/* Conversar com a IA (116-v2-conversar.js): painel flutuante enxuto com seletor de modelo e custo */
+/* Conversar com a IA (116-v2-conversar.js): painel flutuante centralizado com auto-crescimento vertical */
 #conversaBox {
-  position:fixed; right:16px; bottom:64px; z-index:60; box-sizing:border-box;
-  width:min(460px, calc(100vw - 24px)); max-height:calc(100vh - 130px);
+  position:fixed; left:50%; transform:translateX(-50%); right:auto; bottom:68px; z-index:60; box-sizing:border-box;
+  width:min(720px, calc(100vw - 32px)); max-height:calc(100vh - 110px);
   display:flex; flex-direction:column; padding:0; overflow:hidden;
   border:1px solid var(--line, #c8bfb2); border-radius:16px;
   background:var(--paper, #fffaf2); color:var(--text, inherit);
   box-shadow:0 16px 42px rgba(24, 18, 12, .22);
 }
-@media(min-width:768px) {
-  #conversaBox { right:calc(var(--v2-actions-inset, 0px) + 16px); width:min(460px, calc(100vw - var(--v2-actions-inset, 0px) - 24px)); }
-}
 #conversaBox[hidden], #conversaBox [hidden] { display:none !important; }
 #conversaBox .conversa-cab {
   display:flex; justify-content:space-between; align-items:center; gap:8px;
-  padding:10px 14px; background:var(--panel, #f6f1e7);
+  padding:12px 16px; background:var(--panel, #f6f1e7);
   border-bottom:1px solid var(--line); font-size:13px;
 }
 #conversaBox .conversa-cab-esq { display:flex; align-items:center; gap:7px; min-width:0; }
@@ -965,7 +963,7 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
 }
 #conversaFechar:hover { background:var(--line); color:var(--text); }
 #conversaBox .conversa-body {
-  display:flex; flex-direction:column; gap:8px; padding:12px 14px; overflow-y:auto;
+  display:flex; flex-direction:column; gap:10px; padding:14px 16px; overflow-y:auto;
 }
 #conversaBox .conversa-chips { display:flex; flex-wrap:wrap; gap:6px; }
 #conversaBox .conversa-chip {
@@ -975,14 +973,14 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
 #conversaBox .conversa-chip:hover { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 10%, var(--panel)); }
 #conversaBox .conversa-input-wrap {
   display:flex; flex-direction:column; border:1px solid var(--line); border-radius:12px;
-  background:var(--ground, #fff); padding:8px 10px 6px; transition:border-color .15s, box-shadow .15s;
+  background:var(--ground, #fff); padding:10px 12px 8px; transition:border-color .15s, box-shadow .15s;
 }
 #conversaBox .conversa-input-wrap:focus-within {
   border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent, #8a5a2b) 18%, transparent);
 }
 #conversaBox textarea {
-  width:100%; box-sizing:border-box; border:0; background:transparent; color:inherit;
-  min-height:54px; height:60px; max-height:28vh; resize:vertical; font:inherit; font-size:14px; padding:0;
+  width:100%; flex:none; box-sizing:border-box; border:0; background:transparent; color:inherit;
+  min-height:76px; max-height:48vh; overflow-y:auto; resize:vertical; font:inherit; font-size:14.5px; line-height:1.45; padding:0;
 }
 #conversaBox textarea:focus { outline:none; box-shadow:none; }
 #conversaBox .conversa-bar {
@@ -1015,7 +1013,7 @@ body.tutu-v2.sepia-night #setModal.v2-settings { background:rgba(15,12,9,.68); }
 }
 .tutu-v2 #laudo .conversa-flash { animation:conversaFlash 2.4s ease-out; border-radius:4px; }
 @media (max-width:760px) {
-  #conversaBox { right:12px; left:12px; width:auto; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); max-height:calc(100dvh - 120px); }
+  #conversaBox { left:12px; right:12px; transform:none; width:auto; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); max-height:calc(100dvh - 120px); }
   #conversaBox .conversa-dica { display:none; }
 }
 /* Corretor: laudo com a formatação do PACS (folha branca, Arial ~11pt); Corrigido aberto, preliminar e definitivo recolhidos. */
