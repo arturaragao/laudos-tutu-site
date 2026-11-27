@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "fbb8de5 · 26/11 20:10";
+window.__SITE_VERSION__ = "5ca35ec · 26/11 21:21";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -10471,7 +10471,68 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   function tirarRegraMd(atual, regra) {
     return String(atual || "").replace(/\r/g, "").split("\n").filter(l => l.replace(/\s*\(\d{2}\/\d{2}\/\d{4}\)\s*$/, "") !== "- " + regra).join("\n");
   }
-  const api = { extrairRegra, limparPedido, precisaBanco, numerar, montarPrompt, aplicarResposta, regraMd, tirarRegraMd, SECAO };
+  function montarPromptChat({ exame = "", regras = "", laudo = "", historico = [], pedido = "", frasesBanco = "", padroes = "" }) {
+    const histTxt = (historico || []).slice(-6).map(t => (t.role === "user" ? "MÉDICO: " : "ASSISTENTE: ") + t.text).join("\n\n");
+    return `Você é um assistente radiológico experiente conversando com o médico (PT-BR).
+Responda em Markdown claro e objetivo (diagnósticos diferenciais, condutas, opções de redação no estilo do médico).
+EXAME: ${exame}
+${regras ? `REGRAS DE ESTILO DO MÉDICO:\n${regras}\n` : ""}${padroes ? `TEXTOS PADRÃO DA MÁSCARA:\n${padroes}\n` : ""}${frasesBanco ? `FRASES DO BANCO DO MÉDICO:\n${frasesBanco}\n` : ""}LAUDO ATUAL (linhas numeradas):
+"""
+${laudo || "(vazio)"}
+"""
+${histTxt ? `CONVERSA ANTERIOR:\n${histTxt}\n` : ""}PEDIDO/PERGUNTA DO MÉDICO:
+"""
+${pedido}
+"""
+INSTRUÇÕES:
+- Se o médico estiver apenas tirando dúvida, pedindo diferenciais ou discutindo opções, responda normalmente em texto/tópicos e NÃO inclua bloco <DIFF>.
+- Se o médico pedir para alterar/inserir algo diretamente no laudo agora, explique brevemente o que fez e inclua ao final exatamente um bloco:
+<DIFF>
+Ln: texto novo | +Ln: inserir após n | -Ln (apagar)
+</DIFF>
+(Se mexer nos Achados, mantenha a Conclusão coerente e preserve <b>, <u>, <i>, {{centro}}.)`;
+  }
+  function extrairBlocoDiff(resposta) {
+    const raw = String(resposta || "");
+    const m = raw.match(/<DIFF>\s*([\s\S]*?)\s*<\/DIFF>/i);
+    if (!m) return { diff: "", texto: raw.trim() };
+    const texto = (raw.slice(0, m.index) + raw.slice(m.index + m[0].length)).replace(/\n{3,}/g, "\n\n").trim();
+    return { diff: m[1].trim(), texto };
+  }
+  function renderMarkdownChat(md) {
+    const escHtml = s => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const inline = s => escHtml(s)
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    const lines = String(md || "").replace(/\r/g, "").split("\n");
+    const out = [];
+    let listTag = "";
+    const closeList = () => { if (listTag) { out.push(`</${listTag}>`); listTag = ""; } };
+    for (const raw of lines) {
+      const t = raw.trim();
+      if (!t) { closeList(); continue; }
+      const hm = t.match(/^#{1,4}\s+(.+)$/);
+      if (hm) { closeList(); out.push(`<h4>${inline(hm[1])}</h4>`); continue; }
+      const ulm = t.match(/^[-•*]\s+(.+)$/);
+      if (ulm) {
+        if (listTag !== "ul") { closeList(); listTag = "ul"; out.push("<ul>"); }
+        out.push(`<li>${inline(ulm[1])}</li>`);
+        continue;
+      }
+      const olm = t.match(/^\d+[.)]\s+(.+)$/);
+      if (olm) {
+        if (listTag !== "ol") { closeList(); listTag = "ol"; out.push("<ol>"); }
+        out.push(`<li>${inline(olm[1])}</li>`);
+        continue;
+      }
+      closeList();
+      out.push(`<p>${inline(t)}</p>`);
+    }
+    closeList();
+    return out.join("");
+  }
+  const api = { extrairRegra, limparPedido, precisaBanco, numerar, montarPrompt, montarPromptChat, extrairBlocoDiff, renderMarkdownChat, aplicarResposta, regraMd, tirarRegraMd, SECAO };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.TutuConversa = api;
 })(globalThis);
@@ -10485,24 +10546,49 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   let busy = false, speech = null, ouvindo = false, tela = null, ultimaRegra = null, ctlConversa = null;
   let mediaRec = null, mediaStream = null, recChunks = [], recInicio = 0, recSeq = 0, recCtrl = null, transcrevendo = false, transcreverProm = null;
 
-  const MODELOS_CONVERSA = [
-    ["gemini-3.5-flash-lite", "3.5 Flash-Lite · econômico"],
-    ["gemini-3.8-flash", "3.8 Flash · equilibrado"],
-    ["gemini-4-hydrogen", "4 Hydrogen · máximo"],
-    ["claude-haiku-5-5", "Claude Haiku 5.5"],
-    ["claude-sonnet-5-5", "Claude Sonnet 5.5"]
+  const MODELOS_GRUPOS = [
+    ["Antigravity (conta local)", [
+      ["ag:gemini-3.8-flash-medium", "AG · 3.8 Flash (rápido)"],
+      ["ag:gemini-4-hydrogen-medium", "AG · 4 Hydrogen (equilibrado)"],
+      ["ag:gemini-4-neon-medium", "AG · 4 Neon (forte)"],
+      ["ag:gemini-4-argon-high", "AG · 4 Argon (máximo)"]
+    ]],
+    ["Claude Code (conta local)", [
+      ["claude:sonnet", "Claude · Sonnet (local)"],
+      ["claude:opus", "Claude · Opus (local máximo)"]
+    ]],
+    ["Gemini Chat (aba Chrome)", [
+      ["web:gemini", "Gemini Chat (gemini.google.com)"]
+    ]],
+    ["IA na nuvem (API)", [
+      ["gemini-3.5-flash-lite", "Nuvem · 3.5 Flash-Lite"],
+      ["gemini-3.8-flash", "Nuvem · 3.8 Flash"],
+      ["gemini-4-hydrogen", "Nuvem · 4 Hydrogen"],
+      ["claude-haiku-5-5", "Nuvem · Claude Haiku 5.5"],
+      ["claude-sonnet-5-5", "Nuvem · Claude Sonnet 5.5"]
+    ]]
   ];
+  const MODELO_KEY = "v2ConversaModelo";
   const box = el("section", { id: "conversaBox", class: "conversa", "aria-label": "Conversar com a IA", hidden: "" });
   const modeloSel = el("select", { id: "conversaModelo", "aria-label": "Modelo de IA do Conversar", title: "Modelo usado ao conversar com a IA" });
-  for (const [val, lbl] of MODELOS_CONVERSA) modeloSel.append(el("option", { value: val }, lbl));
+  for (const [grpLabel, itens] of MODELOS_GRUPOS) {
+    const og = el("optgroup", { label: grpLabel });
+    for (const [val, lbl] of itens) og.append(el("option", { value: val }, lbl));
+    modeloSel.append(og);
+  }
   const syncModeloConversa = () => {
-    const atual = T?.nuvemStatus?.()?.modeloConversa || "gemini-4-hydrogen";
+    const salvo = (() => { try { return localStorage.getItem(MODELO_KEY) || ""; } catch (_) { return ""; } })();
+    const atual = salvo || "ag:gemini-4-hydrogen-medium";
     if ([...modeloSel.options].some(o => o.value === atual)) modeloSel.value = atual;
   };
   syncModeloConversa();
   modeloSel.onchange = () => {
-    if (typeof T?.salvarModeloConversa === "function") T.salvarModeloConversa(modeloSel.value);
-    else T?.salvarNuvem?.({ modeloConversa: modeloSel.value });
+    const v = modeloSel.value;
+    try { localStorage.setItem(MODELO_KEY, v); } catch (_) {}
+    if (!/^(?:ag:|claude:|web:)/.test(v)) {
+      if (typeof T?.salvarModeloConversa === "function") T.salvarModeloConversa(v);
+      else T?.salvarNuvem?.({ modeloConversa: v });
+    }
   };
   document.addEventListener("tutu-nuvem-mudou", syncModeloConversa);
 
@@ -10516,19 +10602,82 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
 
   const cab = el("div", { class: "conversa-cab" });
   const cabEsq = el("div", { class: "conversa-cab-esq" });
-  cabEsq.append(el("b", {}, "Conversar com a IA"), el("kbd", { class: "conversa-kbd" }, "F6"));
+  let modoAtual = "editar";
+  const histPorCaso = new Map();
+  const modosRow = el("div", { class: "conversa-modos", role: "tablist", "aria-label": "Modo do painel" });
+  const btnModoEditar = button("Editar laudo", () => setModo("editar"), { id: "conversaModoEditar", class: "conversa-modo", role: "tab", "aria-selected": "true" });
+  const btnModoChat = button("Conversar", () => setModo("chat"), { id: "conversaModoChat", class: "conversa-modo", role: "tab", "aria-selected": "false" });
+  modosRow.append(btnModoEditar, btnModoChat);
+  cabEsq.append(el("b", {}, "IA"), el("kbd", { class: "conversa-kbd" }, "F6"), modosRow);
   const cabDir = el("div", { class: "conversa-cab-dir" });
-  cabDir.append(modeloSel, fechar);
+  const limparChatBtn = button("Limpar", () => {
+    histPorCaso.delete(ui.activeId());
+    renderHist();
+  }, { id: "conversaLimparChat", class: "conversa-limpar", hidden: "" });
+  cabDir.append(limparChatBtn, modeloSel, fechar);
   cab.append(cabEsq, cabDir);
 
+  const histEl = el("div", { id: "conversaHist", class: "conversa-hist", hidden: "" });
   const chipsRow = el("div", { class: "conversa-chips", role: "group", "aria-label": "Atalhos de pedido" });
-  for (const [rot, frase] of [
+  const CHIPS_EDITAR = [
     ["Revisar coerência", "Revise coerência entre Achados e Conclusão, lateralidade e medidas."],
     ["Ajustar conclusão", "Atualize a Conclusão para refletir todos os achados."],
     ["Melhorar redação", "Melhore a redação no estilo do meu banco, sem inventar achados."]
-  ]) {
-    chipsRow.append(button(rot, () => { texto.value = frase; autoGrow(); texto.focus(); texto.select(); }, { class: "conversa-chip" }));
+  ];
+  const CHIPS_CHAT = [
+    ["Diferenciais", "Quais diagnósticos diferenciais valem a pena citar ou omitir neste caso?"],
+    ["Como descrever?", "Qual a melhor forma de descrever estes achados no laudo?"],
+    ["Vale mencionar?", "O que vale a pena deixar na Conclusão e o que é melhor não valorizar?"]
+  ];
+  function renderChips() {
+    chipsRow.replaceChildren();
+    const lista = modoAtual === "chat" ? CHIPS_CHAT : CHIPS_EDITAR;
+    for (const [rot, frase] of lista) {
+      chipsRow.append(button(rot, () => { texto.value = frase; autoGrow(); texto.focus(); texto.select(); }, { class: "conversa-chip" }));
+    }
   }
+  function renderHist() {
+    const list = histPorCaso.get(ui.activeId()) || [];
+    histEl.replaceChildren();
+    const emChat = modoAtual === "chat";
+    histEl.hidden = !emChat || !list.length;
+    limparChatBtn.hidden = !emChat || !list.length;
+    if (!emChat || !list.length) return;
+    for (const item of list) {
+      const card = el("div", { class: "conversa-msg " + (item.role === "user" ? "conversa-msg-user" : "conversa-msg-ia") });
+      if (item.role === "user") {
+        card.append(el("div", { class: "conversa-msg-txt" }, item.text));
+      } else {
+        const txtDiv = el("div", { class: "conversa-msg-txt" });
+        txtDiv.innerHTML = C.renderMarkdownChat(item.text);
+        card.append(txtDiv);
+        const rod = el("div", { class: "conversa-msg-rod" });
+        if (item.meta) rod.append(el("span", { class: "conversa-msg-meta" }, item.meta));
+        if (!item.aplicado) {
+          rod.append(button("Aplicar no laudo", () => {
+            setModo("editar");
+            texto.value = "Aplique no laudo a seguinte orientação/redação, mantendo Achados e Conclusão coerentes:\n\n" + item.text.slice(0, 1400);
+            autoGrow();
+            mandar();
+          }, { class: "conversa-aplicar" }));
+        }
+        card.append(rod);
+      }
+      histEl.append(card);
+    }
+    histEl.scrollTop = histEl.scrollHeight;
+  }
+  function setModo(novo) {
+    modoAtual = novo === "chat" ? "chat" : "editar";
+    btnModoEditar.setAttribute("aria-selected", String(modoAtual === "editar"));
+    btnModoChat.setAttribute("aria-selected", String(modoAtual === "chat"));
+    texto.placeholder = modoAtual === "chat"
+      ? "Converse sobre o caso… ex.: \"quais diferenciais valem a pena?\", \"como descrever melhor?\""
+      : "Peça um ajuste no laudo… ex.: \"muda para rim direito\", \"inclui esteatose moderada\", \"ajusta conclusão\".";
+    renderChips();
+    renderHist();
+  }
+  renderChips();
 
   let autoHeight = 0, manualMinHeight = 0;
   const autoGrow = () => {
@@ -10556,7 +10705,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   inputWrap.append(texto, bar);
 
   const body = el("div", { class: "conversa-body" });
-  body.append(chipsRow, inputWrap, msg, lembrei);
+  body.append(histEl, chipsRow, inputWrap, msg, lembrei);
   box.append(cab, body);
   document.body.append(box);
   const abrirBtn = button("Conversar", () => abrir(box.hidden), { id: "conversaAbrir", title: "Conversar com a IA · F6 ou Alt+C" });
@@ -10577,7 +10726,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   function temLaudo() { try { return !!laudoTagged().trim(); } catch (_) { return false; } }
   function abrir(on) {
     box.hidden = !on; abrirBtn.setAttribute("aria-pressed", String(!!on));
-    if (on) { syncModeloConversa(); dizer(temLaudo() ? "" : "Abra ou escreva um laudo na folha primeiro."); requestAnimationFrame(autoGrow); texto.focus(); }
+    if (on) { syncModeloConversa(); renderHist(); dizer(temLaudo() ? "" : "Abra ou escreva um laudo na folha primeiro."); requestAnimationFrame(autoGrow); texto.focus(); }
     else parar({ descartar: true });
   }
   texto.addEventListener("keydown", e => {
@@ -10589,7 +10738,9 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
   const manterTela = async () => { try { if (ouvindo && !tela && navigator.wakeLock && document.visibilityState === "visible") { tela = await navigator.wakeLock.request("screen"); tela.addEventListener("release", () => { tela = null; }); } } catch (_) { tela = null; } };
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") manterTela(); });
   const cfgVoz = () => { try { return JSON.parse(document.getElementById("voiceConfig").textContent) || {}; } catch (_) { return {}; } };
-  const usarGeminiVozConversa = () => !!T?.nuvemStatus?.()?.configurada && T.nuvemStatus().vozMotor === "gemini" &&
+  let nuvemVozFalhou = false;
+  const usarGeminiVozConversa = () => !nuvemVozFalhou && !/^(?:ag:|claude:|web:)/.test(modeloSel.value) &&
+    !!T?.nuvemStatus?.()?.configurada && T.nuvemStatus().vozMotor === "gemini" &&
     typeof T.transcreverAudioNuvem === "function" && typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
   const pararStreamConv = st => { try { st?.getTracks?.().forEach(t => t.stop()); } catch (_) {} };
   const blobToB64Conv = blob => new Promise((ok, no) => {
@@ -10722,7 +10873,11 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
           { signal: ctl.signal }
         );
         if (seq !== recSeq || r?.cancelado) return;
-        if (!r?.ok) { dizer(r?.erro || "Falha ao transcrever pedido."); return; }
+        if (!r?.ok) {
+          if (r?.authNuvem) { nuvemVozFalhou = true; dizer("Token da nuvem recusado — toque no 🎤 de novo para ditar pelo Chrome."); }
+          else dizer(r?.erro || "Falha ao transcrever pedido.");
+          return;
+        }
         const bruto = String(r.texto || "").trim();
         if (!bruto) { dizer("Nenhuma fala detectada."); return; }
         const V = window.usgVoice;
@@ -10794,10 +10949,79 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
       throw Error("A IA não respondeu em 6 min pela fila; o laudo ficou como estava. Tente de novo.");
     } finally { clearTimeout(dispatchTimer); await apagarFila(caminho); }
   }
+  /* ---------- Gemini Chat via extensão Chrome (aba gemini.google.com) ---------- */
+  function pingGeminiExt(signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new DOMException("Pedido cancelado.", "AbortError"));
+      let ok = false;
+      const t = setTimeout(() => {
+        if (ok) return;
+        document.removeEventListener("laudos-gemini-web-pong", onPong);
+        signal?.removeEventListener("abort", onAbort);
+        reject(new Error("Extensão Ditado v1.23+ não respondeu nesta aba — recarregue a extensão em chrome://extensions e dê F5 nesta página."));
+      }, 1500);
+      const onAbort = () => {
+        clearTimeout(t);
+        document.removeEventListener("laudos-gemini-web-pong", onPong);
+        reject(new DOMException("Pedido cancelado.", "AbortError"));
+      };
+      const onPong = () => {
+        ok = true;
+        clearTimeout(t);
+        document.removeEventListener("laudos-gemini-web-pong", onPong);
+        signal?.removeEventListener("abort", onAbort);
+        resolve(true);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      document.addEventListener("laudos-gemini-web-pong", onPong);
+      document.dispatchEvent(new CustomEvent("laudos-gemini-web-ping"));
+    });
+  }
+  async function pedirGeminiWeb(promptAnon, signal) {
+    await pingGeminiExt(signal);
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new DOMException("Pedido cancelado.", "AbortError"));
+      const id = "gw-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        document.removeEventListener("laudos-gemini-web-resp", onResp);
+        signal?.removeEventListener("abort", onAbort);
+        reject(new Error("Extensão Ditado v1.23+ não respondeu. Recarregue a extensão em chrome://extensions e deixe uma aba de gemini.google.com logada."));
+      }, 95000);
+      const onAbort = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        document.removeEventListener("laudos-gemini-web-resp", onResp);
+        reject(new DOMException("Pedido cancelado.", "AbortError"));
+      };
+      const onResp = ev => {
+        let d = null; try { d = JSON.parse(ev.detail || "{}"); } catch (_) {}
+        if (!d || d.id !== id || done) return;
+        done = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        document.removeEventListener("laudos-gemini-web-resp", onResp);
+        if (!d.ok) return reject(new Error(d.erro || "Falha no Gemini Chat."));
+        resolve({ text: String(d.text || ""), motor: "gemini-web", modelo: "Gemini Chat", aviso: d.aviso || "" });
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      document.addEventListener("laudos-gemini-web-resp", onResp);
+      document.dispatchEvent(new CustomEvent("laudos-gemini-web", { detail: JSON.stringify({ id, prompt: promptAnon }) }));
+    });
+  }
+
   /* Com a ponte ou nuvem: local/nuvem, sem GitHub. Sem ponte (ou sem sample): fila. */
   async function pedirIA(prompt, signal, montarAnonimo, delta, pedidoSalvo, reprocessando = false) {
-    const nuvemAtiva = !!T?.nuvemStatus?.()?.configurada;
-    const modeloEscolhido = pedidoSalvo?.modelo || modeloSel.value || T?.nuvemStatus?.()?.modeloConversa;
+    const modeloEscolhido = modeloSel.value || pedidoSalvo?.modelo || "ag:gemini-4-hydrogen-medium";
+    if (modeloEscolhido === "web:gemini") {
+      dizer("Consultando Gemini Chat no Chrome…");
+      return pedirGeminiWeb(montarAnonimo(), signal);
+    }
+    const localExplicito = /^(?:ag:|claude:)/.test(String(modeloEscolhido || ""));
+    const nuvemAtiva = !localExplicito && !!T?.nuvemStatus?.()?.configurada;
     if (nuvemAtiva && pedidoSalvo?.rota !== "fila") {
       if (typeof sample !== "function") {
         if (reprocessando) throw Error("Ponte indisponível para reprocessar.");
@@ -10826,15 +11050,15 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
     }
     if (reprocessando && pedidoSalvo?.rota !== "fila") {
       if (typeof sample !== "function") throw Error("Ponte indisponível para reprocessar.");
-      return sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, ...(delta ? { modo: "delta", laudo: delta } : {}) });
+      return sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, ...(localExplicito ? { apenasLocal: true } : {}), ...(delta ? { modo: "delta", laudo: delta } : {}) });
     }
     if (pedidoSalvo?.rota !== "fila" && typeof sample === "function" && sample) {
       try {
         if (delta) {
-          try { return await sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, modo: "delta", laudo: delta }); }
+          try { return await sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, ...(localExplicito ? { apenasLocal: true } : {}), modo: "delta", laudo: delta }); }
           catch (e) { if (signal.aborted || e?.name === "AbortError") throw e; if (pedidoSalvo) pedidoSalvo.delta = false; }
         }
-        return await sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido });
+        return await sample(prompt, { signal, cache: false, modelTier: "balanced", modelo: modeloEscolhido, ...(localExplicito ? { apenasLocal: true } : {}) });
       }
       catch (e) { if (e?.code !== "ponte_indisponivel") throw e; }
     }
@@ -10858,6 +11082,65 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
     if (!repetir && sheet.querySelector("del.rm, .chg, p.rmline")) acceptAllEdits();
     const draft = laudoTagged();
     if (repetir && (draft !== repetir.draft || repetir.caso !== ui.activeId())) { dizer("Volte ao laudo do pedido que falhou para reprocessar."); return; }
+    if (!repetir && modoAtual === "chat") {
+      const casoId = ui.activeId();
+      const hist = histPorCaso.get(casoId) || [];
+      const exame = nameAll(), regras = rulesBlock();
+      const normSet = typeof normalSetAll === "function" ? normalSetAll() : null;
+      const numOpts = { compacto: true, normalSet: normSet, pedido };
+      const num = C.numerar(draft, null, numOpts);
+      const frasesBanco = window.TutuBancoBusca?.pickBankForAI?.(typeof current !== "undefined" ? current : null, pedido, 4, 1200) || "";
+      const padroes = typeof maskPadroesOf === "function" && typeof current !== "undefined" ? maskPadroesOf(current).slice(0, 12).join("\n").slice(0, 1000) : "";
+      const promptChat = C.montarPromptChat({ exame, regras, laudo: num.texto, historico: hist, pedido, frasesBanco, padroes });
+      const anonChat = () => C.montarPromptChat({
+        exame,
+        regras,
+        laudo: C.numerar(draft, anon, numOpts).texto,
+        historico: hist.map(h => ({ ...h, text: anon(h.text) })),
+        pedido: anon(pedido),
+        frasesBanco,
+        padroes
+      });
+      hist.push({ role: "user", text: pedido });
+      histPorCaso.set(casoId, hist);
+      renderHist();
+      busy = true; enviar.disabled = true; modeloSel.disabled = true; ctlConversa = new AbortController();
+      dizer("Conversando com a IA…");
+      const t0 = performance.now();
+      try {
+        const r = await pedirIA(promptChat, ctlConversa.signal, anonChat, null, { modelo: modeloSel.value, frasesBanco });
+        const motor = r?.motor === "gemini-web" ? "Gemini Chat" : r?.motor === "nuvem" ? (r?.modelo || modeloSel.value) : r?.motor === "antigravity" ? `Antigravity (${r?.modelo || ""})` : `Claude (${r?.modelo || ""})`;
+        const secs = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
+        const ext = C.extrairBlocoDiff(r?.text || "");
+        let aplicado = false;
+        if (ext.diff && draft.trim() && laudoTagged() === draft) {
+          genLines = num.linhas;
+          const novo = C.aplicarResposta(draft, num.linhas, ext.diff, applyDiff);
+          if (novo && novo !== draft) {
+            pushVersion("Antes do chat");
+            sheet.innerHTML = diffLaudoHtml(draft, novo);
+            const changed = [...new Set([...sheet.querySelectorAll(".chg, del.rm:not(.rmline > del.rm)")].map(el => el.closest("p,div")).filter(Boolean))];
+            acceptAllEdits();
+            changed.forEach(p => { if (p.isConnected) p.classList.add("conversa-flash"); });
+            if (changed.length) setTimeout(() => changed.forEach(p => p.classList.remove("conversa-flash")), 2400);
+            ui.duvidas?.aposIA?.({ autoFocar: true });
+            pushVersion("Ajustado no chat (" + motor + ")");
+            ui.registrarIA?.(laudoTagged(), draft);
+            renderAlerts(); updateCount(); scheduleCaseSave();
+            aplicado = true;
+          }
+        }
+        const meta = `${motor} · ${secs} s` + fmtCusto(r?.custoUsd) + (aplicado ? " · laudo atualizado (F9 desfaz)" : "");
+        hist.push({ role: "assistant", text: ext.texto || (aplicado ? "Laudo atualizado conforme pedido." : String(r?.text || "").trim()), meta, aplicado });
+        renderHist();
+        texto.value = "";
+        manualMinHeight = 0; autoHeight = 0; autoGrow();
+        dizer(aplicado ? `Respondido e aplicado no laudo · ${secs} s (F9 desfaz)` : `Respondido · ${meta}`);
+      } catch (e) {
+        dizer(e?.name === "AbortError" ? "Pedido cancelado." : (e?.message || "Falha ao conversar com a IA."));
+      } finally { busy = false; enviar.disabled = false; modeloSel.disabled = false; }
+      return;
+    }
     if (!draft.trim()) { dizer("A folha está vazia: abra ou escreva um laudo primeiro."); return; }
     const normSet = typeof normalSetAll === "function" ? normalSetAll() : null;
     const numOpts = { compacto: true, normalSet: normSet, pedido };
@@ -10890,7 +11173,7 @@ Se o pedido ensinar uma preferência reutilizável para próximos laudos (redaç
         r = await pedirIA(prompt, ctlConversa.signal, anonimo, null, pedidoIA);
         extraido = C.extrairRegra(r?.text || "");
       }
-      const motor = r?.motor === "nuvem" ? (r?.modelo || modeloSel.value || "IA nuvem") : r?.motor === "antigravity" ? "Antigravity" : "Claude";
+      const motor = r?.motor === "gemini-web" ? "Gemini Chat" : r?.motor === "nuvem" ? (r?.modelo || modeloSel.value || "IA nuvem") : r?.motor === "antigravity" ? "Antigravity" : "Claude";
       const secs = ((performance.now() - t0) / 1000).toFixed(1).replace(".", ",");
       const { regra, resto } = extraido;
       lockSheet(false);
@@ -18341,6 +18624,20 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     if (document.visibilityState === "visible" && ligado()) conectar();
   });
   if (ligado()) setTimeout(conectar, 400);
+
+  if (!ANDROID && ui.footerActions) {
+    const divBtn = ui.button("Dividir PACS", async () => {
+      try {
+        const r = await fetch("http://127.0.0.1:47831/dividir", { method: "POST" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        if (typeof setStatus === "function") setStatus("Dividir tela PACS/Laudos acionado.", "ok");
+      } catch (_) {
+        if (typeof setStatus === "function") setStatus("Ponte local indisponível para dividir tela.", "err");
+      }
+    }, { id: "pacsDividirBtn", title: "Dividir ou restaurar tela com o PACS (ou Win+Alt+D)" });
+    ui.actionIcon(divBtn, "Dividir ou restaurar tela com o PACS", "M3 4h18v16H3V4zm9 0v16");
+    ui.footerActions.append(divBtn);
+  }
 
   ui.pacs = { matchExamPacs, simularEvento: processarEvento, ligado, setLigado };
 })(globalThis);
