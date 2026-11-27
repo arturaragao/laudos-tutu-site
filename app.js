@@ -1,4 +1,4 @@
-window.__SITE_VERSION__ = "5ca35ec · 26/11 21:21";
+window.__SITE_VERSION__ = "f438c61 · 26/11 21:56";
 /* ============ FORMATAÇÃO ============ */
 const FORMAT = {
   font: "Arial", size: "11pt",
@@ -18598,7 +18598,17 @@ FORMATO DA RESPOSTA: ${d.parecer ? "uma única linha, só a frase." : "duas part
     clearTimeout(retryTimer);
     try {
       es = new EventSource("http://127.0.0.1:47831/events");
-      es.onopen = () => { retryMs = 3000; };
+      es.onopen = () => {
+        retryMs = 3000;
+        fetch("http://127.0.0.1:47831/pacs/exame")
+          .then(r => (r.ok ? r.json() : null))
+          .then(d => {
+            if (d && d.procedimento && (!d.ts || (Date.now() / 1000 - Number(d.ts)) < 7200)) {
+              processarEvento(d);
+            }
+          })
+          .catch(() => {});
+      };
       es.onmessage = msg => {
         const d = String(msg.data || "");
         if (!d.startsWith("pacs:")) return;
